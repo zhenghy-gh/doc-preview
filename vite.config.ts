@@ -12,7 +12,7 @@ export default defineConfig(({ mode }) => {
         '@': resolve(__dirname, 'src')
       }
     },
-    base: isLib ? './' : '/',
+    base: isLib ? './' : '/doc-preview/',
     build: isLib
       ? {
           lib: {
