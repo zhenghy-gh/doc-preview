@@ -1,21 +1,55 @@
 {
-  "name": "doc-preview",
-  "private": true,
-  "version": "0.0.0",
+  "name": "@zhenghy/doc-preview",
+  "version": "0.1.0",
+  "description": "A Vue 3 component for previewing .doc files in browser",
   "type": "module",
+  "main": "./dist/doc-preview.umd.cjs",
+  "module": "./dist/doc-preview.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/doc-preview.js",
+      "require": "./dist/doc-preview.umd.cjs",
+      "types": "./dist/index.d.ts"
+    },
+    "./dist/style.css": "./dist/style.css"
+  },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc && vite build",
+    "build:lib": "vue-tsc && vite build --mode lib",
     "preview": "vite preview"
   },
-  "dependencies": {
-    "vue": "^3.4.21"
+  "keywords": [
+    "vue3",
+    "vue",
+    "doc",
+    "preview",
+    "word",
+    "ole2",
+    "cfb",
+    "document",
+    "parser"
+  ],
+  "author": "zhenghy",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zhenghy-gh/doc-preview.git"
+  },
+  "peerDependencies": {
+    "vue": "^3.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
     "@vitejs/plugin-vue": "^5.0.0",
+    "playwright": "^1.60.0",
     "typescript": "^5.3.3",
     "vite": "^5.0.12",
+    "vue": "^3.4.21",
     "vue-tsc": "^2.0.0"
   }
 }

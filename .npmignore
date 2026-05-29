@@ -1,0 +1,44 @@
+# 开发文件
+src/
+docs/
+*.ts
+*.vue
+!*.d.ts
+
+# 测试和调试文件
+test_*.py
+test_*.mjs
+analyze_*.py
+check_*.py
+*.py
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+
+# 日志
+*.log
+npm-debug.log*
+
+# 锁文件（保留 package-lock.json）
+# package-lock.json
+
+# 环境文件
+.env
+.env.local
+.env.*.local
+
+# 临时文件
+*.tmp
+*.temp
+
+# macOS
+.DS_Store
+
+# TypeScript
+*.tsbuildinfo
+tsconfig.tsbuildinfo
