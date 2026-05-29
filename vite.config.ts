@@ -12,6 +12,7 @@ export default defineConfig(({ mode }) => {
         '@': resolve(__dirname, 'src')
       }
     },
+    base: isLib ? './' : './doc-preview/',
     build: isLib
       ? {
           lib: {
@@ -29,6 +30,14 @@ export default defineConfig(({ mode }) => {
             }
           }
         }
-      : undefined
+      : {
+          outDir: 'dist',
+          assetsDir: 'assets',
+          rollupOptions: {
+            input: {
+              main: resolve(__dirname, 'index.html')
+            }
+          }
+        }
   }
 })
