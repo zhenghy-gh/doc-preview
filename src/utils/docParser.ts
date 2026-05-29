@@ -215,7 +215,15 @@ export class DocParser {
     const suggestedComplex = fibData ? fibData.fComplex : false
     logger.warn(`FIB无有效偏移，自动检测编码(fComplex=${suggestedComplex})`)
 
-    // 先用两种编码提取原始段落（不过滤），评分后再用赢家编码
+    // 先用原始二进制检测编码：UTF-16LE 中段落标记为 0x0D 0x00，8-bit 中为 0x0D
+    const binaryDetect = this.detectEncodingFromBinary(wordStream.data)
+    if (binaryDetect !== null) {
+      logger.log(`二进制检测决定编码: ${binaryDetect ? '8-bit' : 'UTF-16LE'}`)
+      const raw = this.extractParagraphsWithFormat(wordStream.data, { fcMin: 0, fComplex: binaryDetect })
+      return this.filterParagraphsWithGenericLogic(raw)
+    }
+
+    // 无法通过二进制判断，回退到评分
     const raw8 = this.extractParagraphsWithFormat(wordStream.data, { fcMin: 0, fComplex: true })
     const raw16 = this.extractParagraphsWithFormat(wordStream.data, { fcMin: 0, fComplex: false })
 
@@ -233,6 +241,37 @@ export class DocParser {
 
     logger.log(`选择编码: ${useComplex ? '8-bit' : 'UTF-16LE'}`)
     return this.filterParagraphsWithGenericLogic(useComplex ? raw8 : raw16)
+  }
+
+  /**
+   * 通过分析原始二进制中 0x0D 后是否跟 0x00 来判断编码：
+   * - UTF-16LE: 段落标记为 0x0D 0x00
+   * - 8-bit compressed: 段落标记为单独的 0x0D
+   * 返回 true=8-bit, false=UTF-16LE, null=无法判断
+   */
+  private detectEncodingFromBinary(data: Uint8Array): boolean | null {
+    const startOffset = Math.min(2048, Math.floor(data.length / 4))
+    const endOffset = Math.min(data.length, startOffset + 100000)
+
+    let totalCR = 0
+    let crFollowedByNull = 0
+
+    for (let i = startOffset; i < endOffset - 1; i++) {
+      if (data[i] === 0x0D) {
+        totalCR++
+        if (data[i + 1] === 0x00) {
+          crFollowedByNull++
+        }
+      }
+    }
+
+    if (totalCR === 0) return null
+
+    const ratio = crFollowedByNull / totalCR
+    logger.log(`编码二进制检测: 0x0D=${totalCR}, 后跟0x00=${crFollowedByNull}, 比例=${ratio.toFixed(3)}`)
+
+    // 如果 <30% 的 0x0D 后跟 0x00，则是 8-bit
+    return ratio < 0.3
   }
 
   private scoreRawParagraphs(paragraphs: any[]): number {
@@ -442,6 +481,22 @@ export class DocParser {
       const remaining = text.substring(chineseStart)
       if (remaining.length >= 3) {
         return { ...para, text: remaining }
+      }
+    }
+
+    // 中文开头但夹杂短ASCII字符（FIB噪声的UTF-16LE解码特征）
+    // 例："稀搀摤d匀x匀x氀清川市..."→ 扫描到"清川市"前有ASCII杂音
+    if (chineseStart === 0) {
+      const longChineseRun = text.search(/[一-鿿]{4,}/)
+      if (longChineseRun > 0 && longChineseRun < text.length - 5) {
+        // 确认前缀中有ASCII字符（排除"一二三 四五六七八"的正常中文）
+        const prefixBefore = text.substring(0, longChineseRun)
+        if (/[A-Za-z0-9]/.test(prefixBefore)) {
+          const remaining = text.substring(longChineseRun)
+          if (remaining.length >= 3) {
+            return { ...para, text: remaining }
+          }
+        }
       }
     }
 
@@ -1133,6 +1188,14 @@ export class DocParser {
   }
 
   private extractTextWithAutoDetect(data: Uint8Array, suggestedComplex: boolean): string {
+    // 先用二进制检测编码
+    const binaryDetect = this.detectEncodingFromBinary(data)
+    if (binaryDetect !== null) {
+      logger.log(`二进制检测决定编码: ${binaryDetect ? '8-bit' : 'UTF-16LE'}`)
+      return this.extractTextSimple(data, { fcMin: 0, fComplex: binaryDetect })
+    }
+
+    // 无法通过二进制判断，回退到评分
     let text8 = this.extractTextSimple(data, { fcMin: 0, fComplex: true })
     let text16 = this.extractTextSimple(data, { fcMin: 0, fComplex: false })
 
