@@ -415,10 +415,11 @@ export class DocParser {
     for (let i = 0; i < checkLen; i++) {
       if (text.charCodeAt(i) > 0x7E) extendedCount++
     }
-    if (extendedCount < checkLen * 0.3) return para  // 没多少垃圾，无需处理
+    if (extendedCount < checkLen * 0.3) return para
 
-    // 找到正文起始位置：第一个3+字母的英文单词（含元音）
-    const realStart = text.search(/[A-Za-z]{3,}/)
+    // 找到正文起始位置：大写字母开头后跟小写字母的单词（如"Main"）
+    // 或含元音字母的3+字母单词
+    const realStart = text.search(/\b[A-Z][a-z]+\b/)
     if (realStart > 0 && realStart < text.length - 5) {
       const remaining = text.substring(realStart)
       if (remaining.length >= 3) {
@@ -426,7 +427,16 @@ export class DocParser {
       }
     }
 
-    // 或者第一个连续2+中文字符
+    // 备选：任意3+字母含元音的英文单词
+    const vowelWord = text.search(/[A-Za-z]*[aeiouyAEIOUY][A-Za-z]*[A-Za-z]/)
+    if (vowelWord > 0 && vowelWord < text.length - 5) {
+      const remaining = text.substring(vowelWord)
+      if (remaining.length >= 3) {
+        return { ...para, text: remaining }
+      }
+    }
+
+    // 备选：连续2+中文字符
     const chineseStart = text.search(/[一-鿿]{2,}/)
     if (chineseStart > 0 && chineseStart < text.length - 3) {
       const remaining = text.substring(chineseStart)
