@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DOC Preview NPM 包测试</title>
+  <link rel="stylesheet" href="./dist/style.css">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      padding: 20px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+    }
+    
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+      padding: 30px;
+    }
+    
+    h1 {
+      color: #333;
+      margin-bottom: 10px;
+      font-size: 28px;
+    }
+    
+    .subtitle {
+      color: #666;
+      margin-bottom: 30px;
+      font-size: 14px;
+    }
+    
+    .upload-area {
+      border: 3px dashed #667eea;
+      border-radius: 12px;
+      padding: 40px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      margin-bottom: 20px;
+    }
+    
+    .upload-area:hover {
+      background: #f0f4ff;
+      border-color: #764ba2;
+    }
+    
+    .upload-area.dragover {
+      background: #e8edff;
+      border-color: #764ba2;
+    }
+    
+    .upload-icon {
+      font-size: 48px;
+      margin-bottom: 15px;
+    }
+    
+    .upload-text {
+      color: #666;
+      font-size: 16px;
+    }
+    
+    .file-input {
+      display: none;
+    }
+    
+    .file-info {
+      background: #f5f5f5;
+      padding: 15px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      display: none;
+    }
+    
+    .file-info.show {
+      display: block;
+    }
+    
+    .file-name {
+      font-weight: bold;
+      color: #333;
+      margin-bottom: 5px;
+    }
+    
+    .file-size {
+      color: #666;
+      font-size: 14px;
+    }
+    
+    .preview-container {
+      border: 1px solid #e0e0e0;
+      border-radius: 8px;
+      padding: 20px;
+      min-height: 200px;
+      background: #fafafa;
+    }
+    
+    .error-message {
+      background: #fee;
+      color: #c33;
+      padding: 15px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      display: none;
+    }
+    
+    .error-message.show {
+      display: block;
+    }
+    
+    .loading {
+      text-align: center;
+      padding: 40px;
+      color: #666;
+    }
+    
+    .loading::after {
+      content: '';
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      border: 2px solid #667eea;
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-left: 10px;
+      vertical-align: middle;
+    }
+    
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>📄 DOC Preview NPM 包测试</h1>
+    <p class="subtitle">使用 @zhenghy/doc-preview npm 包预览 .doc 文件</p>
+    
+    <div class="upload-area" id="uploadArea">
+      <div class="upload-icon">📤</div>
+      <div class="upload-text">点击或拖拽上传 .doc 文件</div>
+      <input type="file" class="file-input" id="fileInput" accept=".doc">
+    </div>
+    
+    <div class="file-info" id="fileInfo">
+      <div class="file-name" id="fileName"></div>
+      <div class="file-size" id="fileSize"></div>
+    </div>
+    
+    <div class="error-message" id="errorMessage"></div>
+    
+    <div class="preview-container" id="previewContainer">
+      <div id="app"></div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { createApp } from 'https://unpkg.com/vue@3/dist/vue.esm-browser.js'
+    
+    const App = {
+      data() {
+        return {
+          currentFile: null,
+          isLoading: false,
+          error: null
+        }
+      },
+      template: `
+        <div>
+          <div v-if="isLoading" class="loading">加载中...</div>
+          <div v-else-if="currentFile">
+            <doc-preview 
+              :file="currentFile"
+              @error="handleError"
+            />
+          </div>
+          <div v-else>
+            <div style="text-align: center; color: #999; padding: 60px;">
+              请选择一个 .doc 文件开始预览
+            </div>
+          </div>
+        </div>
+      `,
+      methods: {
+        handleError(error) {
+          this.error = error
+          this.isLoading = false
+          console.error('DOC 解析失败:', error)
+        }
+      }
+    }
+    
+    // 先使用本地构建的库
+    let DocPreview
+    try {
+      const module = await import('./dist/doc-preview.js')
+      DocPreview = module.DocPreview
+      console.log('✅ 使用本地构建的 doc-preview.js')
+    } catch (e) {
+      console.log('⚠️ 本地构建文件不可用，请先运行 npm run build:lib')
+    }
+    
+    if (DocPreview) {
+      const app = createApp(App)
+      app.component('DocPreview', DocPreview)
+      app.mount('#app')
+      
+      // 暴露给全局，供页面脚本使用
+      window.vueApp = app
+    }
+    
+    // 处理文件上传
+    const uploadArea = document.getElementById('uploadArea')
+    const fileInput = document.getElementById('fileInput')
+    const fileInfo = document.getElementById('fileInfo')
+    const fileName = document.getElementById('fileName')
+    const fileSize = document.getElementById('fileSize')
+    const errorMessage = document.getElementById('errorMessage')
+    
+    uploadArea.addEventListener('click', () => {
+      fileInput.click()
+    })
+    
+    uploadArea.addEventListener('dragover', (e) => {
+      e.preventDefault()
+      uploadArea.classList.add('dragover')
+    })
+    
+    uploadArea.addEventListener('dragleave', () => {
+      uploadArea.classList.remove('dragover')
+    })
+    
+    uploadArea.addEventListener('drop', (e) => {
+      e.preventDefault()
+      uploadArea.classList.remove('dragover')
+      const files = e.dataTransfer.files
+      if (files.length > 0) {
+        handleFile(files[0])
+      }
+    })
+    
+    fileInput.addEventListener('change', (e) => {
+      const files = e.target.files
+      if (files.length > 0) {
+        handleFile(files[0])
+      }
+    })
+    
+    function handleFile(file) {
+      if (!file.name.endsWith('.doc')) {
+        showError('请选择 .doc 格式的文件')
+        return
+      }
+      
+      hideError()
+      
+      fileName.textContent = '文件名: ' + file.name
+      fileSize.textContent = '大小: ' + formatFileSize(file.size)
+      fileInfo.classList.add('show')
+      
+      if (window.vueApp) {
+        const vm = window.vueApp._instance
+        if (vm) {
+          vm.isLoading = true
+          vm.error = null
+          setTimeout(() => {
+            vm.currentFile = file
+            vm.isLoading = false
+          }, 100)
+        }
+      }
+    }
+    
+    function showError(message) {
+      errorMessage.textContent = message
+      errorMessage.classList.add('show')
+    }
+    
+    function hideError() {
+      errorMessage.classList.remove('show')
+    }
+    
+    function formatFileSize(bytes) {
+      if (bytes < 1024) return bytes + ' B'
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(2) + ' KB'
+      return (bytes / (1024 * 1024)).toFixed(2) + ' MB'
+    }
+  </script>
+</body>
+</html>

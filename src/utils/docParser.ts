@@ -414,7 +414,7 @@ export class DocParser {
   }
 
   private filterParagraphsWithGenericLogic(paragraphs: any[]): any[] {
-    const filtered = paragraphs.filter(p => {
+    let filtered = paragraphs.filter(p => {
       if (p.text.length < 2) return false
       
       const hasSignificantContent = this.hasSignificantContent(p.text)
@@ -436,71 +436,169 @@ export class DocParser {
 
     logger.info(`过滤后剩余 ${filtered.length} 个段落`)
 
-    // 清理第一个段落中的二进制前缀（从FIB头部引入的乱码）
-    if (filtered.length > 0) {
-      filtered[0] = this.stripBinaryPrefix(filtered[0])
+    // 清理前3个段落中的乱码前缀（更彻底的清理）
+    for (let i = 0; i < Math.min(3, filtered.length); i++) {
+      filtered[i] = this.stripBinaryPrefix(filtered[i])
     }
+    
+    // 再次过滤，移除被清理后变得空的段落
+    filtered = filtered.filter(p => p.text.length >= 2)
+    
+    // 额外检查：移除明显只有乱码的段落
+    filtered = filtered.filter(p => {
+      const weirdChars = (p.text.match(/[^\u4e00-\u9fff\u3400-\u4dbf\w\s,.!?，。！？；：""''（）【】、]/g) || []).length
+      const totalChars = p.text.length
+      return weirdChars / totalChars < 0.5
+    })
+
+    // 清理 Word 字段代码
+    filtered = filtered.map(p => this.cleanWordFieldCodes(p))
+    
+    // 再次过滤，移除字段清理后变得空的段落
+    filtered = filtered.filter(p => p.text.length >= 2)
+
+    logger.info(`清理后剩余 ${filtered.length} 个段落`)
 
     return filtered
+  }
+
+  private cleanWordFieldCodes(para: any): any {
+    let text = para.text
+    
+    // 特殊处理："第 PAGE 4 页 共 NUMPAGES 5 页" 这种模式
+    const pagePattern = /第\s*PAGE\s*(\d+)\s*页\s*共\s*NUMPAGES\s*(\d+)\s*页/gi
+    let cleaned = text.replace(pagePattern, '第 $1 页 共 $2 页')
+    
+    // 如果没匹配到，再处理单个字段，使用单词边界避免误匹配
+    if (cleaned === text) {
+      const fieldPatterns = [
+        /\bPAGE\b/gi,
+        /\bNUMPAGES\b/gi,
+        /\bDATE\b/gi,
+        /\bTIME\b/gi,
+        /\bSECTION\b/gi,
+        /\bSECTIONPAGES\b/gi,
+        /\bFILENAME\b/gi,
+        /\bAUTHOR\b/gi,
+        /\bTITLE\b/gi,
+        /\bSUBJECT\b/gi,
+        /\bKEYWORDS\b/gi,
+        /\bCOMMENTS\b/gi,
+        /\bCREATEDATE\b/gi,
+        /\bSAVEDATE\b/gi,
+        /\bPRINTDATE\b/gi,
+        /\bEDITTIME\b/gi,
+        /\bNUMWORDS\b/gi,
+        /\bNUMCHARS\b/gi,
+        /\bDOCPROPERTY\b/gi,
+        /\bMERGEFIELD\b/gi,
+        /\bREF\b/gi,
+        /\bHYPERLINK\b/gi,
+        /\bINCLUDEPICTURE\b/gi,
+        /\bINCLUDETEXT\b/gi,
+        /\bSEQ\b/gi,
+        /\bTOC\b/gi,
+        /\bTOC\s+o\s+"1-9"\b/gi,
+        /\bTOC\s+o\s+"1-3"\b/gi,
+      ]
+      
+      cleaned = text
+      for (const pattern of fieldPatterns) {
+        cleaned = cleaned.replace(pattern, '')
+      }
+    }
+    
+    // 清理重复的空格和标点
+    cleaned = cleaned
+      .replace(/\s{2,}/g, ' ')
+      .replace(/，\s*，/g, '，')
+      .replace(/。\s*。/g, '。')
+      .replace(/：\s*：/g, '：')
+      .trim()
+    
+    if (cleaned !== text) {
+      logger.log(`清理字段代码: "${text}" → "${cleaned}"`)
+      
+      // 如果有 charFormat.styles，简化处理：因为文本被压缩了，暂时清空字符样式
+      const newCharFormat = { ...para.charFormat }
+      if (newCharFormat.styles && newCharFormat.styles.length > 0) {
+        delete newCharFormat.styles
+      }
+      
+      return { ...para, text: cleaned, charFormat: newCharFormat }
+    }
+    
+    return para
   }
 
   private stripBinaryPrefix(para: any): any {
     const text = para.text
     if (!text || text.length < 10) return para
 
-    // 检查前20个字符中是否包含大量扩展ASCII（> 0x7E）
-    const checkLen = Math.min(20, text.length)
-    let extendedCount = 0
-    for (let i = 0; i < checkLen; i++) {
-      if (text.charCodeAt(i) > 0x7E) extendedCount++
-    }
-    if (extendedCount < checkLen * 0.3) return para
+    logger.log(`清理乱码前缀，原文前100字符: "${text.substring(0, Math.min(100, text.length))}..."`)
 
-    // 找到正文起始位置：大写字母开头后跟小写字母的单词（如"Main"）
-    // 或含元音字母的3+字母单词
-    const realStart = text.search(/\b[A-Z][a-z]+\b/)
-    if (realStart > 0 && realStart < text.length - 5) {
-      const remaining = text.substring(realStart)
-      if (remaining.length >= 3) {
-        return { ...para, text: remaining }
-      }
-    }
+    let realStart = 0
+    let foundRealStart = false
 
-    // 备选：任意3+字母含元音的英文单词
-    const vowelWord = text.search(/[A-Za-z]*[aeiouyAEIOUY][A-Za-z]*[A-Za-z]/)
-    if (vowelWord > 0 && vowelWord < text.length - 5) {
-      const remaining = text.substring(vowelWord)
-      if (remaining.length >= 3) {
-        return { ...para, text: remaining }
-      }
-    }
-
-    // 备选：连续2+中文字符
-    const chineseStart = text.search(/[一-鿿]{2,}/)
-    if (chineseStart > 0 && chineseStart < text.length - 3) {
-      const remaining = text.substring(chineseStart)
-      if (remaining.length >= 3) {
-        return { ...para, text: remaining }
-      }
-    }
-
-    // 中文开头但夹杂短ASCII字符（FIB噪声的UTF-16LE解码特征）
-    // 例："稀搀摤d匀x匀x氀清川市..."→ 扫描到"清川市"前有ASCII杂音
-    if (chineseStart === 0) {
-      const longChineseRun = text.search(/[一-鿿]{4,}/)
-      if (longChineseRun > 0 && longChineseRun < text.length - 5) {
-        // 确认前缀中有ASCII字符（排除"一二三 四五六七八"的正常中文）
-        const prefixBefore = text.substring(0, longChineseRun)
-        if (/[A-Za-z0-9]/.test(prefixBefore)) {
-          const remaining = text.substring(longChineseRun)
-          if (remaining.length >= 3) {
-            return { ...para, text: remaining }
-          }
+    // 查找第一个连续3个有效字符的位置
+    for (let i = 0; i < Math.min(text.length - 3, 100); i++) {
+      let validCount = 0
+      for (let j = i; j < Math.min(i + 3, text.length); j++) {
+        const charCode = text.charCodeAt(j)
+        if (this.isValidChar(charCode)) {
+          validCount++
         }
       }
+      
+      if (validCount >= 2) {
+        realStart = i
+        foundRealStart = true
+        break
+      }
+    }
+
+    if (foundRealStart && realStart > 0) {
+      const cleaned = text.substring(realStart)
+      logger.log(`清理乱码前缀，从位置 ${realStart} 开始`)
+
+      // 同步调整 charFormat.styles
+      const newCharFormat = { ...para.charFormat }
+      if (newCharFormat.styles && newCharFormat.styles.length > 0) {
+        // 调整每个样式的 start/end
+        newCharFormat.styles = newCharFormat.styles
+          .map((style: any) => ({
+            start: Math.max(0, style.start - realStart),
+            end: Math.max(0, style.end - realStart),
+            style: style.style
+          }))
+          .filter((style: any) => style.end > style.start && style.start < cleaned.length)
+        
+        logger.log(`调整了 ${para.charFormat.styles.length} 个字符样式`)
+      }
+
+      return { ...para, text: cleaned, charFormat: newCharFormat }
+    }
+
+    // 检测段落整体是否乱码比例过高
+    const totalWeird = (text.match(/[^\u4e00-\u9fff\u3400-\u4dbf\w\s,.!?，。！？；：""''（）【】、]/g) || []).length
+    if (totalWeird > text.length * 0.4) {
+      logger.log(`段落乱码比例过高(${totalWeird}/${text.length})，标记为空`)
+      return { ...para, text: '' }
     }
 
     return para
+  }
+
+  private isValidChar(charCode: number): boolean {
+    // 有效字符包括：中文、基本ASCII(32-126)、常用标点
+    return (
+      (charCode >= 0x4E00 && charCode <= 0x9FFF) ||
+      (charCode >= 0x3400 && charCode <= 0x4DBF) ||
+      (charCode >= 32 && charCode <= 126) ||
+      [0x3001, 0x3002, 0xFF0C, 0xFF0E, 0x300A, 0x300B, 0xFF1A,
+       0x2018, 0x2019, 0x201C, 0x201D, 0xFF08, 0xFF09,
+       0xFF1F, 0xFF01, 0x3000, 0x2014, 0xFF0B].includes(charCode)
+    )
   }
 
   private extractParagraphsWithFormat(data: Uint8Array, options?: { fcMin?: number; fComplex?: boolean }): any[] {
@@ -511,7 +609,37 @@ export class DocParser {
     let paragraphIndex = 0
 
     const maxBytes = Math.min(data.length, 500000)
-    const startOffset = options?.fcMin ?? 0
+    let startOffset = options?.fcMin ?? 0
+    
+    // 如果 startOffset 为 0 或过小，跳过 FIB 头部（通常是 200 字节左右）
+    if (startOffset < 200) {
+      // 查找第一个真正的段落标记
+      let firstParaMarker = -1
+      for (let i = 200; i < Math.min(data.length - 1, 1000); i++) {
+        if (options?.fComplex === false) {
+          // UTF-16LE
+          if (data[i] === 0x0D && data[i + 1] === 0x00) {
+            firstParaMarker = i
+            break
+          }
+        } else {
+          // 8-bit
+          if (data[i] === 0x0D) {
+            firstParaMarker = i
+            break
+          }
+        }
+      }
+      
+      if (firstParaMarker > 0) {
+        startOffset = firstParaMarker + (options?.fComplex === false ? 2 : 1)
+        logger.log(`FIB 头部跳过，从 offset ${startOffset} 开始提取`)
+      } else {
+        startOffset = 200
+        logger.log(`未找到段落标记，使用默认 offset ${startOffset}`)
+      }
+    }
+    
     const isCompressed = options?.fComplex ?? false
 
     if (isCompressed) {
@@ -1689,6 +1817,35 @@ export function parseDocFile(file: File, _debug: boolean = DEBUG_MODE): Promise<
   })
 }
 
+export function parseDocFileFromBuffer(
+  buffer: ArrayBuffer,
+  _fileName?: string
+): {
+  success: boolean
+  document?: any
+  text?: string
+  error?: string
+} {
+  logger.info(`开始解析: ${_fileName || '未知'}, ${buffer.byteLength} bytes`)
+
+  try {
+    const parser = new DocParser(buffer)
+    const result = parser.parseWithFormat()
+
+    if (result.success) {
+      logger.info('解析成功')
+    } else {
+      logger.error(`解析失败: ${result.error}`)
+    }
+
+    return result
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '未知错误'
+    logger.error(`解析器异常: ${message}`)
+    return { success: false, error: `解析失败: ${message}` }
+  }
+}
+
 export function parseDocFileWithFormat(file: File, _debug: boolean = DEBUG_MODE): Promise<{
   success: boolean
   document?: any
@@ -1709,24 +1866,7 @@ export function parseDocFileWithFormat(file: File, _debug: boolean = DEBUG_MODE)
         return
       }
 
-      logger.info(`文件读取成功: ${buffer.byteLength} bytes`)
-
-      try {
-        const parser = new DocParser(buffer)
-        const result = parser.parseWithFormat()
-
-        if (result.success) {
-          logger.info(`带格式解析成功`)
-        } else {
-          logger.error(`解析失败: ${result.error}`)
-        }
-
-        resolve(result)
-      } catch (error) {
-        const message = error instanceof Error ? error.message : '未知错误'
-        logger.error(`解析器异常: ${message}`)
-        resolve({ success: false, error: `解析失败: ${message}` })
-      }
+      resolve(parseDocFileFromBuffer(buffer, file.name))
     }
 
     reader.onerror = () => {

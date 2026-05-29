@@ -1,16 +1,18 @@
 <script setup lang="ts">
 import { ref, watch, onMounted } from 'vue'
-import { parseDocFileWithFormat } from '../utils/docParser'
+import { parseDocFileWithFormat, parseDocFileFromBuffer } from '../utils/docParser'
 
 const props = defineProps<{
-  file: File
+  source: File | string | null
 }>()
 
+const fileName = ref('')
 const htmlContent = ref('')
 const loading = ref(true)
 const error = ref('')
 
-const extractTextFromDoc = async (file: File) => {
+const loadFromFile = async (file: File) => {
+  fileName.value = file.name
   loading.value = true
   error.value = ''
 
@@ -23,21 +25,56 @@ const extractTextFromDoc = async (file: File) => {
       return
     }
 
-    if (result.document && result.document.paragraphs) {
-      htmlContent.value = formatFormattedTextToHtml(result.document.paragraphs)
-    } else if (result.text) {
-      htmlContent.value = formatTextWithInferredFormat(result.text)
-    } else {
-      error.value = '⚠️ 文档内容为空或无法提取文本\n\n可能原因：\n• 文件格式不受支持\n• 文件已损坏\n• 文档内容为空'
+    renderResult(result, file.name)
+  } catch (err) {
+    console.error('Error parsing DOC file:', err)
+    error.value = `❌ 解析失败\n\n${err instanceof Error ? err.message : '未知错误'}`
+  } finally {
+    loading.value = false
+  }
+}
+
+const loadFromUrl = async (url: string) => {
+  fileName.value = url.split('/').pop() || url
+  loading.value = true
+  error.value = ''
+
+  try {
+    const response = await fetch(url)
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+    }
+
+    const buffer = await response.arrayBuffer()
+    const result = parseDocFileFromBuffer(buffer, fileName.value)
+
+    if (!result.success) {
+      error.value = result.error || '解析失败'
       loading.value = false
       return
     }
+
+    renderResult(result, fileName.value)
   } catch (err) {
-    console.error('Error parsing DOC file:', err)
-    const errorMsg = err instanceof Error ? err.message : '未知错误'
-    error.value = `❌ 解析失败\n\n错误信息: ${errorMsg}\n\n可能原因：\n• 文件格式不受支持\n• 文件已损坏\n• 文件加密或受保护`
+    console.error('Error loading DOC from URL:', err)
+    const msg = err instanceof Error ? err.message : '未知错误'
+    if (msg.includes('HTTP') || msg.includes('Failed to fetch')) {
+      error.value = `❌ 无法从地址加载文件\n\n${msg}\n\n可能原因：\n• 地址不可达或已失效\n• 跨域限制（CORS）\n• 服务器返回了错误状态码`
+    } else {
+      error.value = `❌ 加载失败\n\n${msg}`
+    }
   } finally {
     loading.value = false
+  }
+}
+
+const renderResult = (result: any, _name: string) => {
+  if (result.document && result.document.paragraphs) {
+    htmlContent.value = formatFormattedTextToHtml(result.document.paragraphs)
+  } else if (result.text) {
+    htmlContent.value = formatTextWithInferredFormat(result.text)
+  } else {
+    error.value = '⚠️ 文档内容为空或无法提取文本\n\n可能原因：\n• 文件格式不受支持\n• 文件已损坏\n• 文档内容为空'
   }
 }
 
@@ -280,15 +317,23 @@ const escapeHtml = (text: string): string => {
   return div.innerHTML
 }
 
-watch(() => props.file, (newFile) => {
-  if (newFile) {
-    extractTextFromDoc(newFile)
+watch(() => props.source, (newSource) => {
+  if (newSource) {
+    if (typeof newSource === 'string') {
+      loadFromUrl(newSource)
+    } else {
+      loadFromFile(newSource)
+    }
   }
 })
 
 onMounted(() => {
-  if (props.file) {
-    extractTextFromDoc(props.file)
+  if (props.source) {
+    if (typeof props.source === 'string') {
+      loadFromUrl(props.source)
+    } else {
+      loadFromFile(props.source)
+    }
   }
 })
 </script>
@@ -367,6 +412,14 @@ onMounted(() => {
   color: #e74c3c;
   font-size: 1.1rem;
   text-align: center;
+}
+
+.doc-info {
+  font-size: 0.85rem;
+  color: #999;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #eee;
 }
 
 .preview-content {

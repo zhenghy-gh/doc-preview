@@ -3,10 +3,12 @@ import { ref } from 'vue'
 import DocPreview from './components/DocPreview.vue'
 
 const selectedFile = ref<File | null>(null)
+const urlInput = ref('')
+const previewSource = ref<File | string | null>(null)
 
 const isValidFile = (file: File): boolean => {
   const ext = file.name.toLowerCase()
-  return ext.endsWith('.doc')
+  return ext.endsWith('.doc') || ext.endsWith('.dot')
 }
 
 const handleFileChange = (event: Event) => {
@@ -14,6 +16,7 @@ const handleFileChange = (event: Event) => {
   const file = target.files?.[0]
   if (file && isValidFile(file)) {
     selectedFile.value = file
+    previewSource.value = file
   }
 }
 
@@ -22,6 +25,7 @@ const handleDrop = (event: DragEvent) => {
   const file = event.dataTransfer?.files?.[0]
   if (file && isValidFile(file)) {
     selectedFile.value = file
+    previewSource.value = file
   }
 }
 
@@ -29,8 +33,17 @@ const handleDragOver = (event: DragEvent) => {
   event.preventDefault()
 }
 
+const loadFromUrl = () => {
+  const url = urlInput.value.trim()
+  if (!url) return
+  previewSource.value = url
+  selectedFile.value = null // 清除文件选择状态
+}
+
 const resetFile = () => {
   selectedFile.value = null
+  previewSource.value = null
+  urlInput.value = ''
 }
 </script>
 
@@ -38,42 +51,52 @@ const resetFile = () => {
   <div class="app-container">
     <header class="header">
       <h1>DOC文件在线预览</h1>
-      <p>支持上传.doc文件进行在线预览（纯前端实现）</p>
+      <p>上传或通过地址加载 .doc 文件进行在线预览（纯前端实现）</p>
     </header>
 
     <main class="main-content">
-      <template v-if="!selectedFile">
-        <div 
+      <template v-if="!previewSource">
+        <div
           class="upload-area"
           @drop="handleDrop"
           @dragover="handleDragOver"
         >
           <div class="upload-icon">📄</div>
           <h2>选择或拖拽DOC文档</h2>
-          <p>支持 .doc 格式文件</p>
-          <div class="format-tips">
-            <span class="tip">💡 提示：纯前端实现，无需服务器</span>
-          </div>
+          <p>支持 .doc / .dot 格式文件</p>
           <label class="upload-btn">
-            <input 
-              type="file" 
-              accept=".doc" 
+            <input
+              type="file"
+              accept=".doc,.dot"
               @change="handleFileChange"
               class="file-input"
             />
             <span>点击选择文件</span>
           </label>
+
+          <div class="url-section">
+            <div class="divider"><span>或者</span></div>
+            <div class="url-input-row">
+              <input
+                type="text"
+                v-model="urlInput"
+                placeholder="输入 .doc 文件地址..."
+                class="url-input"
+                @keyup.enter="loadFromUrl"
+              />
+              <button class="url-btn" @click="loadFromUrl">加载</button>
+            </div>
+          </div>
         </div>
       </template>
 
       <template v-else>
         <div class="preview-header">
-          <span class="file-name">{{ selectedFile.name }}</span>
           <button class="back-btn" @click="resetFile">
-            ← 返回选择
+            ← 返回
           </button>
         </div>
-        <DocPreview :file="selectedFile" />
+        <DocPreview :source="previewSource" />
       </template>
     </main>
   </div>
@@ -171,6 +194,64 @@ const resetFile = () => {
 
 .file-input {
   display: none;
+}
+
+.url-section {
+  margin-top: 30px;
+}
+
+.divider {
+  display: flex;
+  align-items: center;
+  margin-bottom: 16px;
+  color: #999;
+  font-size: 0.85rem;
+}
+
+.divider::before,
+.divider::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid #e0e0e0;
+}
+
+.divider span {
+  padding: 0 16px;
+}
+
+.url-input-row {
+  display: flex;
+  gap: 8px;
+}
+
+.url-input {
+  flex: 1;
+  padding: 12px 16px;
+  border: 2px solid #e0e0e0;
+  border-radius: 8px;
+  font-size: 0.95rem;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.url-input:focus {
+  border-color: #667eea;
+}
+
+.url-btn {
+  padding: 12px 24px;
+  background: #667eea;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 0.95rem;
+  cursor: pointer;
+  transition: background 0.2s;
+  white-space: nowrap;
+}
+
+.url-btn:hover {
+  background: #5a6fd6;
 }
 
 .preview-header {
