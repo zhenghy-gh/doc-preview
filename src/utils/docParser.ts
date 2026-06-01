@@ -537,29 +537,38 @@ export class DocParser {
 
     logger.log(`清理乱码前缀，原文前100字符: "${text.substring(0, Math.min(100, text.length))}..."`)
 
+    // cycle-3 改进: 扫描整个段落（不是只看前 100 字节），找最长连续有效字符段。
+    // 旧算法只看前 100 字节 → 当真实标题嵌在 FIB 噪声尾部时（典型 offset 1500+）找不到，
+    // 剥前缀只剥几字节，整段被后续 weird-chars 50% 过滤器丢弃。
+    // 触发样本 doc-101.doc P1 = 1356 字节 FIB 噪声 + "This is Heading1 Text" 21 字节在尾部。
     let realStart = 0
-    let foundRealStart = false
+    let longestValidRun = 0
+    let longestValidRunStart = 0
+    let currentRun = 0
+    let currentRunStart = 0
 
-    // 查找第一个连续3个有效字符的位置
-    for (let i = 0; i < Math.min(text.length - 3, 100); i++) {
-      let validCount = 0
-      for (let j = i; j < Math.min(i + 3, text.length); j++) {
-        const charCode = text.charCodeAt(j)
-        if (this.isValidChar(charCode)) {
-          validCount++
+    for (let i = 0; i < text.length; i++) {
+      const charCode = text.charCodeAt(i)
+      if (this.isValidChar(charCode)) {
+        if (currentRun === 0) currentRunStart = i
+        currentRun++
+        if (currentRun > longestValidRun) {
+          longestValidRun = currentRun
+          longestValidRunStart = currentRunStart
         }
-      }
-      
-      if (validCount >= 2) {
-        realStart = i
-        foundRealStart = true
-        break
+      } else {
+        currentRun = 0
       }
     }
 
-    if (foundRealStart && realStart > 0) {
+    // 最长有效段 ≥ 5 字符才认为是真实文本（避免纯噪声被错认为有效）
+    if (longestValidRun >= 5) {
+      realStart = longestValidRunStart
+    }
+
+    if (realStart > 0) {
       const cleaned = text.substring(realStart)
-      logger.log(`清理乱码前缀，从位置 ${realStart} 开始`)
+      logger.log(`清理乱码前缀，从位置 ${realStart} 开始（最长有效段 ${longestValidRun} 字符）`)
 
       // 同步调整 charFormat.styles
       const newCharFormat = { ...para.charFormat }
@@ -610,38 +619,17 @@ export class DocParser {
 
     const maxBytes = Math.min(data.length, 500000)
     let startOffset = options?.fcMin ?? 0
-    
-    // 如果 startOffset 为 0 或过小，跳过 FIB 头部（通常是 200 字节左右）
+
+    // cycle-3 修复 (BENCH.md): 不再向前跳到 firstParaMarker+1
+    // 旧逻辑在 200-10000 区间找 0x0D 当作"第一段尾"，会把嵌入 FIB 头部的首段丢弃
+    // (触发样本 doc-101.doc, firstParaMarker=1557, 丢失 "This is Heading1 Text")。
+    // 改为：startOffset 只保证 ≥200，由 hasSignificantContent + filterParagraphsWithGenericLogic
+    // 负责过滤噪声。
     if (startOffset < 200) {
-      // 查找第一个真正的段落标记
-      // textutil 输出的 .doc 第一个 0x0D 0x00 可能在 stream offset 2000+（FIB 头部 2KB+）
-      // 触发样本：docs/synthetic/04_plain.doc（0x0D 0x00 @ stream[2082]）
-      let firstParaMarker = -1
-      for (let i = 200; i < Math.min(data.length - 1, 10000); i++) {
-        if (options?.fComplex === false) {
-          // UTF-16LE
-          if (data[i] === 0x0D && data[i + 1] === 0x00) {
-            firstParaMarker = i
-            break
-          }
-        } else {
-          // 8-bit
-          if (data[i] === 0x0D) {
-            firstParaMarker = i
-            break
-          }
-        }
-      }
-      
-      if (firstParaMarker > 0) {
-        startOffset = firstParaMarker + (options?.fComplex === false ? 2 : 1)
-        logger.log(`FIB 头部跳过，从 offset ${startOffset} 开始提取`)
-      } else {
-        startOffset = 200
-        logger.log(`未找到段落标记，使用默认 offset ${startOffset}`)
-      }
+      startOffset = 200
+      logger.log(`从 offset ${startOffset} 开始提取（不再向前跳到 firstParaMarker）`)
     }
-    
+
     const isCompressed = options?.fComplex ?? false
 
     if (isCompressed) {
