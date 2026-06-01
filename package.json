@@ -1,6 +1,6 @@
 {
   "name": "@zhenghy/doc-preview",
-  "version": "0.3.0",
+  "version": "0.2.1",
   "description": "A Vue 3 component for previewing .doc files in browser",
   "type": "module",
   "main": "./dist/doc-preview.umd.cjs",

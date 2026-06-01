@@ -32,3 +32,14 @@ pnpm-debug.log*
 settings.json
 dist
 dist.tar
+
+# Agent bench artifacts
+.doc-preview-bench/
+docs/synthetic/
+docs/_synth_tmp/
+repro-*.mjs
+peek.mjs
+inspect.mjs
+inspect2.mjs
+cluster.mjs
+synth-docx.py

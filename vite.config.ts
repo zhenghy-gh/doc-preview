@@ -11,8 +11,8 @@ export default defineConfig(({ mode }) => {
       alias: {
         '@': resolve(__dirname, 'src'),
         // 让 @zhenghy/doc-preview 指向本地源代码，模拟真实 npm 包导入
-        '@zhenghy/doc-preview': resolve(__dirname, 'src/index.ts')
-      }
+        '@zhenghy/doc-preview': resolve(__dirname, 'src/index.ts'),
+      },
     },
     base: isLib ? './' : '/doc-preview/',
     build: isLib
@@ -21,16 +21,16 @@ export default defineConfig(({ mode }) => {
             entry: resolve(__dirname, 'src/index.ts'),
             name: 'DocPreview',
             fileName: 'doc-preview',
-            formats: ['es', 'umd']
+            formats: ['es', 'umd'],
           },
           rollupOptions: {
             external: ['vue'],
             output: {
               globals: {
-                vue: 'Vue'
-              }
-            }
-          }
+                vue: 'Vue',
+              },
+            },
+          },
         }
       : {
           outDir: 'dist',
@@ -38,9 +38,8 @@ export default defineConfig(({ mode }) => {
           rollupOptions: {
             input: {
               main: resolve(__dirname, 'index.html'),
-              test: resolve(__dirname, 'test.html')
-            }
-          }
-        }
+            },
+          },
+        },
   }
 })

@@ -34,7 +34,6 @@ src/
     docParser.ts          # 核心解析器：OLE2 格式解析、FIB 解析、文本/格式提取
     docFormat.ts          # 格式化类型定义 (CharacterFormat, ParagraphFormat 等)
     docFormatTypes.ts     # 旧的/备选类型定义
-    docParser copy.ts     # 旧版解析器备份
 ```
 
 ## Architecture

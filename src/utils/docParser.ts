@@ -601,7 +601,7 @@ export class DocParser {
     )
   }
 
-  private extractParagraphsWithFormat(data: Uint8Array, options?: { fcMin?: number; fComplex?: boolean }): any[] {
+  private extractParagraphsWithFormat(data: Uint8Array, options?: { fcMin?: number; fComplex?: boolean; _isRetry?: boolean }): any[] {
     logger.log('提取段落及格式信息')
 
     const paragraphs: any[] = []
@@ -614,8 +614,10 @@ export class DocParser {
     // 如果 startOffset 为 0 或过小，跳过 FIB 头部（通常是 200 字节左右）
     if (startOffset < 200) {
       // 查找第一个真正的段落标记
+      // textutil 输出的 .doc 第一个 0x0D 0x00 可能在 stream offset 2000+（FIB 头部 2KB+）
+      // 触发样本：docs/synthetic/04_plain.doc（0x0D 0x00 @ stream[2082]）
       let firstParaMarker = -1
-      for (let i = 200; i < Math.min(data.length - 1, 1000); i++) {
+      for (let i = 200; i < Math.min(data.length - 1, 10000); i++) {
         if (options?.fComplex === false) {
           // UTF-16LE
           if (data[i] === 0x0D && data[i + 1] === 0x00) {
@@ -731,6 +733,21 @@ export class DocParser {
     }
 
     logger.info(`提取到 ${paragraphs.length} 个段落`)
+
+    // 启发式：fComplex=true（8-bit 路径）但实际可能是 UTF-16LE
+    // textutil 在 macOS 上输出的 .doc 始终 byte12=0xBF（CLAUDE.md 已知问题），
+    // 导致 fComplex 误报为 true，实际文本是 UTF-16LE。
+    // 检测方式：调用 detectEncodingFromBinary 看 0x0D 后面跟 0x00 的比例。
+    // 触发样本：docs/synthetic/04_plain.doc, 07_replica_doc101.doc, doc-100kb/1mb/500kb.doc,
+    //           unicode-*, fsample1/2/3, ftd-*, openstd-n961.doc 等 18+ 个。
+    if (isCompressed && paragraphs.length > 0 && !options?._isRetry) {
+      const binaryDetect = this.detectEncodingFromBinary(data)
+      if (binaryDetect === false) {
+        logger.log('fComplex 启发式：二进制检测判定为 UTF-16LE，切到 16-bit 路径')
+        const alt = this.extractParagraphsWithFormat(data, { ...options, fComplex: false, _isRetry: true })
+        return this.filterAndEnhanceParagraphs(alt)
+      }
+    }
 
     return this.filterAndEnhanceParagraphs(paragraphs)
   }
