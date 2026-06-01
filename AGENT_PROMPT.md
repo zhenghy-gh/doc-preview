@@ -70,7 +70,7 @@ ls .doc-preview-bench/ 2>/dev/null
 1. 用 `WebSearch` 搜：`filetype:doc site:unicode.org`、`filetype:doc bugzilla`、`intitle:"index of" .doc`
 2. 用 `WebFetch` 拉候选页面，用 `curl` 直接下 `.doc`（`Content-Type: application/msword` 校验）
 3. 若 `.docx` 多于 `.doc`，按 §3 转换
-4. 合成样本：用 `python-docx`（pip 装）生成"边界情况"测试 `.doc`（如纯中文 4+ 连续字符、超长段落、含 \r 字符、空文档等），存到 `docs/synthetic/`
+4. 合成样本：用 `python-docx`（pip 装）生成"边界情况"测试 `.docx`，再通过 `soffice --headless --convert-to doc` 转换为 `.doc`（如纯中文 4+ 连续字符、超长段落、含 \r 字符、空文档等），存到 `docs/synthetic/`。若无 soffice，则跳过合成步骤，优先收集真实 `.doc` 样本
 5. **去重**：新文件 sha256 已存在则跳过
 6. 落盘 `docs/.samples-manifest.json`：`{sha256, name, size, source, features[]}`
 
