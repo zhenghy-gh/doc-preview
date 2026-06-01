@@ -421,14 +421,22 @@ export class DocParser {
       if (!hasSignificantContent) {
         return false
       }
-      
-      const upperP = p.text.toUpperCase()
-      const skipPatterns = ['ROOT', 'SUMMARY', 'DOCUMENT', 'WORD', 'WPS', 'MICROSOFT',
-                           'PROPERTY', 'STORAGE', 'STREAM', 'TABLE', 'FORMAT',
-                           'XMLDATA', 'BASE64', 'TEMPLATE', 'REGISTRY']
 
-      for (const pattern of skipPatterns) {
-        if (upperP.includes(pattern)) return false
+      // cycle-4 修复: skipPatterns 仅作用于短段落（<80 字符）。
+      // 原逻辑对所有段落做 includes('WORD'/'DOCUMENT'/'TABLE'/...) 检查，
+      // 误杀大量合法英文段落（Microsoft 模板 fsample4.doc 整篇讨论 Word 的 header/footer，
+      // 每个段落都含 'Word' / 'document'，288 段被砍剩 1 段，相似度 0.000）。
+      // FIB/目录噪声（"WordDocument"、"SummaryInformation"、"Root Entry"）始终 < 30 字符，
+      // 用 80 字符阈值安全覆盖噪声同时不误伤真实长文。
+      if (p.text.length < 80) {
+        const upperP = p.text.toUpperCase()
+        const skipPatterns = ['ROOT', 'SUMMARY', 'DOCUMENT', 'WORD', 'WPS', 'MICROSOFT',
+                             'PROPERTY', 'STORAGE', 'STREAM', 'TABLE', 'FORMAT',
+                             'XMLDATA', 'BASE64', 'TEMPLATE', 'REGISTRY']
+
+        for (const pattern of skipPatterns) {
+          if (upperP.includes(pattern)) return false
+        }
       }
 
       return true
