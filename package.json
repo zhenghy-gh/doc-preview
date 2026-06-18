@@ -1,11 +1,10 @@
 {
   "name": "@zhenghy/doc-preview",
-  "version": "0.2.1",
+  "version": "0.3.1",
   "description": "A Vue 3 component for previewing .doc files in browser",
   "type": "module",
   "main": "./dist/doc-preview.umd.cjs",
   "module": "./dist/doc-preview.js",
-
   "exports": {
     ".": {
       "import": "./dist/doc-preview.js",
@@ -21,7 +20,10 @@
     "dev": "vite",
     "build": "vue-tsc && vite build",
     "build:lib": "vue-tsc && vite build --mode lib",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "keywords": [
     "vue3",
@@ -46,9 +48,12 @@
   "devDependencies": {
     "@types/node": "^20.11.0",
     "@vitejs/plugin-vue": "^5.0.0",
+    "@vitest/coverage-v8": "^4.1.9",
     "playwright": "^1.60.0",
     "typescript": "^5.3.3",
     "vite": "^5.0.12",
+    "vite-plugin-dts": "^5.0.2",
+    "vitest": "^4.1.9",
     "vue": "^3.4.21",
     "vue-tsc": "^2.0.0"
   }

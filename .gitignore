@@ -33,13 +33,21 @@ settings.json
 dist
 dist.tar
 
+# Auto loop state
+.opencode/
+
 # Agent bench artifacts
 .doc-preview-bench/
 docs/synthetic/
 docs/_synth_tmp/
 repro-*.mjs
+probe-*.mjs
 peek.mjs
 inspect.mjs
 inspect2.mjs
 cluster.mjs
 synth-docx.py
+scout*.mjs
+
+# Test coverage
+coverage/

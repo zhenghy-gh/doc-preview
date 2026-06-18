@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DOC Preview — Standalone Demo</title>
+  <link rel="icon" type="image/svg+xml" href="../public/favicon.svg" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f5f5f5;
+      min-height: 100vh;
+    }
+    .container {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 40px 20px;
+    }
+    h1 {
+      font-size: 2rem;
+      color: #333;
+      margin-bottom: 8px;
+    }
+    .subtitle {
+      color: #666;
+      margin-bottom: 24px;
+    }
+    .drop-zone {
+      background: white;
+      border: 3px dashed #ddd;
+      border-radius: 16px;
+      padding: 40px 20px;
+      text-align: center;
+      margin-bottom: 24px;
+      transition: all 0.3s;
+    }
+    .drop-zone.dragover {
+      border-color: #667eea;
+      background: #f0f4ff;
+    }
+    .drop-zone button {
+      background: linear-gradient(135deg, #667eea, #764ba2);
+      color: white;
+      border: none;
+      padding: 12px 32px;
+      border-radius: 24px;
+      font-size: 1rem;
+      cursor: pointer;
+      margin: 8px;
+    }
+    .status {
+      margin-top: 16px;
+      padding: 12px;
+      background: #f8f9fa;
+      border-radius: 8px;
+      color: #666;
+      font-size: 0.9rem;
+      min-height: 1.5em;
+    }
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      padding: 12px 16px;
+      background: #f8f9fa;
+      border-radius: 12px 12px 0 0;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .toolbar button {
+      padding: 6px 14px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      background: white;
+      cursor: pointer;
+      font-size: 0.85rem;
+    }
+    .toolbar button:hover { background: #f0f0f0; }
+    .stats { color: #888; font-size: 0.85rem; margin-left: auto; }
+    .preview {
+      background: white;
+      border-radius: 0 0 12px 12px;
+      padding: 40px;
+      min-height: 200px;
+      max-height: 70vh;
+      overflow-y: auto;
+      line-height: 1.8;
+      color: #333;
+    }
+    .preview p { margin-bottom: 14px; text-align: justify; }
+    .preview h1 { font-size: 1.8rem; text-align: center; margin: 20px 0; border-bottom: 2px solid #667eea; padding-bottom: 10px; }
+    .preview h2 { font-size: 1.4rem; margin: 20px 0 10px; }
+    .preview code { background: #f0f0f0; padding: 2px 6px; border-radius: 3px; font-family: monospace; }
+    .preview blockquote { border-left: 4px solid #667eea; padding-left: 14px; color: #666; font-style: italic; margin: 14px 0; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>📄 DOC Preview</h1>
+    <p class="subtitle">纯前端 .doc 文件预览演示 — 拖入文件或点击按钮选择</p>
+
+    <div id="dropZone" class="drop-zone">
+      <p style="font-size: 1.1rem; margin-bottom: 12px;">选择 .doc 文件开始预览</p>
+      <button id="chooseFile">选择文件</button>
+      <input id="fileInput" type="file" accept=".doc,.dot" style="display:none" />
+      <p style="color: #999; font-size: 0.85rem; margin-top: 12px;">或拖拽文件到此处</p>
+      <div id="status" class="status"></div>
+    </div>
+
+    <div id="toolbar" class="toolbar" style="display: none;">
+      <button id="zoomOut">−</button>
+      <button id="zoomReset">100%</button>
+      <button id="zoomIn">+</button>
+      <button id="download">📥 下载</button>
+      <span id="stats" class="stats"></span>
+    </div>
+    <div id="preview" class="preview" style="display: none;"></div>
+  </div>
+
+  <script type="module">
+    import { parseDocFileWithFormat } from '../dist/doc-preview.js'
+
+    const dropZone = document.getElementById('dropZone')
+    const fileInput = document.getElementById('fileInput')
+    const status = document.getElementById('status')
+    const toolbar = document.getElementById('toolbar')
+    const preview = document.getElementById('preview')
+    const stats = document.getElementById('stats')
+    let plainText = ''
+
+    document.getElementById('chooseFile').onclick = () => fileInput.click()
+    fileInput.onchange = (e) => e.target.files[0] && parse(e.target.files[0])
+    dropZone.ondragover = (e) => { e.preventDefault(); dropZone.classList.add('dragover') }
+    dropZone.ondragleave = () => dropZone.classList.remove('dragover')
+    dropZone.ondrop = (e) => {
+      e.preventDefault()
+      dropZone.classList.remove('dragover')
+      e.dataTransfer.files[0] && parse(e.dataTransfer.files[0])
+    }
+
+    function escapeHtml(s) {
+      const d = document.createElement('div')
+      d.textContent = s
+      return d.innerHTML
+    }
+
+    function formatText(text) {
+      return text.split(/\n+/).map(p => {
+        if (p.length < 30 && /[\u4e00-\u9fff]{2,}/.test(p)) {
+          return `<h1>${escapeHtml(p)}</h1>`
+        }
+        return `<p>${escapeHtml(p)}</p>`
+      }).join('')
+    }
+
+    async function parse(file) {
+      status.textContent = `正在解析 ${file.name}...`
+      try {
+        const result = await parseDocFileWithFormat(file)
+        if (!result.success) {
+          status.textContent = `❌ 失败: ${result.error}`
+          return
+        }
+        plainText = result.text
+        const html = result.document?.paragraphs
+          ? result.document.paragraphs.map(p => `<p>${escapeHtml(p.text)}</p>`).join('')
+          : formatText(result.text)
+        preview.innerHTML = html
+        status.textContent = '✓ 解析完成'
+        toolbar.style.display = 'flex'
+        preview.style.display = 'block'
+        stats.textContent = `${plainText.length} 字符`
+      } catch (err) {
+        status.textContent = `❌ 异常: ${err.message}`
+      }
+    }
+
+    let zoom = 100
+    document.getElementById('zoomIn').onclick = () => { zoom = Math.min(200, zoom + 10); preview.style.fontSize = zoom + '%' }
+    document.getElementById('zoomOut').onclick = () => { zoom = Math.max(50, zoom - 10); preview.style.fontSize = zoom + '%' }
+    document.getElementById('zoomReset').onclick = () => { zoom = 100; preview.style.fontSize = '100%' }
+    document.getElementById('download').onclick = () => {
+      const name = (plainText && fileInput.files[0]?.name?.replace(/\.(doc|dot)$/i, '')) || 'document'
+      const blob = new Blob([plainText], { type: 'text/plain;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url; a.download = `${name}.txt`; a.click()
+      URL.revokeObjectURL(url)
+    }
+  </script>
+</body>
+</html>

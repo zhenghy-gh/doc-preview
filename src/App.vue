@@ -1,56 +1,145 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import DocPreview from './components/DocPreview.vue'
+
+const MAX_FILE_SIZE = 50 * 1024 * 1024 // 50MB limit
 
 const selectedFile = ref<File | null>(null)
 const urlInput = ref('')
 const previewSource = ref<File | string | null>(null)
+const errorMessage = ref('')
+const isDragOver = ref(false)
 
 const isValidFile = (file: File): boolean => {
   const ext = file.name.toLowerCase()
   return ext.endsWith('.doc') || ext.endsWith('.dot')
 }
 
+const getFileExt = (file: File): string => {
+  return file.name.split('.').pop()?.toLowerCase() || ''
+}
+
+const formatErrorMessage = (file: File): string => {
+  const ext = getFileExt(file)
+  if (ext === 'docx') {
+    return '.docx 格式暂不支持。\n此工具为旧版 .doc (OLE2) 格式设计，\n.docx 文件需使用 Microsoft Word 或其他兼容工具打开。'
+  }
+  return `不支持的文件格式 ".${ext}"，请选择 .doc 或 .dot 文件`
+}
+
+const isValidFileSize = (file: File): boolean => {
+  return file.size <= MAX_FILE_SIZE
+}
+
+const formatFileSize = (bytes: number): string => {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
 const handleFileChange = (event: Event) => {
   const target = event.target as HTMLInputElement
-  const file = target.files?.[0]
-  if (file && isValidFile(file)) {
-    selectedFile.value = file
-    previewSource.value = file
+  const files = target.files
+  if (!files || files.length === 0) return
+
+  const file = files[0]
+  errorMessage.value = ''
+
+  if (!isValidFile(file)) {
+    errorMessage.value = formatErrorMessage(file)
+    return
   }
+
+  if (!isValidFileSize(file)) {
+    errorMessage.value = `文件过大 (${formatFileSize(file.size)})，最大支持 ${formatFileSize(MAX_FILE_SIZE)}`
+    return
+  }
+
+  selectedFile.value = file
+  previewSource.value = file
 }
 
 const handleDrop = (event: DragEvent) => {
   event.preventDefault()
+  isDragOver.value = false
+
   const file = event.dataTransfer?.files?.[0]
-  if (file && isValidFile(file)) {
-    selectedFile.value = file
-    previewSource.value = file
+  if (!file) return
+
+  errorMessage.value = ''
+
+  if (!isValidFile(file)) {
+    errorMessage.value = formatErrorMessage(file)
+    return
   }
+
+  if (!isValidFileSize(file)) {
+    errorMessage.value = `文件过大 (${formatFileSize(file.size)})，最大支持 ${formatFileSize(MAX_FILE_SIZE)}`
+    return
+  }
+
+  selectedFile.value = file
+  previewSource.value = file
 }
 
 const handleDragOver = (event: DragEvent) => {
   event.preventDefault()
+  isDragOver.value = true
+}
+
+const handleDragLeave = () => {
+  isDragOver.value = false
 }
 
 const loadFromUrl = () => {
   const url = urlInput.value.trim()
   if (!url) return
+  errorMessage.value = ''
   previewSource.value = url
-  selectedFile.value = null // 清除文件选择状态
+  selectedFile.value = null
 }
 
 const resetFile = () => {
   selectedFile.value = null
   previewSource.value = null
   urlInput.value = ''
+  errorMessage.value = ''
 }
+
+// --- Reader mode ---
+const readerMode = ref(false)
+
+function toggleReaderMode() {
+  readerMode.value = !readerMode.value
+}
+
+// --- Dark mode ---
+const darkMode = ref(localStorage.getItem('dark-mode') === 'true')
+
+function toggleDarkMode() {
+  darkMode.value = !darkMode.value
+  localStorage.setItem('dark-mode', String(darkMode.value))
+}
+
+// Sync dark class on mount and changes
+if (darkMode.value) {
+  document.documentElement.classList.add('dark')
+}
+
+watch(darkMode, (val) => {
+  document.documentElement.classList.toggle('dark', val)
+})
 </script>
 
 <template>
-  <div class="app-container">
+  <div class="app-container" :class="{ 'reader-mode': readerMode }">
     <header class="header">
-      <h1>DOC文件在线预览</h1>
+      <div class="header-top">
+        <h1>DOC文件在线预览</h1>
+        <button class="theme-btn" @click="toggleDarkMode" :title="darkMode ? '切换亮色模式' : '切换暗色模式'">
+          {{ darkMode ? '☀️' : '🌙' }}
+        </button>
+      </div>
       <p>上传或通过地址加载 .doc 文件进行在线预览（纯前端实现）</p>
     </header>
 
@@ -58,12 +147,19 @@ const resetFile = () => {
       <template v-if="!previewSource">
         <div
           class="upload-area"
+          :class="{ 'drag-over': isDragOver }"
           @drop="handleDrop"
           @dragover="handleDragOver"
+          @dragleave="handleDragLeave"
         >
-          <div class="upload-icon">📄</div>
-          <h2>选择或拖拽DOC文档</h2>
-          <p>支持 .doc / .dot 格式文件</p>
+          <div class="upload-icon">{{ isDragOver ? '📂' : '📄' }}</div>
+          <h2>{{ isDragOver ? '释放文件开始预览' : '选择或拖拽DOC文档' }}</h2>
+          <p>支持 .doc / .dot 格式文件，最大 50MB</p>
+
+          <div v-if="errorMessage" class="error-banner">
+            {{ errorMessage }}
+          </div>
+
           <label class="upload-btn">
             <input
               type="file"
@@ -92,9 +188,15 @@ const resetFile = () => {
 
       <template v-else>
         <div class="preview-header">
-          <button class="back-btn" @click="resetFile">
-            ← 返回
-          </button>
+          <span class="file-name">{{ typeof previewSource === 'string' ? previewSource.split('/').pop() : selectedFile?.name || '文档预览' }}</span>
+          <div class="header-actions">
+            <button class="header-btn" @click="toggleReaderMode" :title="readerMode ? '退出阅读模式' : '阅读模式'">
+              {{ readerMode ? '⊟' : '⊞' }}
+            </button>
+            <button class="back-btn" @click="resetFile">
+              ← 返回
+            </button>
+          </div>
         </div>
         <DocPreview :source="previewSource" />
       </template>
@@ -115,9 +217,38 @@ const resetFile = () => {
   color: white;
 }
 
+.header-top {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.header-top h1 {
+  margin-bottom: 0;
+}
+
+.theme-btn {
+  background: rgba(255, 255, 255, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 50%;
+  width: 40px;
+  height: 40px;
+  font-size: 1.2rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s;
+}
+
+.theme-btn:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
 .header h1 {
   font-size: 2.5rem;
-  margin-bottom: 10px;
   text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.2);
 }
 
@@ -145,6 +276,25 @@ const resetFile = () => {
 .upload-area:hover {
   border-color: #667eea;
   box-shadow: 0 25px 70px rgba(0, 0, 0, 0.2);
+}
+
+.upload-area.drag-over {
+  border-color: #667eea;
+  background: #f0f4ff;
+  box-shadow: 0 25px 70px rgba(102, 126, 234, 0.3);
+  transform: scale(1.02);
+}
+
+.error-banner {
+  background: #fff0f0;
+  color: #d63031;
+  border: 1px solid #ffcccc;
+  border-radius: 8px;
+  padding: 10px 16px;
+  margin: 16px auto;
+  max-width: 480px;
+  font-size: 0.9rem;
+  line-height: 1.5;
 }
 
 .upload-icon {
@@ -286,5 +436,114 @@ const resetFile = () => {
 
 .back-btn:hover {
   background: #e0e0e0;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.header-btn {
+  padding: 8px 14px;
+  background: #f0f0f0;
+  border: none;
+  border-radius: 8px;
+  font-size: 1.1rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  line-height: 1;
+}
+
+.header-btn:hover {
+  background: #e0e0e0;
+}
+
+/* Reader mode: full-width, hide header/main padding */
+.reader-mode .header,
+.reader-mode .main-content {
+  max-width: none;
+  padding-left: 0;
+  padding-right: 0;
+  margin: 0;
+}
+
+.reader-mode .header {
+  padding: 16px 20px;
+}
+
+.reader-mode .header h1 {
+  font-size: 1.6rem;
+}
+
+.reader-mode .header p {
+  display: none;
+}
+
+.reader-mode .preview-header {
+  border-radius: 0;
+}
+
+.reader-mode .doc-preview {
+  border-radius: 0;
+  min-height: 100vh;
+}
+
+/* --- Mobile responsive --- */
+@media (max-width: 640px) {
+  .header {
+    padding: 28px 16px;
+  }
+
+  .header h1 {
+    font-size: 1.6rem;
+  }
+
+  .header p {
+    font-size: 0.9rem;
+  }
+
+  .upload-area {
+    padding: 40px 20px;
+    border-radius: 12px;
+  }
+
+  .upload-area h2 {
+    font-size: 1.3rem;
+  }
+
+  .upload-icon {
+    font-size: 4rem;
+  }
+
+  .upload-btn {
+    padding: 12px 32px;
+    font-size: 1rem;
+  }
+
+  .url-input-row {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .url-btn {
+    width: 100%;
+    padding: 12px;
+  }
+
+  .preview-header {
+    padding: 14px 16px;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .file-name {
+    font-size: 0.9rem;
+    max-width: 60%;
+  }
+
+  .main-content {
+    padding: 0 12px 24px;
+  }
 }
 </style>

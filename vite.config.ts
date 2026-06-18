@@ -1,12 +1,21 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
+import dts from 'vite-plugin-dts'
 import { resolve } from 'path'
 
 export default defineConfig(({ mode }) => {
   const isLib = mode === 'lib'
 
   return {
-    plugins: [vue()],
+    plugins: [
+      vue(),
+      isLib && dts({
+        entryRoot: resolve(__dirname, 'src'),
+        include: ['src/index.ts', 'src/utils/docParser.ts', 'src/utils/docFormat.ts', 'src/utils/parseWithWorker.ts', 'src/components/DocPreview.vue'],
+        outDir: resolve(__dirname, 'dist'),
+        tsconfigPath: resolve(__dirname, 'tsconfig.json'),
+      }),
+    ].filter(Boolean),
     resolve: {
       alias: {
         '@': resolve(__dirname, 'src'),
@@ -15,6 +24,7 @@ export default defineConfig(({ mode }) => {
       },
     },
     base: isLib ? './' : '/doc-preview/',
+    publicDir: isLib ? false : 'public',
     build: isLib
       ? {
           lib: {
@@ -26,6 +36,7 @@ export default defineConfig(({ mode }) => {
           rollupOptions: {
             external: ['vue'],
             output: {
+              exports: 'named',
               globals: {
                 vue: 'Vue',
               },

@@ -1,130 +1,82 @@
-const DEBUG_MODE = true
+import { logger, enableDebugMode } from './logger'
+export { enableDebugMode }
 
-class Logger {
-  private enabled: boolean
+import { OleParser } from './oleParser'
+import type { StreamData } from './oleParser'
 
-  constructor(enabled: boolean = DEBUG_MODE) {
-    this.enabled = enabled
-  }
+import { parseFib } from './fibParser'
+import type { FibData } from './fibParser'
 
-  log(message: string, data?: any) {
-    if (this.enabled) {
-      console.log(`[DOC Parser] ${message}`, data || '')
-    }
-  }
+// ---- DocParser ----
 
-  error(message: string, data?: any) {
-    if (this.enabled) {
-      console.error(`[DOC Parser ERROR] ${message}`, data || '')
-    }
-  }
+/** Default max bytes to scan in a WordDocument stream (10MB). */
+const DEFAULT_MAX_SCAN_BYTES = 10 * 1024 * 1024
 
-  warn(message: string, data?: any) {
-    if (this.enabled) {
-      console.warn(`[DOC Parser WARN] ${message}`, data || '')
-    }
-  }
-
-  info(message: string, data?: any) {
-    if (this.enabled) {
-      console.info(`[DOC Parser INFO] ${message}`, data || '')
-    }
-  }
-}
-
-const logger = new Logger()
-
-// 类型声明
-
+/**
+ * Synchronous .doc (OLE2/CFB) file parser.
+ *
+ * Extracts plain text and infers formatting (font size, bold, alignment, list type).
+ * Format detection is heuristic-based since the parser does not read the full
+ * Word CHP/PAP format tables — common patterns (short bold Chinese lines, etc.)
+ * are mapped to likely document structure.
+ */
 export class DocParser {
   private buffer: ArrayBuffer
-  private view: DataView
+  private ole: OleParser
   private text: string = ''
+  /** Max bytes to scan in the WordDocument stream (configurable). */
+  maxScanBytes: number
 
-  constructor(buffer: ArrayBuffer) {
+  /**
+   * @param buffer - The .doc file as ArrayBuffer.
+   * @param maxScanBytes - Max bytes to scan. Default: 10MB. Pass a smaller value for memory-constrained environments.
+   */
+  constructor(buffer: ArrayBuffer, maxScanBytes?: number) {
     this.buffer = buffer
-    this.view = new DataView(buffer)
-    logger.info(`初始化解析器，文件大小: ${buffer.byteLength} bytes`)
+    this.ole = new OleParser(buffer)
+    this.maxScanBytes = maxScanBytes ?? DEFAULT_MAX_SCAN_BYTES
+    logger.info(`初始化解析器，文件大小: ${buffer.byteLength} bytes, 扫描上限: ${this.maxScanBytes}`)
   }
 
-  private safeReadUint8(offset: number, defaultValue: number = 0): number {
-    if (offset < 0 || offset >= this.buffer.byteLength) {
-      logger.warn(`Uint8 越界访问: offset=${offset}, length=${this.buffer.byteLength}`)
-      return defaultValue
-    }
-    return this.view.getUint8(offset)
-  }
+  // ==================== Public API ====================
 
-  private safeReadUint16(offset: number, littleEndian: boolean = true, defaultValue: number = 0): number {
-    if (offset < 0 || offset + 2 > this.buffer.byteLength) {
-      logger.warn(`Uint16 越界访问: offset=${offset}, length=${this.buffer.byteLength}`)
-      return defaultValue
-    }
-    return this.view.getUint16(offset, littleEndian)
-  }
-
-  private safeReadInt32(offset: number, littleEndian: boolean = true, defaultValue: number = 0): number {
-    if (offset < 0 || offset + 4 > this.buffer.byteLength) {
-      logger.warn(`Int32 越界访问: offset=${offset}, length=${this.buffer.byteLength}`)
-      return defaultValue
-    }
-    return this.view.getInt32(offset, littleEndian)
-  }
-
-  private safeReadUint32(offset: number, littleEndian: boolean = true, defaultValue: number = 0): number {
-    if (offset < 0 || offset + 4 > this.buffer.byteLength) {
-      logger.warn(`Uint32 越界访问: offset=${offset}, length=${this.buffer.byteLength}`)
-      return defaultValue
-    }
-    return this.view.getUint32(offset, littleEndian)
-  }
-
+  /**
+   * Parse the document and return plain text only.
+   * Uses FIB to locate the text stream; falls back to whole-file scanning.
+   * @returns Parse result with `{ text, success, error? }`.
+   */
   parse(): { text: string; success: boolean; error?: string } {
     try {
       logger.info('开始解析 DOC 文件')
 
-      if (!this.isOleFile()) {
-        logger.error('文件不是有效的 OLE 复合文档格式')
-        return { text: '', success: false, error: '文件不是有效的 OLE 复合文档格式' }
+      if (!this.ole.isOleFile()) {
+        const error = this.ole.getFormatErrorString()
+        logger.error(error)
+        return { text: '', success: false, error }
       }
 
-      logger.log('OLE 文件签名验证通过')
-
-      const header = this.parseHeader()
-      logger.log('文件头解析完成', { header })
-
-      const fatSectors = this.getFatSectors(header)
-      logger.log(`FAT 表解析完成，扇区数: ${fatSectors.length}`)
-
-      const directorySectors = this.getDirectorySectors(header, fatSectors)
-      logger.log(`目录表解析完成，条目数: ${directorySectors.length}`)
-
-      const wordDocumentStream = this.findWordDocumentStream(directorySectors)
+      const header = this.ole.parseHeader()
+      const fat = this.ole.getFatSectors(header)
+      const directory = this.ole.getDirectorySectors(header, fat)
+      const wordDocumentStream = this.ole.findWordDocumentStream(directory)
 
       if (!wordDocumentStream) {
         logger.error('未找到 WordDocument 流，尝试直接扫描文件内容')
         const fallbackText = this.extractTextFromFullFile()
         if (fallbackText.length > 0) {
-          logger.info('从整个文件中提取到文本')
           return { text: fallbackText, success: true }
         }
         return { text: '', success: false, error: '未找到 WordDocument 流' }
       }
 
-      logger.log(`WordDocument 流读取完成，大小: ${wordDocumentStream.size} bytes`)
-
       this.text = this.extractTextWithFib(wordDocumentStream)
-      logger.info(`文本提取完成，长度: ${this.text.length} 字符`)
-
       if (this.text.length === 0) {
-        logger.warn('FIB 解析失败，尝试备选提取方法')
         this.text = this.extractTextSimple(wordDocumentStream.data)
       }
 
       if (this.text.length === 0) {
         return { text: '', success: false, error: '文档内容为空' }
       }
-
       return { text: this.text, success: true }
     } catch (error) {
       const message = error instanceof Error ? `${error.message}\n${error.stack}` : '未知错误'
@@ -133,51 +85,37 @@ export class DocParser {
     }
   }
 
+  /**
+   * Parse the document and return formatted paragraphs (with inferred styles).
+   * @returns Parse result with `{ document, text, success, error? }`.
+   *   `document.paragraphs` is an array of `{ text, charFormat, paraFormat }`.
+   */
   parseWithFormat(): { success: boolean; document?: any; text?: string; error?: string } {
     try {
       logger.info('开始解析带格式的 DOC 文件')
 
-      if (!this.isOleFile()) {
-        logger.error('文件不是有效的 OLE 复合文档格式')
-        return { success: false, error: '文件不是有效的 OLE 复合文档格式' }
+      if (!this.ole.isOleFile()) {
+        const error = this.ole.getFormatErrorString()
+        return { success: false, error }
       }
 
-      logger.log('OLE 文件签名验证通过')
-
-      const header = this.parseHeader()
-      logger.log('文件头解析完成', { header })
-
-      const fatSectors = this.getFatSectors(header)
-      logger.log(`FAT 表解析完成，扇区数: ${fatSectors.length}`)
-
-      const directorySectors = this.getDirectorySectors(header, fatSectors)
-      logger.log(`目录表解析完成，条目数: ${directorySectors.length}`)
-
-      const wordDocumentStream = this.findWordDocumentStream(directorySectors)
+      const header = this.ole.parseHeader()
+      const fat = this.ole.getFatSectors(header)
+      const directory = this.ole.getDirectorySectors(header, fat)
+      const wordDocumentStream = this.ole.findWordDocumentStream(directory)
 
       if (!wordDocumentStream) {
-        logger.error('未找到 WordDocument 流，使用备选方法提取格式')
         const fallbackText = this.extractTextFromFullFile()
-        
         if (fallbackText.length > 0) {
-          logger.info('从整个文件中提取到文本')
           const paragraphs = this.createFormattedParagraphsFromText(fallbackText)
-          
-          return {
-            success: true,
-            document: { paragraphs },
-            text: fallbackText
-          }
+          return { success: true, document: { paragraphs }, text: fallbackText }
         }
         return { success: false, error: '未找到 WordDocument 流' }
       }
 
-      logger.log(`WordDocument 流读取完成，大小: ${wordDocumentStream.size} bytes`)
-
       const formattedParagraphs = this.extractFormattedText(wordDocumentStream)
-      
+
       if (formattedParagraphs.length === 0) {
-        logger.warn('格式解析失败，使用备选方法')
         const fallbackText = this.extractTextSimple(wordDocumentStream.data)
         if (fallbackText.length > 0) {
           return { success: true, text: fallbackText }
@@ -185,15 +123,8 @@ export class DocParser {
         return { success: false, error: '文档内容为空' }
       }
 
-      logger.info(`带格式解析完成，共 ${formattedParagraphs.length} 个段落`)
-
       const plainText = formattedParagraphs.map(p => p.text).join('\n\n')
-
-      return {
-        success: true,
-        document: { paragraphs: formattedParagraphs },
-        text: plainText
-      }
+      return { success: true, document: { paragraphs: formattedParagraphs }, text: plainText }
     } catch (error) {
       const message = error instanceof Error ? `${error.message}\n${error.stack}` : '未知错误'
       logger.error('解析过程发生异常', message)
@@ -201,77 +132,397 @@ export class DocParser {
     }
   }
 
-  private extractFormattedText(wordStream: { data: Uint8Array; size: number }): any[] {
-    logger.log('开始提取带格式的文本')
+  // ==================== Text extraction ====================
 
-    const fibData = this.parseFib(wordStream.data)
+  private extractTextWithFib(wordStream: StreamData): string {
+    const data = wordStream.data
+    if (data.length < 32) return ''
 
-    if (fibData && fibData.fcMin > 0 && fibData.fcMac > 0) {
-      logger.log('FIB提供了有效偏移，使用格式数据')
-      return this.extractTextWithFormatFromFib(wordStream.data, fibData)
+    const fib = parseFib(data)
+    if (!fib) return this.extractTextSimple(data)
+
+    if (fib.lcbClx > 0 && fib.fcClx + fib.lcbClx <= data.length) {
+      const clxData = data.subarray(fib.fcClx, fib.fcClx + fib.lcbClx)
+      const textFromClx = this.parseClx(clxData, data)
+      if (textFromClx.length > 0) return textFromClx
     }
 
-    // FIB没有提供有效的fcMin，需要自动检测编码
-    const suggestedComplex = fibData ? fibData.fComplex : false
-    logger.warn(`FIB无有效偏移，自动检测编码(fComplex=${suggestedComplex})`)
+    if (fib.fcMin === 0 || fib.fcMac === 0) {
+      return this.extractTextWithAutoDetect(data, fib.fComplex)
+    }
 
-    // 先用原始二进制检测编码：UTF-16LE 中段落标记为 0x0D 0x00，8-bit 中为 0x0D
-    const binaryDetect = this.detectEncodingFromBinary(wordStream.data)
+    return this.extractTextSimple(data, { fcMin: fib.fcMin, fComplex: fib.fComplex })
+  }
+
+  private extractTextWithAutoDetect(data: Uint8Array, suggestedComplex: boolean): string {
+    const binaryDetect = this.detectEncodingFromBinary(data)
     if (binaryDetect !== null) {
-      logger.log(`二进制检测决定编码: ${binaryDetect ? '8-bit' : 'UTF-16LE'}`)
-      const raw = this.extractParagraphsWithFormat(wordStream.data, { fcMin: 0, fComplex: binaryDetect })
-      return this.filterParagraphsWithGenericLogic(raw)
+      return this.extractTextSimple(data, { fcMin: 0, fComplex: binaryDetect })
     }
 
-    // 无法通过二进制判断，回退到评分
-    const raw8 = this.extractParagraphsWithFormat(wordStream.data, { fcMin: 0, fComplex: true })
-    const raw16 = this.extractParagraphsWithFormat(wordStream.data, { fcMin: 0, fComplex: false })
+    const text8 = this.extractTextSimple(data, { fcMin: 0, fComplex: true })
+    const text16 = this.extractTextSimple(data, { fcMin: 0, fComplex: false })
+    const score8 = this.scorePlainText(text8)
+    const score16 = this.scorePlainText(text16)
+    logger.log(`自动检测编码评分 - 8-bit: ${score8}, UTF-16LE: ${score16}`)
 
-    const score8 = this.scoreRawParagraphs(raw8)
-    const score16 = this.scoreRawParagraphs(raw16)
-
-    logger.log(`编码评分 - 8-bit: ${score8}, UTF-16LE: ${score16}`)
-
-    let useComplex: boolean
     if (suggestedComplex) {
-      useComplex = score8 >= score16 * 0.4
-    } else {
-      useComplex = score16 < score8 * 0.4
+      return score8 >= score16 * 0.4 ? text8 : text16
     }
-
-    logger.log(`选择编码: ${useComplex ? '8-bit' : 'UTF-16LE'}`)
-    return this.filterParagraphsWithGenericLogic(useComplex ? raw8 : raw16)
+    return score16 >= score8 * 0.4 ? text16 : text8
   }
 
   /**
-   * 通过分析原始二进制中 0x0D 后是否跟 0x00 来判断编码：
-   * - UTF-16LE: 段落标记为 0x0D 0x00
-   * - 8-bit compressed: 段落标记为单独的 0x0D
-   * 返回 true=8-bit, false=UTF-16LE, null=无法判断
+   * Common "junk" / binary-noise characters that appear in FIB headers
+   * when 8-bit text is misinterpreted as UTF-16LE or vice versa.
+   * Extracted to a constant to avoid regex duplication.
    */
-  private detectEncodingFromBinary(data: Uint8Array): boolean | null {
-    const startOffset = Math.min(2048, Math.floor(data.length / 4))
-    const endOffset = Math.min(data.length, startOffset + 100000)
+  private static readonly JUNK_CHAR_CLASS = '伀倀藠俹醫蠀耀頀琀餀栀儀騀甀攀爀愀氀攀漀漀渀'
+  private static readonly EXTRA_JUNK_CHARS = '伇倈俼俿儀儜厬唀唕嘀噀圀堀嬀崀崜帀幀弰彀戀戀'
 
-    let totalCR = 0
-    let crFollowedByNull = 0
+  /** Shared set of CJK/symbol codepoints valid in UTF-16LE .doc text. */
+  private static readonly VALID_CJK_CODEPOINTS = new Set([
+    0x3001, 0x3002, 0xFF0C, 0xFF0E, 0x300A, 0x300B, 0x2018, 0x2019,
+    0x201C, 0x201D, 0xFF08, 0xFF09, 0xFF1F, 0xFF01, 0xFF1A, 0x3000,
+  ])
 
-    for (let i = startOffset; i < endOffset - 1; i++) {
-      if (data[i] === 0x0D) {
-        totalCR++
-        if (data[i + 1] === 0x00) {
-          crFollowedByNull++
+  /**
+   * Scan UTF-16LE bytes and yield characters into a buffer.
+   * Returns the number of bytes consumed (the loop advances i by this - 1).
+   * Shared between extractTextSimple and extractParagraphsWithFormat.
+   */
+  private static scanUtf16Char(
+    data: Uint8Array, i: number, maxBytes: number,
+  ): { ch: string; advance: number } | null {
+    if (i + 2 > maxBytes) return null
+    const byte1 = data[i]; const byte2 = data[i + 1]
+
+    // 0x0D 0x00 = paragraph break (caller handles)
+    if (byte1 === 0x0D && byte2 === 0x00) return null
+    // 0x0A 0x00 = line feed, skip
+    if (byte1 === 0x0A && byte2 === 0x00) return { ch: '', advance: 2 }
+
+    // ASCII range (byte2 is high byte, must be 0x00 for single-byte chars)
+    if (byte2 === 0x00 && byte1 >= 0x20 && byte1 <= 0x7E) {
+      return { ch: String.fromCharCode(byte1), advance: 2 }
+    }
+
+    const charCode = (byte2 << 8) | byte1
+    // CJK Unified Ideographs
+    if (charCode >= 0x4E00 && charCode <= 0x9FFF) {
+      return { ch: String.fromCharCode(charCode), advance: 2 }
+    }
+    // CJK symbols and punctuation
+    if (DocParser.VALID_CJK_CODEPOINTS.has(charCode)) {
+      return { ch: String.fromCharCode(charCode), advance: 2 }
+    }
+    return null
+  }
+
+  private extractTextSimple(data: Uint8Array, options?: { fcMin?: number; fComplex?: boolean }): string {
+    const paragraphs: string[] = []
+    let currentParagraph = ''
+    const maxBytes = Math.min(data.length, this.maxScanBytes)
+    const startOffset = options?.fcMin ?? 0
+    const isCompressed = options?.fComplex ?? false
+
+    if (isCompressed) {
+      for (let i = startOffset; i < maxBytes; i++) {
+        const byte = data[i]
+        if (byte === 0x0D) {
+          if (currentParagraph.trim().length >= 2) paragraphs.push(currentParagraph.trim())
+          currentParagraph = ''
+          continue
         }
+        if (byte === 0x0A || byte === 0x00) continue
+        if (byte >= 0x20) currentParagraph += String.fromCharCode(byte)
+      }
+    } else {
+      for (let i = startOffset; i < maxBytes - 1; i++) {
+        const byte1 = data[i]; const byte2 = data[i + 1]
+        if (byte1 === 0x0D && byte2 === 0x00) {
+          if (currentParagraph.trim().length >= 2) paragraphs.push(currentParagraph.trim())
+          currentParagraph = ''
+          i++; continue
+        }
+        const result = DocParser.scanUtf16Char(data, i, maxBytes)
+        if (!result) continue
+        if (result.ch) currentParagraph += result.ch
+        i += result.advance - 1
       }
     }
 
-    if (totalCR === 0) return null
+    if (currentParagraph.trim().length >= 2) paragraphs.push(currentParagraph.trim())
 
-    const ratio = crFollowedByNull / totalCR
-    logger.log(`编码二进制检测: 0x0D=${totalCR}, 后跟0x00=${crFollowedByNull}, 比例=${ratio.toFixed(3)}`)
+    const junkPattern = new RegExp(`[${DocParser.JUNK_CHAR_CLASS}]`, 'g')
 
-    // 如果 <30% 的 0x0D 后跟 0x00，则是 8-bit
-    return ratio < 0.3
+    let foundStart = false
+    const filteredStart: string[] = []
+
+    for (const p of paragraphs) {
+      if (!foundStart) {
+        const cp = this.cleanParagraph(p)
+        if (cp.length > 5) {
+          const chineseCount = (cp.match(/[\u4e00-\u9fff]/g) || []).length
+          const junkCount = (cp.match(junkPattern) || []).length
+          if (chineseCount >= 3 && junkCount < chineseCount) { foundStart = true; filteredStart.push(cp); continue }
+        }
+      } else {
+        const cp = this.cleanParagraph(p)
+        if (!this.shouldSkipParagraph(cp)) filteredStart.push(cp)
+      }
+    }
+
+    if (!foundStart) {
+      filteredStart.push(...paragraphs.slice(0, 3).map(p => this.cleanParagraph(p)).filter(p => !this.shouldSkipParagraph(p)))
+    }
+
+    const filtered = filteredStart.filter(p => {
+      if (p.length < 2) return false
+      if (this.shouldSkipParagraph(p)) return false
+      if (!this.hasSignificantContent(p)) return false
+      const upper = p.toUpperCase()
+      const skip = ['ROOT', 'SUMMARY', 'DOCUMENT', 'WORD', 'WPS', 'MICROSOFT', 'PROPERTY', 'STORAGE', 'STREAM', 'TABLE', 'FORMAT', 'XMLDATA', 'BASE64', 'TEMPLATE', 'REGISTRY']
+      for (const s of skip) { if (upper.includes(s)) return false }
+      return true
+    })
+
+    return filtered.join('\n\n').trim()
+  }
+
+  private parseClx(clxData: Uint8Array, wordDocData: Uint8Array): string {
+    if (clxData.length < 4) return ''
+    const clxt = clxData[0]
+    if (clxt !== 2) return this.extractTextSimple(wordDocData)
+
+    let offset = 1
+    const lcb = clxData[offset] | (clxData[offset + 1] << 8) | (clxData[offset + 2] << 16) | (clxData[offset + 3] << 24)
+    offset += 4
+    if (lcb <= 0 || offset + lcb > clxData.length) return this.extractTextSimple(wordDocData)
+
+    const clxt2 = clxData[offset]; offset += 1
+    if (clxt2 !== 1) return this.extractTextSimple(wordDocData)
+
+    offset += 4
+
+    const rgCcp: number[] = []
+    while (offset + 4 <= clxData.length) {
+      const ccp = clxData[offset] | (clxData[offset + 1] << 8) | (clxData[offset + 2] << 16) | (clxData[offset + 3] << 24)
+      if (ccp === 0 && rgCcp.length > 0) break
+      rgCcp.push(ccp); offset += 4
+    }
+
+    let text = ''
+    let lastCcp = 0
+    for (const ccp of rgCcp) {
+      if (ccp > lastCcp && ccp > 0) {
+        text += this.extractTextFromRange(wordDocData, lastCcp, ccp)
+      }
+      lastCcp = ccp
+    }
+    return text.length > 0 ? text : this.extractTextSimple(wordDocData)
+  }
+
+  private extractTextFromRange(data: Uint8Array, start: number, end: number): string {
+    let text = ''
+    const actualStart = Math.max(0, start)
+    const actualEnd = Math.min(data.length, end)
+    for (let i = actualStart; i < actualEnd - 1; i += 2) {
+      const charCode = data[i] | (data[i + 1] << 8)
+      if (charCode === 0x000d) text += '\n'
+      else if (charCode === 0x000a || charCode === 0x0000) continue
+      else if ((charCode >= 0x0020 && charCode <= 0x007E) || (charCode >= 0x4E00 && charCode <= 0x9FFF) || (charCode >= 0x3000 && charCode <= 0x303F) || (charCode >= 0xFF00 && charCode <= 0xFFEF) || (charCode === 0x2018 || charCode === 0x2019 || charCode === 0x201C || charCode === 0x201D)) {
+        text += String.fromCharCode(charCode)
+      }
+    }
+    return text
+  }
+
+  // ==================== Format extraction ====================
+
+  private extractFormattedText(wordStream: StreamData): any[] {
+    const data = wordStream.data
+    const fib = parseFib(data)
+
+    if (fib && fib.fcMin > 0 && fib.fcMac > 0) {
+      return this.extractTextWithFormatFromFib(data, fib)
+    }
+
+    const suggestedComplex = fib ? fib.fComplex : false
+    logger.warn(`FIB无有效偏移，自动检测编码(fComplex=${suggestedComplex})`)
+
+    const binaryDetect = this.detectEncodingFromBinary(data)
+    if (binaryDetect !== null) {
+      const raw = this.extractParagraphsWithFormat(data, { fcMin: 0, fComplex: binaryDetect })
+      return this.filterParagraphsWithGenericLogic(raw)
+    }
+
+    const raw8 = this.extractParagraphsWithFormat(data, { fcMin: 0, fComplex: true })
+    const raw16 = this.extractParagraphsWithFormat(data, { fcMin: 0, fComplex: false })
+    const score8 = this.scoreRawParagraphs(raw8)
+    const score16 = this.scoreRawParagraphs(raw16)
+    const useComplex = suggestedComplex ? score8 >= score16 * 0.4 : score16 < score8 * 0.4
+    return this.filterParagraphsWithGenericLogic(useComplex ? raw8 : raw16)
+  }
+
+  private extractTextWithFormatFromFib(data: Uint8Array, fib: FibData): any[] {
+    const clxEnd = fib.fcClx + fib.lcbClx
+    if (clxEnd > data.length) {
+      return this.extractParagraphsWithFormat(data, { fcMin: fib.fcMin, fComplex: fib.fComplex })
+    }
+    const paragraphs = this.extractParagraphsWithFormat(data, { fcMin: fib.fcMin, fComplex: fib.fComplex })
+    return this.filterParagraphsWithGenericLogic(paragraphs)
+  }
+
+  private extractParagraphsWithFormat(data: Uint8Array, options?: { fcMin?: number; fComplex?: boolean; _isRetry?: boolean }): any[] {
+    const paragraphs: any[] = []
+    let currentParagraph = ''
+    let paragraphIndex = 0
+    const maxBytes = Math.min(data.length, this.maxScanBytes)
+    let startOffset = options?.fcMin ?? 0
+
+    if (startOffset < 200) {
+      startOffset = 200
+      logger.log(`从 offset ${startOffset} 开始提取`)
+    }
+
+    const isCompressed = options?.fComplex ?? false
+
+    if (isCompressed) {
+      for (let i = startOffset; i < maxBytes; i++) {
+        const byte = data[i]
+        if (byte === 0x0D) {
+          if (currentParagraph.trim().length >= 2) {
+            const cleaned = this.cleanParagraph(currentParagraph.trim())
+            if (cleaned.length > 0) {
+              paragraphs.push({ text: cleaned, paraFormat: this.detectParagraphFormat(cleaned, paragraphIndex, 50) || { alignment: 'left' }, charFormat: this.guessCharFormat(cleaned, paragraphIndex) })
+              paragraphIndex++
+            }
+          }
+          currentParagraph = ''; continue
+        }
+        if (byte === 0x0A || byte === 0x00) continue
+        if (byte >= 0x20) currentParagraph += String.fromCharCode(byte)
+      }
+    } else {
+      for (let i = startOffset; i < maxBytes - 1; i++) {
+        const byte1 = data[i]; const byte2 = data[i + 1]
+        if (byte1 === 0x0D && byte2 === 0x00) {
+          if (currentParagraph.trim().length >= 2) {
+            const cleaned = this.cleanParagraph(currentParagraph.trim())
+            if (cleaned.length > 0) {
+              paragraphs.push({ text: cleaned, paraFormat: this.detectParagraphFormat(cleaned, paragraphIndex, 50) || { alignment: 'left' }, charFormat: this.guessCharFormat(cleaned, paragraphIndex) })
+              paragraphIndex++
+            }
+          }
+          currentParagraph = ''; i++; continue
+        }
+        const result = DocParser.scanUtf16Char(data, i, maxBytes)
+        if (!result) continue
+        if (result.ch) currentParagraph += result.ch
+        i += result.advance - 1
+      }
+    }
+
+    if (currentParagraph.trim().length >= 2) {
+      const cleaned = this.cleanParagraph(currentParagraph.trim())
+      if (cleaned.length > 0) {
+        paragraphs.push({ text: cleaned, paraFormat: this.detectParagraphFormat(cleaned, paragraphIndex, 50) || { alignment: 'left' }, charFormat: this.guessCharFormat(cleaned, paragraphIndex) })
+      }
+    }
+
+    if (isCompressed && paragraphs.length > 0 && !options?._isRetry) {
+      const binaryDetect = this.detectEncodingFromBinary(data)
+      if (binaryDetect === false) {
+        const alt = this.extractParagraphsWithFormat(data, { ...options, fComplex: false, _isRetry: true })
+        return this.filterAndEnhanceParagraphs(alt)
+      }
+    }
+
+    return this.filterAndEnhanceParagraphs(paragraphs)
+  }
+
+  // ==================== Paragraph filtering ====================
+
+  private filterParagraphsWithGenericLogic(paragraphs: any[]): any[] {
+    let filtered = paragraphs.filter(p => {
+      if (p.text.length < 2) return false
+      if (!this.hasSignificantContent(p.text)) return false
+      if (p.text.length < 80) {
+        const upper = p.text.toUpperCase()
+        const skip = ['ROOT', 'SUMMARY', 'DOCUMENT', 'WORD', 'WPS', 'MICROSOFT', 'PROPERTY', 'STORAGE', 'STREAM', 'TABLE', 'FORMAT', 'XMLDATA', 'BASE64', 'TEMPLATE', 'REGISTRY']
+        for (const s of skip) { if (upper.includes(s)) return false }
+      }
+      return true
+    })
+
+    for (let i = 0; i < Math.min(3, filtered.length); i++) {
+      filtered[i] = this.stripBinaryPrefix(filtered[i])
+    }
+
+    filtered = filtered.filter(p => p.text.length >= 2)
+    filtered = filtered.filter(p => {
+      const weird = (p.text.match(/[^\u4e00-\u9fff\u3400-\u4dbf\w\s,.!?，。！？；：""''（）【】、]/g) || []).length
+      return weird / p.text.length < 0.5
+    })
+    filtered = filtered.map(p => this.cleanWordFieldCodes(p))
+    filtered = filtered.filter(p => p.text.length >= 2)
+    return filtered
+  }
+
+  private filterAndEnhanceParagraphs(paragraphs: any[]): any[] {
+    let foundStart = false
+    const filtered: any[] = []
+    for (const para of paragraphs) {
+      if (!foundStart) {
+        if (this.hasSignificantContent(para.text)) {
+          foundStart = true
+          if (!this.shouldSkipParagraph(para.text)) filtered.push(para)
+        }
+        continue
+      }
+      if (this.shouldSkipParagraph(para.text)) continue
+      if (!this.hasSignificantContent(para.text)) continue
+      filtered.push(para)
+    }
+    if (!foundStart && paragraphs.length > 0) {
+      return paragraphs.filter(p => !this.shouldSkipParagraph(p.text)).slice(0, 5)
+    }
+    return filtered
+  }
+
+  // ==================== Format detection ====================
+
+  private detectEncodingFromBinary(data: Uint8Array): boolean | null {
+    const startOffset = Math.min(2048, Math.floor(data.length / 4))
+    const scanLen = Math.min(data.length - startOffset, 100000)
+    const endOffset = startOffset + scanLen
+
+    // Method 1: 0x0D paragraph-marker heuristic
+    let totalCR = 0; let crFollowedByNull = 0
+    for (let i = startOffset; i < endOffset - 1; i++) {
+      if (data[i] === 0x0D) {
+        totalCR++
+        if (data[i + 1] === 0x00) crFollowedByNull++
+      }
+    }
+    if (totalCR > 0) return crFollowedByNull / totalCR < 0.3
+
+    // Method 2: null-byte distribution heuristic.
+    // UTF-16LE interleaves 0x00 after every ASCII byte → ~50% null bytes.
+    // 8-bit compressed has almost no 0x00 bytes in text content.
+    if (scanLen > 100) {
+      let nullCount = 0
+      for (let i = startOffset; i < endOffset; i++) {
+        if (data[i] === 0x00) nullCount++
+      }
+      const nullRatio = nullCount / scanLen
+      // UTF-16LE: ~50% nulls. 8-bit: << 5%. Use 10% as threshold.
+      if (nullRatio > 0.10) return false  // UTF-16LE
+      if (nullRatio < 0.02) return true   // 8-bit
+    }
+
+    return null
   }
 
   private scoreRawParagraphs(paragraphs: any[]): number {
@@ -279,284 +530,256 @@ export class DocParser {
     let score = 0
     for (const p of paragraphs) {
       const text = p.text || ''
-      const len = text.length
-      if (len < 4) continue
-
-      // 英文段落：3个以上连续ASCII字母
+      if (text.length < 4) continue
       const englishWords = (text.match(/[A-Za-z]{3,}/g) || []).length
-      if (englishWords >= 2) score += 30
-      else if (englishWords >= 1) score += 10
-
-      // 真实中文（而非二进制误解）
+      if (englishWords >= 2) score += 30; else if (englishWords >= 1) score += 10
       const chineseCount = (text.match(/[一-鿿]/g) || []).length
-      if (chineseCount >= 3) score += 25
-      else if (chineseCount >= 1) score += 5
-
-      // 段落长度加分（合理范围的文本）
-      if (len >= 10 && len <= 500) score += Math.min(len / 2, 50)
-
-      // 常见句法结构
+      if (chineseCount >= 3) score += 25; else if (chineseCount >= 1) score += 5
+      if (text.length >= 10 && text.length <= 500) score += Math.min(text.length / 2, 50)
       if (/[,.]/.test(text) || /[，。]/.test(text)) score += 10
       if (/^[A-Z]/.test(text.trim())) score += 5
     }
     return score
   }
 
-  private parseFib(data: Uint8Array): any {
-    if (data.length < 32) {
-      logger.warn('数据太短，无法解析FIB')
-      return null
+  private scorePlainText(text: string): number {
+    if (!text || text.length === 0) return 0
+    const paragraphs = text.split(/\n{2,}/).filter(p => p.trim().length > 0)
+    let score = 0
+    for (const p of paragraphs) {
+      if (p.length < 4) continue
+      const englishWords = (p.match(/[A-Za-z]{3,}/g) || []).length
+      if (englishWords >= 2) score += 30; else if (englishWords >= 1) score += 10
+      const chineseCount = (p.match(/[一-鿿]/g) || []).length
+      if (chineseCount >= 3) score += 25; else if (chineseCount >= 1) score += 5
+      if (p.length >= 10 && p.length <= 500) score += Math.min(p.length / 2, 50)
+      if (/[,.]/.test(p) || /[，。]/.test(p)) score += 10
     }
-
-    const magic = data[0] | (data[1] << 8)
-
-    if (magic !== 0xa5ec && magic !== 0xa5eb) {
-      logger.warn(`无效的FIB magic: 0x${magic.toString(16)}`)
-      return null
-    }
-
-    logger.log(`FIB magic: 0x${magic.toString(16)}`)
-
-    try {
-      const nFib = data[2] | (data[3] << 8)
-      // fComplex 标志位：FibBase offset 0x0C (byte 12), bit 0
-      // 1=8bit压缩存储, 0=UTF-16LE存储
-      const fComplex = data[12] & 0x01
-
-      // csw 在 32-byte FibBase 之后（offset 32）
-      const csw = data[32] | (data[33] << 8)
-
-      // FibRgW: csw 之后 (csw+1) 个 WORD
-      const fibRgWEnd = 34 + (csw + 1) * 2
-      if (fibRgWEnd + 4 > data.length) {
-        // 无法继续解析FIB变量部分，但仍返回fComplex和默认偏移
-        logger.warn('FIB FibRgW超出范围，仅使用fComplex标志')
-        return { fcMin: 0, fcMac: 0, fcClx: 0, lcbClx: 0, fComplex: fComplex === 1 }
-      }
-
-      // cslw: FibRgW 之后（4 bytes）
-      const cslw = data[fibRgWEnd] | (data[fibRgWEnd + 1] << 8) |
-                   (data[fibRgWEnd + 2] << 16) | (data[fibRgWEnd + 3] << 24)
-
-      // FibRgLw: cslw 之后, (cslw+1) 个 DWORD
-      const fibRgLwEnd = fibRgWEnd + 4 + (cslw + 1) * 4
-      if (fibRgLwEnd + 2 > data.length) {
-        logger.warn('FIB FibRgLw超出范围，仅使用fComplex标志')
-        return { fcMin: 0, fcMac: 0, fcClx: 0, lcbClx: 0, fComplex: fComplex === 1 }
-      }
-
-      // cbRgFcLcb: FibRgLw 之后（2 bytes WORD）
-      const cbRgFcLcb = data[fibRgLwEnd] | (data[fibRgLwEnd + 1] << 8)
-
-      // rgFcLcbBlob: cbRgFcLcb 之后
-      const blobStart = fibRgLwEnd + 2
-      const blobSize = cbRgFcLcb * 8  // 每组 (fc + lcb) = 8 bytes
-
-      if (blobStart + blobSize > data.length || cbRgFcLcb < 2) {
-        // blob大小不足，无法获取fcMin/fcMac，但仍返回fComplex
-        logger.warn(`FIB blob太小(cbRgFcLcb=${cbRgFcLcb})，仅使用fComplex=${fComplex}`)
-        return { fcMin: 0, fcMac: 0, fcClx: 0, lcbClx: 0, fComplex: fComplex === 1 }
-      }
-
-      const readDword = (offset: number): number => {
-        return (data[offset] | (data[offset + 1] << 8) |
-                (data[offset + 2] << 16) | (data[offset + 3] << 24)) >>> 0
-      }
-
-      // fc 和 lcb 是交错的: [fcMin, lcbMin, fcMac, lcbMac, ...]
-      const fcMin = readDword(blobStart + 0 * 4) & 0x3FFFFFFF
-      // const lcbMin = readDword(blobStart + 1 * 4)
-      const fcMac = readDword(blobStart + 2 * 4) & 0x3FFFFFFF
-
-      let fcClx = 0
-      let lcbClx = 0
-      if (cbRgFcLcb >= 16) {
-        fcClx = readDword(blobStart + 14 * 4) & 0x3FFFFFFF
-        lcbClx = readDword(blobStart + 15 * 4)
-      }
-
-      logger.log(`nFib=${nFib} fComplex=${fComplex} fcMin=0x${fcMin.toString(16)} fcMac=0x${fcMac.toString(16)}`)
-      logger.log(`fcClx=0x${fcClx.toString(16)} lcbClx=${lcbClx}`)
-
-      return {
-        fcClx,
-        lcbClx,
-        fcMin,
-        fcMac,
-        fComplex: fComplex === 1,
-        fibBase: 32
-      }
-    } catch (error) {
-      logger.error(`FIB解析错误: ${error}`)
-      return null
-    }
+    return score
   }
 
-  private extractTextWithFormatFromFib(data: Uint8Array, fib: any): any[] {
-    logger.log('从FIB提取带格式的文本')
+  // ==================== Character / paragraph format ====================
 
-    const clxStart = fib.fcClx
-    const clxEnd = clxStart + fib.lcbClx
+  private guessCharFormat(text: string, _paragraphIndex?: number): any {
+    const charFormat: any = { styles: [] }
+    const chineseCount = (text.match(/[\u4e00-\u9fff]/g) || []).length
+    const totalLength = text.length
+    const chineseRatio = chineseCount / totalLength
+    const stripped = text.replace(/\s/g, '')
+    const trimmed = text.trim()
 
-    if (clxEnd > data.length) {
-      logger.warn('Clx数据超出范围，使用简单提取')
-      return this.extractParagraphsWithFormat(data, { fcMin: fib.fcMin, fComplex: fib.fComplex })
+    // Default font: Chinese docs use Song, English use Times New Roman
+    if (chineseCount >= 2) {
+      charFormat.fontSize = 16
+      if (chineseRatio > 0.7) charFormat.fontName = '仿宋_GB2312'
+      else charFormat.fontName = '宋体'
+    } else {
+      charFormat.fontSize = 12
+      charFormat.fontName = 'Times New Roman'
     }
 
-    const paragraphs = this.extractParagraphsWithFormat(data, { fcMin: fib.fcMin, fComplex: fib.fComplex })
-    
-    if (paragraphs.length === 0) {
-      return []
-    }
+    // --- Title detection ---
+    // Chinese title: short, >50% Chinese, no sentence punctuation
+    const hasSentencePunct = /[，。！？、；]/.test(text)
+    const noSentencePunct = !hasSentencePunct
+    const pureName = chineseCount >= 2 && chineseCount <= 4 && stripped.length === chineseCount && trimmed.length <= 4
 
-    logger.info(`提取到 ${paragraphs.length} 个段落`)
-    return this.filterParagraphsWithGenericLogic(paragraphs)
-  }
+    if (!pureName && noSentencePunct && !text.includes('：') && !text.includes(':')) {
+      const isEnglishTitle = /^[A-Z][a-z]/.test(trimmed) && /[A-Za-z]/.test(trimmed) && !/[，。！？、；]/.test(trimmed)
+      const isAllCapsTitle = /^[A-Z\s]{3,}$/.test(trimmed) && trimmed.length >= 3 && trimmed.length <= 40
+      const isShortChineseTitle = chineseRatio > 0.5 && totalLength < 22 && chineseCount >= 2
 
-  private filterParagraphsWithGenericLogic(paragraphs: any[]): any[] {
-    let filtered = paragraphs.filter(p => {
-      if (p.text.length < 2) return false
-      
-      const hasSignificantContent = this.hasSignificantContent(p.text)
-      if (!hasSignificantContent) {
-        return false
-      }
-
-      // cycle-4 修复: skipPatterns 仅作用于短段落（<80 字符）。
-      // 原逻辑对所有段落做 includes('WORD'/'DOCUMENT'/'TABLE'/...) 检查，
-      // 误杀大量合法英文段落（Microsoft 模板 fsample4.doc 整篇讨论 Word 的 header/footer，
-      // 每个段落都含 'Word' / 'document'，288 段被砍剩 1 段，相似度 0.000）。
-      // FIB/目录噪声（"WordDocument"、"SummaryInformation"、"Root Entry"）始终 < 30 字符，
-      // 用 80 字符阈值安全覆盖噪声同时不误伤真实长文。
-      if (p.text.length < 80) {
-        const upperP = p.text.toUpperCase()
-        const skipPatterns = ['ROOT', 'SUMMARY', 'DOCUMENT', 'WORD', 'WPS', 'MICROSOFT',
-                             'PROPERTY', 'STORAGE', 'STREAM', 'TABLE', 'FORMAT',
-                             'XMLDATA', 'BASE64', 'TEMPLATE', 'REGISTRY']
-
-        for (const pattern of skipPatterns) {
-          if (upperP.includes(pattern)) return false
+      if (isAllCapsTitle) {
+        // ALL CAPS → large title
+        charFormat.bold = true
+        charFormat.fontSize = 28
+      } else if (isEnglishTitle && totalLength < 40) {
+        // "This Is A Title" pattern or first-word-capitalized
+        const capitalWords = (trimmed.match(/\b[A-Z][a-z]{2,}\b/g) || []).length
+        const totalWords = (trimmed.match(/\b[a-zA-Z]{2,}\b/g) || []).length
+        if (capitalWords >= Math.min(totalWords, 2) && totalWords >= 2) {
+          charFormat.bold = true
+          charFormat.fontSize = 22
+        } else if (totalLength < 20) {
+          charFormat.bold = true
+          charFormat.fontSize = 22
         }
+      } else if (isShortChineseTitle) {
+        charFormat.bold = true
+        charFormat.fontSize = stripped.length < 6 ? 36 : 22
       }
-
-      return true
-    })
-
-    logger.info(`过滤后剩余 ${filtered.length} 个段落`)
-
-    // 清理前3个段落中的乱码前缀（更彻底的清理）
-    for (let i = 0; i < Math.min(3, filtered.length); i++) {
-      filtered[i] = this.stripBinaryPrefix(filtered[i])
     }
-    
-    // 再次过滤，移除被清理后变得空的段落
-    filtered = filtered.filter(p => p.text.length >= 2)
-    
-    // 额外检查：移除明显只有乱码的段落
-    filtered = filtered.filter(p => {
-      const weirdChars = (p.text.match(/[^\u4e00-\u9fff\u3400-\u4dbf\w\s,.!?，。！？；：""''（）【】、]/g) || []).length
-      const totalChars = p.text.length
-      return weirdChars / totalChars < 0.5
-    })
 
-    // 清理 Word 字段代码
-    filtered = filtered.map(p => this.cleanWordFieldCodes(p))
-    
-    // 再次过滤，移除字段清理后变得空的段落
-    filtered = filtered.filter(p => p.text.length >= 2)
-
-    logger.info(`清理后剩余 ${filtered.length} 个段落`)
-
-    return filtered
+    charFormat.styles = this.detectCharacterStyles(text)
+    return charFormat
   }
 
-  private cleanWordFieldCodes(para: any): any {
-    let text = para.text
-    
-    // 特殊处理："第 PAGE 4 页 共 NUMPAGES 5 页" 这种模式
-    const pagePattern = /第\s*PAGE\s*(\d+)\s*页\s*共\s*NUMPAGES\s*(\d+)\s*页/gi
-    let cleaned = text.replace(pagePattern, '第 $1 页 共 $2 页')
-    
-    // 如果没匹配到，再处理单个字段，使用单词边界避免误匹配
-    if (cleaned === text) {
-      const fieldPatterns = [
-        /\bPAGE\b/gi,
-        /\bNUMPAGES\b/gi,
-        /\bDATE\b/gi,
-        /\bTIME\b/gi,
-        /\bSECTION\b/gi,
-        /\bSECTIONPAGES\b/gi,
-        /\bFILENAME\b/gi,
-        /\bAUTHOR\b/gi,
-        /\bTITLE\b/gi,
-        /\bSUBJECT\b/gi,
-        /\bKEYWORDS\b/gi,
-        /\bCOMMENTS\b/gi,
-        /\bCREATEDATE\b/gi,
-        /\bSAVEDATE\b/gi,
-        /\bPRINTDATE\b/gi,
-        /\bEDITTIME\b/gi,
-        /\bNUMWORDS\b/gi,
-        /\bNUMCHARS\b/gi,
-        /\bDOCPROPERTY\b/gi,
-        /\bMERGEFIELD\b/gi,
-        /\bREF\b/gi,
-        /\bHYPERLINK\b/gi,
-        /\bINCLUDEPICTURE\b/gi,
-        /\bINCLUDETEXT\b/gi,
-        /\bSEQ\b/gi,
-        /\bTOC\b/gi,
-        /\bTOC\s+o\s+"1-9"\b/gi,
-        /\bTOC\s+o\s+"1-3"\b/gi,
-      ]
-      
-      cleaned = text
-      for (const pattern of fieldPatterns) {
-        cleaned = cleaned.replace(pattern, '')
+  private detectCharacterStyles(text: string): Array<{start: number; end: number; style: any}> {
+    const styles: Array<{start: number; end: number; style: any}> = []
+    let currentStyle: any = null
+    let styleStart = 0
+
+    for (let i = 0; i < text.length; i++) {
+      const char = text[i]
+      const isDigit = /[0-9]/.test(char)
+      const isChinese = /\u4e00-\u9fff/.test(char)
+      const isUpperCase = /[A-Z]/.test(char)
+      const isLowerCase = /[a-z]/.test(char)
+      const isWhitespace = /\s/.test(char)
+
+      let charStyle: any = null
+      if (isWhitespace) charStyle = { fontName: '宋体', underline: false }
+      else if (isDigit) charStyle = { fontName: 'Times New Roman', underline: this.shouldHaveUnderline(text, i) }
+      else if (isUpperCase || isLowerCase) charStyle = { fontName: 'Times New Roman', underline: false }
+      else if (isChinese) charStyle = { fontName: '仿宋', underline: false }
+      else charStyle = { fontName: this.getChineseFont(text, i), underline: false }
+
+      if (currentStyle && this.isSameStyle(currentStyle, charStyle)) continue
+      if (currentStyle && !this.isSameStyle(currentStyle, charStyle)) {
+        styles.push({ start: styleStart, end: i, style: currentStyle })
+      }
+      currentStyle = charStyle
+      styleStart = i
+    }
+
+    if (currentStyle) styles.push({ start: styleStart, end: text.length, style: currentStyle })
+
+    const colonPositions: number[] = []
+    for (let i = 0; i < text.length; i++) {
+      if (text[i] === '：' || text[i] === ':') colonPositions.push(i)
+    }
+    if (colonPositions.length > 0) {
+      const shouldUL = new Array(text.length).fill(false)
+      for (let ci = 0; ci < colonPositions.length; ci++) {
+        const start = colonPositions[ci] + 1
+        const end = ci + 1 < colonPositions.length ? colonPositions[ci + 1] - 4 : text.length
+        for (let j = start; j < end; j++) shouldUL[j] = true
+      }
+      for (const seg of styles) {
+        if (!seg.style) continue
+        let count = 0
+        for (let j = seg.start; j < seg.end; j++) { if (shouldUL[j]) count++ }
+        if (count > (seg.end - seg.start) * 0.4) seg.style.underline = true
       }
     }
-    
-    // 清理重复的空格和标点
-    cleaned = cleaned
-      .replace(/\s{2,}/g, ' ')
-      .replace(/，\s*，/g, '，')
-      .replace(/。\s*。/g, '。')
-      .replace(/：\s*：/g, '：')
-      .trim()
-    
-    if (cleaned !== text) {
-      logger.log(`清理字段代码: "${text}" → "${cleaned}"`)
-      
-      // 如果有 charFormat.styles，简化处理：因为文本被压缩了，暂时清空字符样式
-      const newCharFormat = { ...para.charFormat }
-      if (newCharFormat.styles && newCharFormat.styles.length > 0) {
-        delete newCharFormat.styles
-      }
-      
-      return { ...para, text: cleaned, charFormat: newCharFormat }
+    return styles
+  }
+
+  private shouldHaveUnderline(text: string, index: number): boolean {
+    const char = text[index]
+    if (!/[0-9]/.test(char)) return false
+    const before = text.substring(Math.max(0, index - 30), index)
+    const after = text.substring(index, Math.min(text.length, index + 30))
+    const hasColonBefore = /[：:]\s*$/.test(before)
+    const hasDatePattern = /[年日月时分秒]/.test(after) || /[年日月时分秒]/.test(before)
+    const hasTimePattern = /[0-9]{2,4}[年月日时分秒]/.test(after) || /[0-9]{2,4}[年月日时分秒]/.test(before)
+    return hasColonBefore || hasDatePattern || hasTimePattern
+  }
+
+  private isSameStyle(style1: any, style2: any): boolean {
+    if (!style1 || !style2) return false
+    return style1.fontName === style2.fontName && (style1.underline || false) === (style2.underline || false)
+  }
+
+  private getChineseFont(text: string, index: number): string {
+    const before = text.substring(0, index)
+    const chineseCount = (before.match(/[\u4e00-\u9fff]/g) || []).length
+    if (before.length === 0) return '宋体'
+    return chineseCount / before.length > 0.7 ? '宋体' : '仿宋'
+  }
+
+  private detectParagraphFormat(text: string, index: number, totalParagraphs: number): any {
+    const format: any = {}
+    const alignment = this.detectAlignment(text, index, totalParagraphs)
+    if (alignment) format.alignment = alignment
+
+    // Detect list type
+    const trimmed = text.trim()
+    if (/^\d+[\.\)][\s\t]/.test(trimmed)) {
+      format.listType = 'ordered'
+      format.listStyle = 'decimal'
+    } else if (/^[a-zA-Z][\.\)][\s\t]/.test(trimmed) && trimmed.length >= 3) {
+      format.listType = 'ordered'
+      format.listStyle = 'lower-alpha'
+    } else if (/^[•\-\*][\s\t]/.test(trimmed) || /^[•\*]\s/.test(trimmed)) {
+      format.listType = 'unordered'
+      format.listStyle = 'disc'
+    } else if (/^[○●▪▸►→]\s/.test(trimmed)) {
+      format.listType = 'unordered'
+      format.listStyle = 'disc'
     }
-    
-    return para
+
+    return format
+  }
+
+  private detectAlignment(text: string, index: number, totalParagraphs: number): string | null {
+    const trimmed = text.trim()
+    const stripped = trimmed.replace(/\s/g, '')
+    const chineseCount = (stripped.match(/[一-鿿]/g) || []).length
+    const totalLen = trimmed.length
+    const leadingSpaces = text.length - text.trimStart().length
+    const trailingSpaces = text.trimEnd().length === 0 ? 0 : text.length - text.trimEnd().length
+
+    // Detect centering by leading whitespace: if text is centered in the "page",
+    // it will have roughly equal leading and trailing whitespace within the line.
+    // A large leading space ratio suggests intentional centering.
+    if (totalLen > 0 && leadingSpaces > 0) {
+      const leadingRatio = leadingSpaces / (leadingSpaces + totalLen)
+      if (leadingRatio > 0.15 && leadingRatio < 0.5) return 'center'
+    }
+
+    // Short line with both leading and trailing spaces → centered
+    if (leadingSpaces > 2 && trailingSpaces > 2 && totalLen < 60) return 'center'
+
+    // Pure Chinese name (2-4 chars) in the second half of document → right-aligned (signature)
+    const onlyName = chineseCount >= 2 && chineseCount <= 4 && stripped.length === chineseCount
+    if (onlyName && index > totalParagraphs * 0.5) return 'right'
+
+    // Date lines → right-aligned
+    if (/^\s*\d{4}\s*年/.test(trimmed) || /^\s*\d{1,2}\s*月/.test(trimmed)) return 'right'
+
+    // Short ALL-CAPS English → center (likely a title/subtitle)
+    if (/^[A-Z][A-Z\s]+$/.test(trimmed) && totalLen >= 3 && totalLen <= 50) return 'center'
+
+    // Short centered Chinese title
+    const hasSentencePunct = /[，。！？、；]/.test(trimmed)
+    const noFieldMarkers = !trimmed.includes('：') && !trimmed.includes(':') && !trimmed.includes('？') && !trimmed.includes('?') && !hasSentencePunct
+    if (totalLen < 18 && chineseCount >= 2 && chineseCount / stripped.length > 0.5 && noFieldMarkers) return 'center'
+
+    return null
+  }
+
+  // ==================== Paragraph cleaning ====================
+
+  private cleanParagraph(p: string): string {
+    let cleaned = p.trim()
+    const junkChars = new RegExp(`^[${DocParser.JUNK_CHAR_CLASS}]+`)
+    cleaned = cleaned.replace(junkChars, '')
+    return cleaned.trim()
   }
 
   private stripBinaryPrefix(para: any): any {
     const text = para.text
     if (!text || text.length < 10) return para
 
-    logger.log(`清理乱码前缀，原文前100字符: "${text.substring(0, Math.min(100, text.length))}..."`)
-
-    // cycle-3 改进: 扫描整个段落（不是只看前 100 字节），找最长连续有效字符段。
-    // 旧算法只看前 100 字节 → 当真实标题嵌在 FIB 噪声尾部时（典型 offset 1500+）找不到，
-    // 剥前缀只剥几字节，整段被后续 weird-chars 50% 过滤器丢弃。
-    // 触发样本 doc-101.doc P1 = 1356 字节 FIB 噪声 + "This is Heading1 Text" 21 字节在尾部。
     let realStart = 0
+
+    // Strategy 1: longest run of valid characters (existing)
     let longestValidRun = 0
     let longestValidRunStart = 0
     let currentRun = 0
     let currentRunStart = 0
 
+    // Strategy 2: first English capital-letter word start
+    let firstCapitalWordStart = -1
+    // Strategy 3: first CJK character
+    let firstCjkStart = -1
+
     for (let i = 0; i < text.length; i++) {
       const charCode = text.charCodeAt(i)
+      const ch = text[i]
+
+      // Track longest valid run
       if (this.isValidChar(charCode)) {
         if (currentRun === 0) currentRunStart = i
         currentRun++
@@ -567,1330 +790,228 @@ export class DocParser {
       } else {
         currentRun = 0
       }
+
+      // Track first English word starting with capital letter
+      if (firstCapitalWordStart === -1 && /[A-Z]/.test(ch) && i + 2 < text.length && /[a-z]/.test(text[i + 1])) {
+        // Check that we're not in the middle of a word
+        const prev = i > 0 ? text[i - 1] : ' '
+        if (prev === ' ' || !this.isValidChar(text.charCodeAt(i - 1))) {
+          firstCapitalWordStart = i
+        }
+      }
+
+      // Track first CJK character
+      if (firstCjkStart === -1 && charCode >= 0x4E00 && charCode <= 0x9FFF) {
+        firstCjkStart = i
+      }
     }
 
-    // 最长有效段 ≥ 5 字符才认为是真实文本（避免纯噪声被错认为有效）
+    // Choose the best start position
+    let candidates: Array<{ pos: number; reason: string; score: number }> = []
+
     if (longestValidRun >= 5) {
-      realStart = longestValidRunStart
+      candidates.push({ pos: longestValidRunStart, reason: 'longestRun', score: longestValidRun })
+    }
+
+    // Prefer capital word starts that are near the longest run
+    if (firstCapitalWordStart >= 0) {
+      // Score: how close to start but after noise, bonus if near longest run
+      const nearLongest = Math.abs(firstCapitalWordStart - longestValidRunStart) < 20 ? 30 : 0
+      candidates.push({ pos: firstCapitalWordStart, reason: 'capitalWord', score: 20 + nearLongest })
+    }
+
+    // Prefer CJK starts after position 0
+    if (firstCjkStart && firstCjkStart > 0 && firstCjkStart < longestValidRunStart) {
+      candidates.push({ pos: firstCjkStart, reason: 'cjk', score: 25 })
+    }
+
+    if (candidates.length > 0) {
+      candidates.sort((a, b) => b.score - a.score)
+      realStart = candidates[0].pos
     }
 
     if (realStart > 0) {
       const cleaned = text.substring(realStart)
-      logger.log(`清理乱码前缀，从位置 ${realStart} 开始（最长有效段 ${longestValidRun} 字符）`)
-
-      // 同步调整 charFormat.styles
       const newCharFormat = { ...para.charFormat }
       if (newCharFormat.styles && newCharFormat.styles.length > 0) {
-        // 调整每个样式的 start/end
         newCharFormat.styles = newCharFormat.styles
-          .map((style: any) => ({
-            start: Math.max(0, style.start - realStart),
-            end: Math.max(0, style.end - realStart),
-            style: style.style
-          }))
+          .map((style: any) => ({ start: Math.max(0, style.start - realStart), end: Math.max(0, style.end - realStart), style: style.style }))
           .filter((style: any) => style.end > style.start && style.start < cleaned.length)
-        
-        logger.log(`调整了 ${para.charFormat.styles.length} 个字符样式`)
       }
-
       return { ...para, text: cleaned, charFormat: newCharFormat }
     }
 
-    // 检测段落整体是否乱码比例过高
     const totalWeird = (text.match(/[^\u4e00-\u9fff\u3400-\u4dbf\w\s,.!?，。！？；：""''（）【】、]/g) || []).length
-    if (totalWeird > text.length * 0.4) {
-      logger.log(`段落乱码比例过高(${totalWeird}/${text.length})，标记为空`)
-      return { ...para, text: '' }
-    }
+    if (totalWeird > text.length * 0.4) return { ...para, text: '' }
 
     return para
   }
 
   private isValidChar(charCode: number): boolean {
-    // 有效字符包括：中文、基本ASCII(32-126)、常用标点
-    return (
-      (charCode >= 0x4E00 && charCode <= 0x9FFF) ||
-      (charCode >= 0x3400 && charCode <= 0x4DBF) ||
+    return (charCode >= 0x4E00 && charCode <= 0x9FFF) || (charCode >= 0x3400 && charCode <= 0x4DBF) ||
       (charCode >= 32 && charCode <= 126) ||
-      [0x3001, 0x3002, 0xFF0C, 0xFF0E, 0x300A, 0x300B, 0xFF1A,
-       0x2018, 0x2019, 0x201C, 0x201D, 0xFF08, 0xFF09,
-       0xFF1F, 0xFF01, 0x3000, 0x2014, 0xFF0B].includes(charCode)
-    )
+      [0x3001, 0x3002, 0xFF0C, 0xFF0E, 0x300A, 0x300B, 0xFF1A, 0x2018, 0x2019, 0x201C, 0x201D, 0xFF08, 0xFF09, 0xFF1F, 0xFF01, 0x3000, 0x2014, 0xFF0B].includes(charCode)
   }
 
-  private extractParagraphsWithFormat(data: Uint8Array, options?: { fcMin?: number; fComplex?: boolean; _isRetry?: boolean }): any[] {
-    logger.log('提取段落及格式信息')
+  private cleanWordFieldCodes(para: any): any {
+    let text = para.text
 
-    const paragraphs: any[] = []
-    let currentParagraph = ''
-    let paragraphIndex = 0
+    const pagePattern = /第\s*PAGE\s*(\d+)\s*页\s*共\s*NUMPAGES\s*(\d+)\s*页/gi
+    const replaced = text.replace(pagePattern, '第 $1 页 共 $2 页')
 
-    const maxBytes = Math.min(data.length, 500000)
-    let startOffset = options?.fcMin ?? 0
-
-    // cycle-3 修复 (BENCH.md): 不再向前跳到 firstParaMarker+1
-    // 旧逻辑在 200-10000 区间找 0x0D 当作"第一段尾"，会把嵌入 FIB 头部的首段丢弃
-    // (触发样本 doc-101.doc, firstParaMarker=1557, 丢失 "This is Heading1 Text")。
-    // 改为：startOffset 只保证 ≥200，由 hasSignificantContent + filterParagraphsWithGenericLogic
-    // 负责过滤噪声。
-    if (startOffset < 200) {
-      startOffset = 200
-      logger.log(`从 offset ${startOffset} 开始提取（不再向前跳到 firstParaMarker）`)
-    }
-
-    const isCompressed = options?.fComplex ?? false
-
-    if (isCompressed) {
-      // 8-bit 压缩文本：每字节一个字符，0x0D为段落标记
-      for (let i = startOffset; i < maxBytes; i++) {
-        const byte = data[i]
-        
-        if (byte === 0x0D) {
-          if (currentParagraph.trim().length >= 2) {
-            const cleaned = this.cleanParagraph(currentParagraph.trim())
-            if (cleaned.length > 0) {
-              const pf = this.detectParagraphFormat(cleaned, paragraphIndex, 50)
-              paragraphs.push({
-                text: cleaned,
-                paraFormat: pf || { alignment: 'left' },
-                charFormat: this.guessCharFormat(cleaned, paragraphIndex)
-              })
-              paragraphIndex++
-            }
-          }
-          currentParagraph = ''
-          continue
-        }
-        
-        if (byte === 0x0A || byte === 0x00) continue  // 跳过换行和空字节
-        
-        if (byte >= 0x20) {
-          currentParagraph += String.fromCharCode(byte)
-        }
-      }
+    if (replaced === text) {
+      const fieldPatterns = [
+        /\bPAGE\b/gi, /\bNUMPAGES\b/gi, /\bDATE\b/gi, /\bTIME\b/gi, /\bSECTION\b/gi,
+        /\bSECTIONPAGES\b/gi, /\bFILENAME\b/gi, /\bAUTHOR\b/gi, /\bTITLE\b/gi,
+        /\bSUBJECT\b/gi, /\bKEYWORDS\b/gi, /\bCOMMENTS\b/gi, /\bCREATEDATE\b/gi,
+        /\bSAVEDATE\b/gi, /\bPRINTDATE\b/gi, /\bEDITTIME\b/gi, /\bNUMWORDS\b/gi,
+        /\bNUMCHARS\b/gi, /\bDOCPROPERTY\b/gi, /\bMERGEFIELD\b/gi, /\bREF\b/gi,
+        /\bHYPERLINK\b/gi, /\bINCLUDEPICTURE\b/gi, /\bINCLUDETEXT\b/gi, /\bSEQ\b/gi,
+        /\bTOC\b/gi, /\bTOC\s+o\s+"1-9"\b/gi, /\bTOC\s+o\s+"1-3"\b/gi,
+      ]
+      let cleaned = text
+      for (const pattern of fieldPatterns) cleaned = cleaned.replace(pattern, '')
+      text = cleaned
     } else {
-      // UTF-16LE 文本
-      for (let i = startOffset; i < maxBytes - 1; i++) {
-        const byte1 = data[i]
-        const byte2 = data[i + 1]
-
-        if (byte1 === 0x0D && byte2 === 0x00) {
-          if (currentParagraph.trim().length >= 2) {
-            const cleaned = this.cleanParagraph(currentParagraph.trim())
-            if (cleaned.length > 0) {
-              const pf = this.detectParagraphFormat(cleaned, paragraphIndex, 50)
-              paragraphs.push({
-                text: cleaned,
-                paraFormat: pf || { alignment: 'left' },
-                charFormat: this.guessCharFormat(cleaned, paragraphIndex)
-              })
-              paragraphIndex++
-            }
-          }
-          currentParagraph = ''
-          i++
-          continue
-        }
-
-        const charCode = (byte2 << 8) | byte1
-
-        if (byte2 === 0x00 && byte1 >= 0x20 && byte1 <= 0x7E) {
-          currentParagraph += String.fromCharCode(byte1)
-          i++
-          continue
-        }
-
-        if (charCode >= 0x4E00 && charCode <= 0x9FFF) {
-          currentParagraph += String.fromCharCode(charCode)
-          i++
-          continue
-        }
-
-        if ([0x3001, 0x3002, 0xFF0C, 0xFF0E, 0x300A, 0x300B, 0xFF1A,
-             0x2018, 0x2019, 0x201C, 0x201D, 0xFF08, 0xFF09,
-             0xFF1F, 0xFF01, 0x3000, 0x2014].includes(charCode)) {
-          currentParagraph += String.fromCharCode(charCode)
-          i++
-          continue
-        }
-      }
+      text = replaced
     }
 
-    if (currentParagraph.trim().length >= 2) {
-      const cleaned = this.cleanParagraph(currentParagraph.trim())
-      if (cleaned.length > 0) {
-        const pf = this.detectParagraphFormat(cleaned, paragraphIndex, 50)
-        paragraphs.push({
-          text: cleaned,
-          paraFormat: pf || { alignment: 'left' },
-          charFormat: this.guessCharFormat(cleaned, paragraphIndex)
-        })
-      }
+    const cleaned = text.replace(/\s{2,}/g, ' ').replace(/，\s*，/g, '，').replace(/。\s*。/g, '。').replace(/：\s*：/g, '：').trim()
+
+    if (cleaned !== text) {
+      const newCharFormat = { ...para.charFormat }
+      if (newCharFormat.styles && newCharFormat.styles.length > 0) delete newCharFormat.styles
+      return { ...para, text: cleaned, charFormat: newCharFormat }
     }
-
-    logger.info(`提取到 ${paragraphs.length} 个段落`)
-
-    // 启发式：fComplex=true（8-bit 路径）但实际可能是 UTF-16LE
-    // textutil 在 macOS 上输出的 .doc 始终 byte12=0xBF（CLAUDE.md 已知问题），
-    // 导致 fComplex 误报为 true，实际文本是 UTF-16LE。
-    // 检测方式：调用 detectEncodingFromBinary 看 0x0D 后面跟 0x00 的比例。
-    // 触发样本：docs/synthetic/04_plain.doc, 07_replica_doc101.doc, doc-100kb/1mb/500kb.doc,
-    //           unicode-*, fsample1/2/3, ftd-*, openstd-n961.doc 等 18+ 个。
-    if (isCompressed && paragraphs.length > 0 && !options?._isRetry) {
-      const binaryDetect = this.detectEncodingFromBinary(data)
-      if (binaryDetect === false) {
-        logger.log('fComplex 启发式：二进制检测判定为 UTF-16LE，切到 16-bit 路径')
-        const alt = this.extractParagraphsWithFormat(data, { ...options, fComplex: false, _isRetry: true })
-        return this.filterAndEnhanceParagraphs(alt)
-      }
-    }
-
-    return this.filterAndEnhanceParagraphs(paragraphs)
-  }
-
-  private guessCharFormat(text: string, _paragraphIndex?: number): any {
-    const charFormat: any = {
-      styles: [] as Array<{start: number; end: number; style: any}>
-    }
-    
-    const chineseCount = (text.match(/[\u4e00-\u9fff]/g) || []).length
-    const totalLength = text.length
-    const chineseRatio = chineseCount / totalLength
-    
-    // 基础样式：含2个以上汉字的文本使用正文大小，避免*等符号干扰
-    if (chineseCount >= 2) {
-      charFormat.fontSize = 16
-      if (chineseRatio > 0.7) {
-        charFormat.fontName = '仿宋_GB2312'
-      }
-    } else {
-      charFormat.fontSize = 12
-      charFormat.fontName = 'Times New Roman'
-    }
-
-    // 通用标题检测：短文本 + 高中文比 + 无标点 => 加粗+大字号
-    const hasSentencePunct = /[，。！？、；]/.test(text)
-    const noFieldMarkers = !text.includes('：') && !text.includes(':') &&
-      !text.includes('？') && !text.includes('?') && !hasSentencePunct
-    // 排除纯姓名（2-4个纯中文、原文长度短的情况）
-    const stripped = text.replace(/\s/g, '')
-    const pureName = chineseCount >= 2 && chineseCount <= 4 && stripped.length === chineseCount && text.trim().length <= 4
-    if (totalLength < 18 && chineseRatio > 0.5 && noFieldMarkers && chineseCount >= 2 && !pureName) {
-      charFormat.bold = true
-      if (stripped.length < 6) {
-        charFormat.fontSize = 36  // 极短标题（不含空格）
-      } else {
-        charFormat.fontSize = 22  // 二号
-      }
-    }
-
-    const charStyles = this.detectCharacterStyles(text)
-    charFormat.styles = charStyles
-
-    return charFormat
-  }
-
-  private detectCharacterStyles(text: string): Array<{start: number; end: number; style: any}> {
-    const styles: Array<{start: number; end: number; style: any}> = []
-    
-    let currentStyle: any = null
-    let styleStart = 0
-
-    for (let i = 0; i < text.length; i++) {
-      const char = text[i]
-
-      const isDigit = /[0-9]/.test(char)
-      const isChinese = /\u4e00-\u9fff/.test(char)
-      const isUpperCase = /[A-Z]/.test(char)
-      const isLowerCase = /[a-z]/.test(char)
-      const isPunctuation = /[，。、；：""''【】《》（）!@#$%^&*()_+=\-\[\]{}|\\:;"'<>,.?\/`~]/.test(char)
-      const isWhitespace = /\s/.test(char)
-
-      let charStyle: any = null
-
-      if (isWhitespace) {
-        charStyle = {
-          fontName: '宋体',
-          underline: false
-        }
-      } else if (isDigit) {
-        charStyle = {
-          fontName: 'Times New Roman',
-          underline: this.shouldHaveUnderline(text, i)
-        }
-      } else if (isUpperCase || isLowerCase) {
-        charStyle = {
-          fontName: 'Times New Roman',
-          underline: false
-        }
-      } else if (isChinese) {
-        charStyle = {
-          fontName: '仿宋',
-          underline: false
-        }
-      } else if (isPunctuation) {
-        charStyle = {
-          fontName: this.getChineseFont(text, i),
-          underline: false
-        }
-      } else {
-        charStyle = {
-          fontName: this.getChineseFont(text, i),
-          underline: false
-        }
-      }
-
-      if (currentStyle && this.isSameStyle(currentStyle, charStyle)) {
-        continue
-      }
-
-      if (currentStyle && !this.isSameStyle(currentStyle, charStyle)) {
-        styles.push({
-          start: styleStart,
-          end: i,
-          style: currentStyle
-        })
-      }
-
-      currentStyle = charStyle
-      styleStart = i
-    }
-
-    if (currentStyle) {
-      styles.push({
-        start: styleStart,
-        end: text.length,
-        style: currentStyle
-      })
-    }
-
-    // 字段值下划线：给每个冒号后的值文本加下划线（避免标签段被误标）
-    const colonPositions: number[] = []
-    for (let i = 0; i < text.length; i++) {
-      if (text[i] === '：' || text[i] === ':') colonPositions.push(i)
-    }
-    if (colonPositions.length > 0) {
-      // 文本级标记：哪些字符位置应该加下划线
-      const shouldUL = new Array(text.length).fill(false)
-      for (let ci = 0; ci < colonPositions.length; ci++) {
-        const start = colonPositions[ci] + 1
-        const end = ci + 1 < colonPositions.length
-          ? colonPositions[ci + 1] - 4  // 接近下一个冒号的内容是标签不是值
-          : text.length
-        for (let j = start; j < end; j++) {
-          shouldUL[j] = true
-        }
-      }
-      for (const seg of styles) {
-        if (!seg.style) continue
-        // 计算该段落在 shouldUL 中的比例
-        let count = 0
-        for (let j = seg.start; j < seg.end; j++) {
-          if (shouldUL[j]) count++
-        }
-        if (count > (seg.end - seg.start) * 0.4) {
-          seg.style.underline = true
-        }
-      }
-    }
-
-    return styles
-  }
-
-  private shouldHaveUnderline(text: string, index: number): boolean {
-    const char = text[index]
-    const isDigit = /[0-9]/.test(char)
-    
-    if (!isDigit) return false
-    
-    // 检查这个数字周围的上下文
-    const contextBefore = text.substring(Math.max(0, index - 30), index)
-    const contextAfter = text.substring(index, Math.min(text.length, index + 30))
-    
-    // 检查是否有冒号（中文或英文冒号）在数字前面不远处
-    const hasColonBefore = /[：:]\s*$/.test(contextBefore)
-    
-    // 检查是否有日期/时间相关的中文单位
-    const hasDatePattern = /[年日月时分秒]/.test(contextAfter) || /[年日月时分秒]/.test(contextBefore)
-    const hasTimePattern = /[0-9]{2,4}[年月日时分秒]/.test(contextAfter) || /[0-9]{2,4}[年月日时分秒]/.test(contextBefore)
-    
-    if (hasColonBefore || hasDatePattern || hasTimePattern) {
-      return true
-    }
-
-    return false
-  }
-
-  private isSameStyle(style1: any, style2: any): boolean {
-    if (!style1 || !style2) return false
-    const fontSame = style1.fontName === style2.fontName
-    const underlineSame = (style1.underline || false) === (style2.underline || false)
-    return fontSame && underlineSame
-  }
-
-  private getChineseFont(text: string, index: number): string {
-    const beforeText = text.substring(0, index)
-    const chineseCount = (beforeText.match(/[\u4e00-\u9fff]/g) || []).length
-    const totalChars = beforeText.length
-
-    if (totalChars === 0) return '宋体'
-    
-    const chineseRatio = chineseCount / totalChars
-    
-    if (chineseRatio > 0.7) {
-      return '宋体'
-    } else if (chineseRatio > 0.3) {
-      return '仿宋'
-    } else {
-      return '仿宋'
-    }
-  }
-
-  private filterAndEnhanceParagraphs(paragraphs: any[]): any[] {
-    let foundStart = false
-    const filtered: any[] = []
-
-    for (const para of paragraphs) {
-      if (!foundStart) {
-        if (this.hasSignificantContent(para.text)) {
-          foundStart = true
-          if (!this.shouldSkipParagraph(para.text)) {
-            filtered.push(para)
-          }
-          continue
-        }
-        continue
-      }
-
-      if (this.shouldSkipParagraph(para.text)) {
-        continue
-      }
-      
-      if (!this.hasSignificantContent(para.text)) {
-        continue
-      }
-      
-      filtered.push(para)
-    }
-
-    if (!foundStart && paragraphs.length > 0) {
-      return paragraphs.filter(p => !this.shouldSkipParagraph(p.text)).slice(0, 5)
-    }
-
-    return filtered
-  }
-
-  private isOleFile(): boolean {
-    if (this.view.byteLength < 8) {
-      logger.error(`文件太小，不是有效的 OLE 文件: ${this.view.byteLength} bytes`)
-      return false
-    }
-
-    const signature = this.getString(0, 8)
-    const isValid = signature === '\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1'
-
-    logger.log(`OLE 签名检查: ${isValid ? '通过' : '失败'} (${signature.charCodeAt(0).toString(16)})`)
-
-    return isValid
-  }
-
-  private getString(offset: number, length: number): string {
-    let result = ''
-    const maxOffset = Math.min(offset + length, this.buffer.byteLength)
-
-    for (let i = offset; i < maxOffset; i++) {
-      try {
-        const charCode = this.view.getUint8(i)
-        if (charCode !== 0) {
-          result += String.fromCharCode(charCode)
-        }
-      } catch (e) {
-        logger.warn(`读取字符串时越界: offset=${i}`)
-        break
-      }
-    }
-    return result
-  }
-
-  private parseHeader() {
-    logger.log('开始解析文件头')
-
-    const minorVersion = this.safeReadUint16(24)
-    const majorVersion = this.safeReadUint16(26)
-    const byteOrder = this.safeReadUint16(28)
-    const sectorSizePower = this.safeReadUint16(30)
-    const miniSectorSizePower = this.safeReadUint16(32)
-
-    logger.log(`版本: ${majorVersion}.${minorVersion}, 字节序: ${byteOrder}`)
-
-    const header = {
-      minorVersion,
-      majorVersion,
-      byteOrder,
-      sectorSizePower,
-      miniSectorSizePower,
-      totalSectors: this.safeReadUint32(44),
-      fatSectorsCount: this.safeReadUint32(44),
-      firstDirectorySector: this.safeReadUint32(48),
-      difatSectorsCount: this.safeReadUint32(40),
-      firstDifatSector: this.safeReadUint32(36),
-      difat: this.getDifat(76, 109),
-    }
-
-    logger.log(`扇区大小: ${Math.pow(2, header.sectorSizePower)} bytes`)
-    logger.log(`DIFAT 表数量: ${header.difat.length}`)
-
-    return header
-  }
-
-  private getDifat(startOffset: number, count: number): number[] {
-    const difat: number[] = []
-
-    for (let i = 0; i < count; i++) {
-      const offset = startOffset + i * 4
-      if (offset + 4 > this.buffer.byteLength) {
-        logger.warn(`DIFAT 表读取越界: offset=${offset}`)
-        break
-      }
-
-      const sector = this.safeReadInt32(offset)
-      if (sector === -2 || sector < 0) {
-        logger.log(`DIFAT 表结束于索引 ${i}`)
-        break
-      }
-      difat.push(sector)
-    }
-
-    return difat
-  }
-
-  private getSectorSize(header: any): number {
-    return Math.pow(2, header.sectorSizePower)
-  }
-
-  private sectorToOffset(sector: number, header: any): number {
-    return (sector + 1) * this.getSectorSize(header)
-  }
-
-  private getFatSectors(header: any): number[] {
-    const sectorSize = this.getSectorSize(header)
-    const entriesPerSector = sectorSize / 4
-    const totalSectors = Math.ceil(this.buffer.byteLength / sectorSize)
-
-    logger.log(`开始读取 FAT 表，共 ${header.difat.length} 个 FAT 扇区, ${totalSectors} 总扇区`)
-
-    // FAT[f] = next sector after f, or -1 (end), -2 (free), -3 (FAT sector itself)
-    // 初始化为 -2 (FREESECT = 未分配)
-    const fat = new Array(totalSectors).fill(-2)
-
-    for (let d = 0; d < header.difat.length; d++) {
-      const fatSector = header.difat[d]
-      const offset = this.sectorToOffset(fatSector, header)
-
-      if (offset + sectorSize > this.buffer.byteLength) {
-        logger.warn(`FAT 扇区 ${fatSector} 越界`)
-        continue
-      }
-
-      const baseSector = d * entriesPerSector
-      for (let i = 0; i < entriesPerSector; i++) {
-        const sectorNum = baseSector + i
-        if (sectorNum >= totalSectors) break
-        const entryOffset = offset + i * 4
-        if (entryOffset + 4 > this.buffer.byteLength) break
-        fat[sectorNum] = this.safeReadInt32(entryOffset)
-      }
-    }
-
-    logger.log(`FAT 表读取完成，${fat.length} 个条目`)
-    return fat
-  }
-
-  private getDirectorySectors(header: any, fat: number[]): any[] {
-    const directory: any[] = []
-    const sectorSize = this.getSectorSize(header)
-    const entriesPerSector = sectorSize / 128
-
-    logger.log(`开始读取目录表，firstDirectorySector: ${header.firstDirectorySector}`)
-
-    let currentSector = header.firstDirectorySector
-    let sectorIndex = 0
-
-    while (currentSector >= 0 && currentSector < fat.length && fat[currentSector] !== -2 && sectorIndex < 1000) {
-      sectorIndex++
-      const offset = this.sectorToOffset(currentSector, header)
-
-      if (offset + sectorSize > this.buffer.byteLength) {
-        logger.warn(`目录扇区 ${currentSector} 越界`)
-        break
-      }
-
-      for (let i = 0; i < entriesPerSector; i++) {
-        const entryOffset = offset + i * 128
-        if (entryOffset + 128 > this.buffer.byteLength) {
-          logger.warn(`目录条目 ${i} 越界`)
-          break
-        }
-
-        const entry = this.parseDirectoryEntry(entryOffset)
-
-        if (entry && entry.nameLength > 0) {
-          directory.push(entry)
-          logger.log(`找到目录条目: ${entry.name} (类型: ${entry.objectType}, 大小: ${entry.size})`)
-        }
-      }
-
-      if (fat[currentSector] === -1) break
-      currentSector = fat[currentSector]
-    }
-
-    logger.log(`目录表读取完成，共 ${directory.length} 个条目`)
-    return directory
-  }
-
-  private parseDirectoryEntry(offset: number): any {
-    try {
-      const objectType = this.safeReadUint8(offset + 66)
-      const colorFlag = this.safeReadUint8(offset + 67)
-      const nameLength = this.safeReadUint16(offset + 64)
-
-      logger.log(`目录条目 @ offset ${offset}: objectType=${objectType}, colorFlag=${colorFlag}, nameLength=${nameLength}`)
-
-      if (objectType === 0 && colorFlag === 0) {
-        logger.log('目录条目为空（根条目标记）')
-        return null
-      }
-
-      if (objectType < 1 || objectType > 5) {
-        logger.warn(`无效的 objectType: ${objectType}，跳过此条目`)
-        return null
-      }
-
-      let name = ''
-      // 名称是从offset开始的UTF-16LE字符串
-      const actualNameLength = nameLength // nameLength以字节为单位
-      
-      for (let i = 0; i < actualNameLength && offset + i + 1 < this.buffer.byteLength; i += 2) {
-        const char = this.safeReadUint16(offset + i)
-        if (char !== 0) {
-          name += String.fromCharCode(char)
-        }
-      }
-
-      name = name.trim()
-
-      const startSector = this.safeReadInt32(offset + 116)
-      const size = this.safeReadUint32(offset + 120)
-
-      logger.log(`解析条目: name="${name}", objectType=${objectType}, startSector=${startSector}, size=${size}`)
-
-      return {
-        name,
-        objectType,
-        startSector,
-        size,
-        nameLength
-      }
-    } catch (error) {
-      logger.warn(`解析目录条目失败: ${error}`)
-      return null
-    }
-  }
-
-  private findWordDocumentStream(directory: any[]): { data: Uint8Array; size: number } | null {
-    logger.log('开始查找 WordDocument 流')
-    logger.log('所有目录条目:')
-    for (const entry of directory) {
-      logger.log(`  - name="${entry.name}", type=${entry.objectType}, size=${entry.size}, startSector=${entry.startSector}`)
-    }
-
-    // 精确匹配 WordDocument
-    const wordDocEntry = directory.find(entry =>
-      entry.name === 'WordDocument' && entry.objectType === 2
-    )
-
-    if (wordDocEntry) {
-      logger.info('找到标准 WordDocument 流')
-      return this.readStream(wordDocEntry)
-    }
-
-    logger.warn('未找到标准 WordDocument 流，尝试不区分大小写匹配')
-    const wordDocEntryCaseInsensitive = directory.find(entry =>
-      entry.name.toLowerCase().includes('worddocument') && entry.objectType === 2
-    )
-
-    if (wordDocEntryCaseInsensitive) {
-      logger.info(`找到近似匹配的流: ${wordDocEntryCaseInsensitive.name}`)
-      return this.readStream(wordDocEntryCaseInsensitive)
-    }
-
-    logger.warn('搜索包含 "Word" 的流')
-    const entries = directory.filter(e =>
-      e.name.toLowerCase().includes('word') && e.objectType === 2
-    )
-
-    if (entries.length > 0) {
-      logger.info(`找到 ${entries.length} 个包含 Word 的流，尝试第一个: ${entries[0].name}`)
-      return this.readStream(entries[0])
-    }
-
-    logger.warn('搜索所有流对象')
-    const allStreams = directory.filter(e => e.objectType === 2 && e.size > 0)
-    if (allStreams.length > 0) {
-      // 按大小排序，取最大的几个尝试
-      const sortedStreams = allStreams.sort((a, b) => b.size - a.size)
-      logger.warn(`尝试最大的流: ${sortedStreams[0].name}, size=${sortedStreams[0].size}`)
-      return this.readStream(sortedStreams[0])
-    }
-
-    logger.error('未找到任何可用的流')
-    return null
-  }
-
-  private readStream(entry: any): { data: Uint8Array; size: number } {
-    logger.log(`开始读取流: ${entry.name}, 起始扇区: ${entry.startSector}, 大小: ${entry.size}`)
-
-    const header = this.parseHeader()
-    const fat = this.getFatSectors(header)
-    const sectorSize = this.getSectorSize(header)
-    const data: number[] = []
-
-    let currentSector = entry.startSector
-    let bytesRead = 0
-    let maxIterations = 1000
-    let iterations = 0
-
-    while (currentSector >= 0 && currentSector < fat.length && fat[currentSector] !== -2 && bytesRead < entry.size && iterations < maxIterations) {
-      iterations++
-
-      const offset = this.sectorToOffset(currentSector, header)
-
-      if (offset < 0 || offset >= this.buffer.byteLength) {
-        logger.warn(`扇区偏移越界: sector=${currentSector}, offset=${offset}, length=${this.buffer.byteLength}`)
-        break
-      }
-
-      const bytesToRead = Math.min(sectorSize, entry.size - bytesRead)
-
-      for (let i = 0; i < bytesToRead; i++) {
-        const byteOffset = offset + i
-        if (byteOffset < this.buffer.byteLength) {
-          data.push(this.safeReadUint8(byteOffset))
-        } else {
-          logger.warn(`字节读取越界: ${byteOffset}`)
-          break
-        }
-      }
-
-      bytesRead += bytesToRead
-      currentSector = fat[currentSector]
-    }
-
-    logger.info(`流读取完成: ${data.length} bytes`)
-
-    return { data: new Uint8Array(data), size: data.length }
-  }
-
-  private extractTextWithFib(wordStream: { data: Uint8Array; size: number }): string {
-    logger.log('开始使用 FIB 解析文本内容和格式信息')
-
-    const data = wordStream.data
-
-    if (data.length < 32) {
-      logger.warn('数据太短，无法解析 FIB')
-      return ''
-    }
-
-    const fib = this.parseFib(data)
-    if (!fib) {
-      logger.warn('FIB 解析失败，使用备选方法')
-      return this.extractTextSimple(data)
-    }
-
-    // 尝试 Clx 解析
-    if (fib.lcbClx > 0 && fib.fcClx + fib.lcbClx <= data.length) {
-      const clxData = data.subarray(fib.fcClx, fib.fcClx + fib.lcbClx)
-      const textFromClx = this.parseClx(clxData, data)
-
-      if (textFromClx.length > 0) {
-        logger.log(`从 Clx 结构中提取到 ${textFromClx.length} 字符`)
-        return textFromClx
-      }
-    }
-
-    // fcMin=0 表示FIB没有有效偏移，需要自动检测编码
-    if (fib.fcMin === 0 || fib.fcMac === 0) {
-      logger.log('FIB偏移为0，自动检测编码')
-      return this.extractTextWithAutoDetect(data, fib.fComplex)
-    }
-
-    logger.log('使用 fcMin/fComplex 提取文本')
-    return this.extractTextSimple(data, { fcMin: fib.fcMin, fComplex: fib.fComplex })
-  }
-
-  private extractTextWithAutoDetect(data: Uint8Array, suggestedComplex: boolean): string {
-    // 先用二进制检测编码
-    const binaryDetect = this.detectEncodingFromBinary(data)
-    if (binaryDetect !== null) {
-      logger.log(`二进制检测决定编码: ${binaryDetect ? '8-bit' : 'UTF-16LE'}`)
-      return this.extractTextSimple(data, { fcMin: 0, fComplex: binaryDetect })
-    }
-
-    // 无法通过二进制判断，回退到评分
-    let text8 = this.extractTextSimple(data, { fcMin: 0, fComplex: true })
-    let text16 = this.extractTextSimple(data, { fcMin: 0, fComplex: false })
-
-    const score8 = this.scorePlainText(text8)
-    const score16 = this.scorePlainText(text16)
-
-    logger.log(`自动检测编码评分 - 8-bit: ${score8}, UTF-16LE: ${score16}`)
-
-    if (suggestedComplex) {
-      if (score8 >= score16 * 0.4) {
-        logger.log('使用8-bit编码（FIB建议）')
-        return text8
-      }
-      logger.log('8-bit结果质量差，改用UTF-16LE')
-      return text16
-    } else {
-      if (score16 >= score8 * 0.4) {
-        logger.log('使用UTF-16LE编码（FIB建议）')
-        return text16
-      }
-      logger.log('UTF-16LE结果质量差，改用8-bit')
-      return text8
-    }
-  }
-
-  private scorePlainText(text: string): number {
-    if (!text || text.length === 0) return 0
-    const paragraphs = text.split(/\n{2,}/).filter(p => p.trim().length > 0)
-    let score = 0
-    for (const p of paragraphs) {
-      const len = p.length
-      if (len < 4) continue
-      const englishWords = (p.match(/[A-Za-z]{3,}/g) || []).length
-      if (englishWords >= 2) score += 30
-      else if (englishWords >= 1) score += 10
-      const chineseCount = (p.match(/[一-鿿]/g) || []).length
-      if (chineseCount >= 3) score += 25
-      else if (chineseCount >= 1) score += 5
-      if (len >= 10 && len <= 500) score += Math.min(len / 2, 50)
-      if (/[,.]/.test(p) || /[，。]/.test(p)) score += 10
-    }
-    return score
-  }
-
-  private parseClx(clxData: Uint8Array, wordDocData: Uint8Array): string {
-    logger.log('解析 Clx 结构')
-
-    if (clxData.length < 4) {
-      logger.warn('Clx 数据太短')
-      return ''
-    }
-
-    const clxt = clxData[0]
-    logger.log(`Clx type: ${clxt}`)
-
-    if (clxt !== 2) {
-      logger.warn('不是 Pcdt 类型')
-      return this.extractTextSimple(wordDocData)
-    }
-
-    let offset = 1
-    
-    const lcb = clxData[offset] | (clxData[offset + 1] << 8) | 
-                (clxData[offset + 2] << 16) | (clxData[offset + 3] << 24)
-    offset += 4
-
-    logger.log(`Pcdt size: ${lcb}`)
-
-    if (lcb <= 0 || offset + lcb > clxData.length) {
-      logger.warn('Pcdt size 无效')
-      return this.extractTextSimple(wordDocData)
-    }
-
-    const clxt2 = clxData[offset]
-    offset += 1
-
-    if (clxt2 !== 1) {
-      logger.warn('不是 ClxPcdTable 类型')
-      return this.extractTextSimple(wordDocData)
-    }
-
-    const lcb2 = clxData[offset] | (clxData[offset + 1] << 8) | 
-                 (clxData[offset + 2] << 16) | (clxData[offset + 3] << 24)
-    offset += 4
-
-    logger.log(`PcdTable size: ${lcb2}`)
-
-    const rgCcp: number[] = []
-    while (offset + 4 <= clxData.length) {
-      const ccp = clxData[offset] | (clxData[offset + 1] << 8) | 
-                  (clxData[offset + 2] << 16) | (clxData[offset + 3] << 24)
-      
-      if (ccp === 0 && rgCcp.length > 0) break
-      
-      rgCcp.push(ccp)
-      offset += 4
-    }
-
-    logger.log(`RgCcp 包含 ${rgCcp.length} 个条目`)
-
-    let text = ''
-    let lastCcp = 0
-
-    for (const ccp of rgCcp) {
-      if (ccp > lastCcp && ccp > 0) {
-        const start = lastCcp
-        const end = ccp
-        const extracted = this.extractTextFromRange(wordDocData, start, end)
-        if (extracted.length > 0) {
-          text += extracted
-        }
-      }
-      lastCcp = ccp
-    }
-
-    if (text.length === 0 && wordDocData.length > 0) {
-      logger.log('直接扫描 WordDocument 数据')
-      text = this.extractTextSimple(wordDocData)
-    }
-
-    return text
-  }
-
-  private extractTextFromRange(data: Uint8Array, start: number, end: number): string {
-    logger.log(`提取范围 ${start}-${end}`)
-
-    let text = ''
-    const actualStart = Math.max(0, start)
-    const actualEnd = Math.min(data.length, end)
-
-    for (let i = actualStart; i < actualEnd - 1; i += 2) {
-      const charCode = data[i] | (data[i + 1] << 8)
-
-      if (charCode === 0x000d) {
-        text += '\n'
-      } else if (charCode === 0x000a) {
-        continue
-      } else if (charCode === 0x0000) {
-        continue
-      } else if ((charCode >= 0x0020 && charCode <= 0x007E) ||
-                 (charCode >= 0x4E00 && charCode <= 0x9FFF) ||
-                 (charCode >= 0x3000 && charCode <= 0x303F) ||
-                 (charCode >= 0xFF00 && charCode <= 0xFFEF) ||
-                 (charCode === 0x2018 || charCode === 0x2019 ||
-                  charCode === 0x201C || charCode === 0x201D)) {
-        text += String.fromCharCode(charCode)
-      }
-    }
-
-    return text
-  }
-
-  private extractTextSimple(data: Uint8Array, options?: { fcMin?: number; fComplex?: boolean }): string {
-    logger.log('使用简单文本提取方法')
-
-    const paragraphs: string[] = []
-    let currentParagraph = ''
-
-    const maxBytes = Math.min(data.length, 500000)
-    const startOffset = options?.fcMin ?? 0
-    const isCompressed = options?.fComplex ?? false
-
-    if (isCompressed) {
-      // 8-bit 压缩文本
-      for (let i = startOffset; i < maxBytes; i++) {
-        const byte = data[i]
-        
-        if (byte === 0x0D) {
-          if (currentParagraph.trim().length >= 2) {
-            paragraphs.push(currentParagraph.trim())
-          }
-          currentParagraph = ''
-          continue
-        }
-        
-        if (byte === 0x0A || byte === 0x00) continue
-        
-        if (byte >= 0x20) {
-          currentParagraph += String.fromCharCode(byte)
-        }
-      }
-    } else {
-      // UTF-16LE 文本
-      for (let i = startOffset; i < maxBytes - 1; i++) {
-        const byte1 = data[i]
-        const byte2 = data[i + 1]
-
-        if (byte1 === 0x0D && byte2 === 0x00) {
-          if (currentParagraph.trim().length >= 2) {
-            paragraphs.push(currentParagraph.trim())
-          }
-          currentParagraph = ''
-          i++
-          continue
-        }
-
-        if (byte1 === 0x0A && byte2 === 0x00) {
-          i++
-          continue
-        }
-
-        if (byte2 === 0x00 && byte1 >= 0x20 && byte1 <= 0x7E) {
-          currentParagraph += String.fromCharCode(byte1)
-          i++
-          continue
-        }
-
-        const charCode = (byte2 << 8) | byte1
-
-        if (charCode >= 0x4E00 && charCode <= 0x9FFF) {
-          currentParagraph += String.fromCharCode(charCode)
-          i++
-          continue
-        }
-
-        if ([0x3001, 0x3002, 0xFF0C, 0xFF0E, 0x300A, 0x300B,
-             0x2018, 0x2019, 0x201C, 0x201D, 0xFF08, 0xFF09,
-             0xFF1F, 0xFF01, 0xFF1A, 0x3000].includes(charCode)) {
-          currentParagraph += String.fromCharCode(charCode)
-          i++
-          continue
-        }
-      }
-    }
-
-    if (currentParagraph.trim().length >= 2) {
-      paragraphs.push(currentParagraph.trim())
-    }
-
-    logger.info(`初步提取到 ${paragraphs.length} 个段落`)
-
-    let foundStart = false
-    const filteredStart: string[] = []
-    
-    const junkChars = /[一伀倀藠俹醫蠀耀頀琀餀栀儀騀甀攀爀愀氀攀漀漀渀]/g
-
-    for (const p of paragraphs) {
-      if (!foundStart) {
-        const cleanP = this.cleanParagraph(p)
-        
-        if (cleanP.length > 5) {
-          const chineseCount = (cleanP.match(/[\u4e00-\u9fff]/g) || []).length
-          const junkCount = (cleanP.match(junkChars) || []).length
-          
-          if (chineseCount >= 3 && junkCount < chineseCount) {
-            foundStart = true
-            filteredStart.push(cleanP)
-            continue
-          }
-        }
-      } else {
-        const cleanedP = this.cleanParagraph(p)
-        if (!this.shouldSkipParagraph(cleanedP)) {
-          filteredStart.push(cleanedP)
-        }
-      }
-    }
-
-    if (!foundStart) {
-      filteredStart.push(...paragraphs.slice(0, 3).map(p => this.cleanParagraph(p)).filter(p => !this.shouldSkipParagraph(p)))
-    }
-
-    const filtered = filteredStart.filter(p => {
-      if (p.length < 2) return false
-      
-      if (this.shouldSkipParagraph(p)) {
-        return false
-      }
-      
-      const hasSignificantContent = this.hasSignificantContent(p)
-      if (!hasSignificantContent) {
-        return false
-      }
-      
-      const upperP = p.toUpperCase()
-      const skipPatterns = ['ROOT', 'SUMMARY', 'DOCUMENT', 'WORD', 'WPS', 'MICROSOFT',
-                            'PROPERTY', 'STORAGE', 'STREAM', 'TABLE', 'FORMAT',
-                            'XMLDATA', 'BASE64', 'TEMPLATE', 'REGISTRY']
-
-      for (const pattern of skipPatterns) {
-        if (upperP.includes(pattern)) return false
-      }
-
-      return true
-    })
-
-    const result = filtered.join('\n\n').trim()
-
-    logger.log(`最终文本长度: ${result.length} 字符`)
-
-    return result
-  }
-
-  private cleanParagraph(p: string): string {
-    let cleaned = p.trim()
-    
-    // 移除这个会删除前面数字的逻辑
-    // const firstChineseIndex = cleaned.search(/[\u4e00-\u9fff]/)
-    // 
-    // if (firstChineseIndex > 0) {
-    //   const beforeChinese = cleaned.substring(0, firstChineseIndex)
-    //   const hasOnlyAsciiAndSymbols = /^[A-Z0-9!"#$%&'()*+,\-./:;<=>?@\s_]+$/.test(beforeChinese)
-    //   
-    //   if (hasOnlyAsciiAndSymbols && firstChineseIndex > 2) {
-    //     cleaned = cleaned.substring(firstChineseIndex)
-    //   }
-    // }
-    
-    const junkChars = /^[一伀倀藠俹醫蠀耀頀琀餀栀儀騀甀攀爀愀氀攀漀漀渀]+/
-    cleaned = cleaned.replace(junkChars, '')
-    
-    return cleaned.trim()
-  }
-
-  private createFormattedParagraphsFromText(text: string): any[] {
-    logger.log('从纯文本创建带格式的段落')
-    
-    const paragraphs: any[] = []
-    const textParagraphs = text.split(/\n\n/).filter(p => p.trim().length > 0)
-    
-    for (let i = 0; i < textParagraphs.length; i++) {
-      const paraText = textParagraphs[i]
-      const cleaned = this.cleanParagraph(paraText.trim())
-      
-      if (!this.shouldSkipParagraph(cleaned) && cleaned.length > 0) {
-        const charFormat = this.guessCharFormat(cleaned, i)
-        const paraFormat = this.detectParagraphFormat(cleaned, i, textParagraphs.length)
-        
-        paragraphs.push({
-          text: cleaned,
-          paraFormat: paraFormat,
-          charFormat: charFormat
-        })
-      }
-    }
-    
-    logger.info(`创建了 ${paragraphs.length} 个带格式的段落`)
-    return paragraphs
-  }
-
-  private detectParagraphFormat(text: string, index: number, totalParagraphs: number): any {
-    const format: any = {}
-    
-    // 检测对齐方式
-    const alignment = this.detectAlignment(text, index, totalParagraphs)
-    if (alignment) {
-      format.alignment = alignment
-    }
-    
-    return format
-  }
-
-  private detectAlignment(text: string, index: number, totalParagraphs: number): string | null {
-    const stripped = text.replace(/\s/g, '')
-    const chineseCount = (stripped.match(/[一-鿿]/g) || []).length
-    const totalLen = text.length
-
-    // 纯中文人名（2-4字）—— 右对齐（在标题检测之前，因为人名可能也匹配标题规则）
-    const onlyName =
-      chineseCount >= 2 && chineseCount <= 4 &&
-      stripped.length === chineseCount
-    if (onlyName && index > totalParagraphs * 0.5) {
-      return 'right'
-    }
-
-    // 日期行（以数字开头 + 年月日）—— 右对齐
-    if (/^\s*\d{4}\s*年/.test(text) || /^\s*\d{1,2}\s*月/.test(text)) {
-      return 'right'
-    }
-
-    // 标题居中检测：短文本 + 高中文比 + 无句子标点
-    const hasSentencePunct = /[，。！？、；]/.test(text)
-    const noFieldMarkers = !text.includes('：') && !text.includes(':') &&
-      !text.includes('？') && !text.includes('?') && !hasSentencePunct
-    if (totalLen < 18 && chineseCount >= 2 && chineseCount / stripped.length > 0.5 && noFieldMarkers) {
-      return 'center'
-    }
-
-    return null
-  }
-
-  private shouldSkipParagraph(text: string): boolean {
-    // 检查是否有太多乱码字符
-    if (this.hasTooManyJunkChars(text)) {
-      return true
-    }
-    
-    return false
-  }
-
-  private hasTooManyJunkChars(text: string): boolean {
-    // 常见的乱码字符模式（已移除正常的中文"一"）
-    const junkCharsPattern = /[伀倀藠俹醫蠀耀頀琀餀栀儀騀甀攀爀愀氀攀漀漀渀伇倈俼俿儀儜厬唀唕嘀噀圀堀嬀崀崜帀幀弰彀戀戀愀氀攀漀漀渀伀倀藠俹醫蠀耀頀琀餀栀儀騀甀攀爀愀氀攀漀漀渀]/g
-    const junkMatches = text.match(junkCharsPattern) || []
-    
-    if (junkMatches.length > 0) {
-      const totalLength = text.trim().length
-      
-      // 如果乱码字符超过2个，或者乱码占比超过20%
-      if (junkMatches.length > 2 || (totalLength > 0 && junkMatches.length / totalLength > 0.2)) {
-        return true
-      }
-    }
-    
-    return false
+    return para
   }
 
   private hasSignificantContent(text: string): boolean {
     if (text.length < 2) return false
-
     const chineseChars = (text.match(/[\u4e00-\u9fff]/g) || []).length
-    const allChars = text.length
-    const chineseRatio = chineseChars / allChars
+    const chineseRatio = chineseChars / text.length
+    if (chineseChars >= 2 && chineseRatio > 0.3) return true
 
-    if (chineseChars >= 2 && chineseRatio > 0.3) {
-      return true
-    }
-
-    // 检测英文内容：2个以上含元音字母的3+字母英文单词
     const englishWords = (text.match(/[A-Za-z]{3,}/g) || []).filter(w => /[aeiouyAEIOUY]/.test(w)).length
-    if (englishWords >= 2) {
-      return true
-    }
+    if (englishWords >= 2) return true
 
     const hasCommonPunctuation = /[，。、；：""''【】《》]/.test(text)
     const hasContent = /[\u4e00-\u9fff]{2,}/.test(text)
-    
-    if (hasCommonPunctuation && hasContent) {
-      return true
-    }
+    if (hasCommonPunctuation && hasContent) return true
 
     const printableChars = text.replace(/[\s\p{P}]/gu, '').length
-    if (printableChars >= 3 && chineseChars >= 1) {
-      return true
-    }
+    if (printableChars >= 3 && chineseChars >= 1) return true
 
     return false
   }
 
+  private shouldSkipParagraph(text: string): boolean {
+    return this.hasTooManyJunkChars(text)
+  }
+
+  private hasTooManyJunkChars(text: string): boolean {
+    const junkPattern = new RegExp(`[${DocParser.JUNK_CHAR_CLASS}${DocParser.EXTRA_JUNK_CHARS}]`, 'g')
+    const junkMatches = text.match(junkPattern) || []
+    if (junkMatches.length > 0) {
+      const totalLength = text.trim().length
+      if (junkMatches.length > 2 || (totalLength > 0 && junkMatches.length / totalLength > 0.2)) return true
+    }
+    return false
+  }
+
+  private createFormattedParagraphsFromText(text: string): any[] {
+    const paragraphs: any[] = []
+    const textParagraphs = text.split(/\n\n/).filter(p => p.trim().length > 0)
+    for (let i = 0; i < textParagraphs.length; i++) {
+      const paraText = textParagraphs[i]
+      const cleaned = this.cleanParagraph(paraText.trim())
+      if (!this.shouldSkipParagraph(cleaned) && cleaned.length > 0) {
+        paragraphs.push({ text: cleaned, paraFormat: this.detectParagraphFormat(cleaned, i, textParagraphs.length), charFormat: this.guessCharFormat(cleaned, i) })
+      }
+    }
+    return paragraphs
+  }
+
   private extractTextFromFullFile(): string {
-    logger.log('从整个 OLE 文件中扫描提取文本')
-
     const fullData = new Uint8Array(this.buffer)
-    const text = this.extractTextSimple(fullData)
-
-    return text
+    return this.extractTextSimple(fullData)
   }
 }
 
-export function parseDocFile(file: File, _debug: boolean = DEBUG_MODE): Promise<{ text: string; success: boolean; error?: string }> {
+// ==================== Public API ====================
+
+/**
+ * Parse a .doc File object and extract plain text.
+ * @param file - The .doc file to parse.
+ * @param debug - If true, enables debug logging.
+ * @returns A promise that resolves to the parse result.
+ */
+export function parseDocFile(file: File, debug: boolean = false): Promise<{ text: string; success: boolean; error?: string }> {
+  if (debug) logger.enabled = true
   return new Promise((resolve) => {
-    logger.info(`开始解析文件: ${file.name}, 大小: ${file.size} bytes`)
-
     const reader = new FileReader()
-
     reader.onload = (e) => {
       const buffer = e.target?.result as ArrayBuffer
-
       if (!buffer) {
-        logger.error('文件读取失败: buffer 为空')
         resolve({ text: '', success: false, error: '无法读取文件' })
         return
       }
-
-      logger.info(`文件读取成功: ${buffer.byteLength} bytes`)
-
       try {
         const parser = new DocParser(buffer)
-        const result = parser.parse()
-
-        if (result.success) {
-          logger.info(`解析成功: ${result.text.length} 字符`)
-        } else {
-          logger.error(`解析失败: ${result.error}`)
-        }
-
-        resolve(result)
+        resolve(parser.parse())
       } catch (error) {
         const message = error instanceof Error ? error.message : '未知错误'
-        logger.error(`解析器异常: ${message}`)
         resolve({ text: '', success: false, error: `解析失败: ${message}` })
       }
     }
-
-    reader.onerror = () => {
-      logger.error('FileReader 错误')
-      resolve({ text: '', success: false, error: '文件读取失败' })
-    }
-
+    reader.onerror = () => resolve({ text: '', success: false, error: '文件读取失败' })
     reader.readAsArrayBuffer(file)
   })
 }
 
+/**
+ * Parse a .doc file from an ArrayBuffer and return the formatted document.
+ * @param buffer - The .doc file as ArrayBuffer.
+ * @param _fileName - Optional file name (for logging).
+ * @returns The parse result with paragraphs and text.
+ */
 export function parseDocFileFromBuffer(
   buffer: ArrayBuffer,
   _fileName?: string
-): {
-  success: boolean
-  document?: any
-  text?: string
-  error?: string
-} {
-  logger.info(`开始解析: ${_fileName || '未知'}, ${buffer.byteLength} bytes`)
-
+): { success: boolean; document?: any; text?: string; error?: string } {
   try {
     const parser = new DocParser(buffer)
-    const result = parser.parseWithFormat()
-
-    if (result.success) {
-      logger.info('解析成功')
-    } else {
-      logger.error(`解析失败: ${result.error}`)
-    }
-
-    return result
+    return parser.parseWithFormat()
   } catch (error) {
     const message = error instanceof Error ? error.message : '未知错误'
-    logger.error(`解析器异常: ${message}`)
     return { success: false, error: `解析失败: ${message}` }
   }
 }
 
-export function parseDocFileWithFormat(file: File, _debug: boolean = DEBUG_MODE): Promise<{
+/**
+ * Parse a .doc File and return the formatted document with paragraphs and text.
+ * @param file - The .doc file to parse.
+ * @param debug - If true, enables debug logging.
+ * @returns A promise that resolves to the parse result.
+ */
+export function parseDocFileWithFormat(file: File, debug: boolean = false): Promise<{
   success: boolean
   document?: any
   text?: string
   error?: string
 }> {
+  if (debug) logger.enabled = true
   return new Promise((resolve) => {
-    logger.info(`开始解析带格式的文件: ${file.name}, 大小: ${file.size} bytes`)
-
     const reader = new FileReader()
-
     reader.onload = (e) => {
       const buffer = e.target?.result as ArrayBuffer
-
       if (!buffer) {
-        logger.error('文件读取失败: buffer 为空')
         resolve({ success: false, error: '无法读取文件' })
         return
       }
-
       resolve(parseDocFileFromBuffer(buffer, file.name))
     }
-
-    reader.onerror = () => {
-      logger.error('FileReader 错误')
-      resolve({ success: false, error: '文件读取失败' })
-    }
-
+    reader.onerror = () => resolve({ success: false, error: '文件读取失败' })
     reader.readAsArrayBuffer(file)
   })
-}
-
-export function enableDebugMode() {
-  logger.info('调试模式已启用')
 }

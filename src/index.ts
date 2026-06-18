@@ -1,8 +1,10 @@
 import DocPreview from './components/DocPreview.vue'
-import { parseDocFile, parseDocFileWithFormat, DocParser } from './utils/docParser'
-import type { ParseResult, ParsedDocument, FormattedParagraph, FormattedRun, CHP, PAP } from './utils/docFormat'
+import { parseDocFile, parseDocFileWithFormat, parseDocFileFromBuffer, DocParser, enableDebugMode } from './utils/docParser'
+import { parseWithWorker } from './utils/parseWithWorker'
+import type { ParseResult, ParsedDocument, FormattedParagraph, CharacterFormat, ParagraphFormat, CharStyle, CharStyleSegment, CHP, PAP } from './utils/docFormat'
+import type { WorkerParseResult } from './utils/parseWithWorker'
 
-export { DocPreview, parseDocFile, parseDocFileWithFormat, DocParser }
-export type { ParseResult, ParsedDocument, FormattedParagraph, FormattedRun, CHP, PAP }
+export { DocPreview, parseDocFile, parseDocFileWithFormat, parseDocFileFromBuffer, parseDocFileFromBuffer as parseDocFileWithWorker, DocParser, enableDebugMode, parseWithWorker }
+export type { ParseResult, ParsedDocument, FormattedParagraph, CharacterFormat, ParagraphFormat, CharStyle, CharStyleSegment, CHP, PAP, WorkerParseResult }
 
 export default DocPreview

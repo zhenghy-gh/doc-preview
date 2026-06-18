@@ -12,6 +12,12 @@
 - 📄 **格式保留** - 尽可能保留文档的原始格式（字体、对齐、段落等）
 - 🔒 **隐私安全** - 文件仅在本地处理，不上传至任何服务器
 - 🌐 **跨平台** - 支持所有现代浏览器
+- 🎨 **暗色模式** - 支持亮色/暗色主题切换，自动持久化偏好
+- 🔍 **文档搜索** - 支持关键词搜索和高亮定位
+- 🔎 **缩放控制** - 支持页面缩放（50%~200%）
+- 🖨️ **打印支持** - 一键打印或导出为 PDF
+- 📋 **列表检测** - 自动识别编号列表和符号列表
+- ⌨️ **键盘快捷键** - 完整的键盘操作支持
 
 ## 快速开始
 
@@ -31,7 +37,7 @@ npm install @zhenghy/doc-preview
 <template>
   <div>
     <input type="file" @change="handleFileChange" accept=".doc" />
-    <DocPreview :file="currentFile" />
+    <DocPreview :source="currentFile" />
   </div>
 </template>
 
@@ -92,7 +98,7 @@ const handleFileChange = (event) => {
       template: `
         <div>
           <input type="file" @change="handleFileChange" accept=".doc" />
-          <DocPreview :file="currentFile" />
+          <DocPreview :source="currentFile" />
         </div>
       `
     }).mount('#preview-container')
@@ -101,36 +107,112 @@ const handleFileChange = (event) => {
 </html>
 ```
 
+## 键盘快捷键
+
+| 快捷键 | 功能 |
+|--------|------|
+| `Ctrl+F` / `Cmd+F` | 打开搜索栏 |
+| `F3` / `Ctrl+G` | 下一个匹配项 |
+| `Shift+F3` / `Ctrl+Shift+G` | 上一个匹配项 |
+| `Esc` | 关闭搜索栏 |
+| `Ctrl+P` / `Cmd+P` | 打印/导出 PDF |
+| `Ctrl+=` / `Ctrl++` | 放大 |
+| `Ctrl+-` | 缩小 |
+| `Ctrl+0` | 重置缩放 |
+
 ## API
 
 ### Props
 
 | 属性名 | 类型 | 必填 | 说明 |
 |--------|------|------|------|
-| `file` | `File` | 是 | 要预览的 DOC 文件对象 |
+| `source` | `File \| string \| null` | 是 | 要预览的 DOC 文件对象或远程 URL 地址 |
 
 ### 事件
 
 | 事件名 | 参数 | 说明 |
 |--------|------|------|
-| `error` | `(error: Error)` | 解析出错时触发 |
+| `error` | `(message: string)` | 解析出错时触发 |
+| `loaded` | `()` | 文档成功解析后触发 |
+| `loading` | `(isLoading: boolean)` | 加载开始/结束时触发 |
 
-### 示例
+### 组件方法（通过 ref 暴露）
+
+```ts
+const previewRef = ref()
+
+// 重新加载当前文档
+previewRef.value?.reload()
+
+// 获取解析后的纯文本
+const text = previewRef.value?.getPlainText()
+```
+
+### 导出函数
+
+| 函数名 | 说明 |
+|--------|------|
+| `parseDocFile(file)` | 解析 .doc 文件，返回纯文本 |
+| `parseDocFileWithFormat(file)` | 解析 .doc 文件，返回带格式的文档数据 |
+| `parseDocFileFromBuffer(buffer)` | 从 ArrayBuffer 解析 .doc 文件（同步） |
+| `parseWithWorker(buffer, maxScanBytes?)` | 在 Web Worker 中解析（异步，大文件不阻塞 UI） |
+| `enableDebugMode()` | 启用调试日志输出 |
+| `DocParser` | 解析器类（可自定义 `maxScanBytes`） |
+
+### 事件与方法示例
 
 ```vue
 <template>
   <DocPreview 
-    :file="currentFile"
+    ref="previewRef"
+    :source="currentFile"
     @error="handleError"
+    @loaded="onLoaded"
+    @loading="onLoading"
   />
+  <button @click="previewRef?.reload()">重新加载</button>
 </template>
 
 <script setup>
-const handleError = (error) => {
-  console.error('DOC 解析失败:', error)
-  alert('文件解析失败，请确保是有效的 DOC 文件')
-}
+import { ref } from 'vue'
+import { DocPreview } from '@zhenghy/doc-preview'
+
+const previewRef = ref()
+const currentFile = ref()
+
+function handleError(msg) { console.error('DOC 解析失败:', msg) }
+function onLoaded() { console.log('文档已加载') }
+function onLoading(isLoading) { console.log('加载中:', isLoading) }
 </script>
+```
+
+### 自定义扫描上限
+
+```ts
+import { DocParser } from '@zhenghy/doc-preview'
+
+const buffer = await file.arrayBuffer()
+// 自定义扫描上限为 5MB（默认 10MB）
+const parser = new DocParser(buffer, 5 * 1024 * 1024)
+const result = parser.parseWithFormat()
+```
+
+### Web Worker 解析
+
+> 自动行为：DocPreview 组件内部会在 `source` 超过 1MB 时自动使用 Worker。
+> 如果你在代码中直接使用 `parseWithWorker`，可以手动管理。
+
+```ts
+import { parseWithWorker } from '@zhenghy/doc-preview'
+
+const buffer = await file.arrayBuffer()
+const result = await parseWithWorker(buffer, 10 * 1024 * 1024)
+
+if (result.success) {
+  console.log('段落数:', result.document?.paragraphs.length)
+} else {
+  console.error('失败:', result.error)
+}
 ```
 
 ## 工作原理
@@ -150,13 +232,39 @@ const handleError = (error) => {
 - ✅ ANSI 和 Unicode 编码的中文文档
 - ✅ 基本格式（字体、字号、对齐、加粗、下划线）
 
+## 浏览器支持
+
+| 浏览器 | 最低版本 | Web Worker | 备注 |
+|--------|---------|-----------|------|
+| Chrome  | 80+     | ✅        | 推荐 |
+| Edge    | 80+     | ✅        | Chromium 内核 |
+| Firefox | 75+     | ✅        | 支持 Worker |
+| Safari  | 14+     | ✅        | macOS 11+/iOS 14+ |
+| IE 11   | ❌      | ❌        | 不支持 |
+
+> 📌 较老的浏览器会自动降级到主线程解析。功能完整，但大文件可能阻塞 UI。
+
+## 性能
+
+- **<1MB 文件**: 同步解析（主线程）
+- **≥1MB 文件**: Web Worker 解析（自动）
+- **默认扫描上限**: 10MB（可配置 `maxScanBytes`）
+- **典型解析速度**:
+  - 小型 (<100KB): <50ms
+  - 中型 (1MB): ~200ms
+  - 大型 (10MB): ~1.5s (Worker 中)
+
 ## 限制
 
 - 不支持 DOCX 格式（请使用专门的 DOCX 解析器）
 - 不支持复杂的图形、图片、宏等高级特性
 - 不支持修订模式、批注等协作功能
+- 格式检测基于启发式规则，不读取完整的 CHP/PAP 格式表
+- 某些由 macOS `textutil` 生成的 .doc 文件可能需要手动调整 fComplex 标志
 
 ## 开发
+
+详细的架构说明请参阅 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
 ### 安装依赖
 
@@ -172,13 +280,31 @@ npm run dev
 
 访问 http://localhost:5173 查看开发服务器。
 
+### 单元测试
+
+```bash
+npm test
+```
+
+### 监听模式测试
+
+```bash
+npm run test:watch
+```
+
+### 类型检查
+
+```bash
+npx vue-tsc --noEmit
+```
+
 ### 构建库版本
 
 ```bash
 npm run build:lib
 ```
 
-构建后的文件将输出到 `dist` 目录。
+构建后的文件将输出到 `dist` 目录，含 ES + UMD 双格式和 `.d.ts` 类型声明。
 
 ### 构建文档预览版本
 
@@ -228,17 +354,33 @@ npm run build
 doc-preview/
 ├── src/
 │   ├── components/
-│   │   └── DocPreview.vue    # 主预览组件
+│   │   └── DocPreview.vue           # 主预览组件（工具栏/搜索/缩放/打印/大纲）
 │   ├── utils/
-│   │   ├── docParser.ts      # DOC 解析核心
-│   │   ├── docFormat.ts      # 格式工具
-│   │   └── docFormatTypes.ts  # 类型定义
-│   ├── App.vue               # 应用入口
-│   ├── main.ts               # 主程序
-│   └── style.css             # 全局样式
-├── docs/                     # 测试文档
+│   │   ├── logger.ts                # 日志工具
+│   │   ├── oleParser.ts             # OLE2/CFB 复合文档结构解析
+│   │   ├── fibParser.ts             # FIB (File Information Block) 解析
+│   │   ├── docParser.ts             # 文本提取 + 格式推断 + 公开 API
+│   │   ├── docParser.worker.ts      # Web Worker 入口
+│   │   ├── parseWithWorker.ts       # Worker 封装 + 主线程降级
+│   │   └── docFormat.ts             # 类型定义
+│   ├── App.vue                      # 应用入口（上传/拖拽/URL 加载）
+│   ├── index.ts                     # 库导出入口
+│   ├── main.ts                      # 开发模式入口
+│   ├── vite-env.d.ts                # Vite 类型声明
+│   └── style.css                    # 全局样式 / CSS 变量 / 暗色主题
+├── public/
+│   ├── favicon.svg                  # 自定义图标
+│   └── 404.html                     # GitHub Pages SPA 路由
+├── tests/                           # Vitest 单元测试 (30+ tests)
+│   ├── logger.test.ts
+│   ├── fibParser.test.ts
+│   ├── oleParser.test.ts
+│   └── docParser.test.ts
+├── .github/workflows/deploy.yml     # CI: type-check + test + build + deploy
+├── LICENSE                          # MIT 许可证
 ├── package.json
-└── vite.config.ts
+├── vite.config.ts
+└── vitest.config.ts
 ```
 
 ## 贡献
