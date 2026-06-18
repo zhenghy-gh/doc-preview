@@ -1,8 +1,50 @@
 # DOC Preview
 
-纯前端 DOC 文件预览组件，无需后端服务，支持在浏览器中直接预览 Microsoft Word (.doc) 文件。
+> A pure-frontend Vue 3 component for previewing Microsoft Word `.doc` files
+> (OLE2 / CFB / Compound File Binary format) in the browser. No server, no
+> upload, no backend. Search, zoom, print, dark mode, Web Worker parsing.
+
+A **DOC file viewer** / **Word document previewer** built entirely in the browser.
+A drop-in `<DocPreview>` Vue component for `.doc` (Word 97-2003) files.
+Useful when you need to display Word documents on a website without sending
+them to a server. Renders the original formatting (font size, bold, alignment,
+list type) and supports search, zoom, print, and dark mode.
 
 [在线预览地址](https://zhenghy-gh.github.io/doc-preview/) - 点击此处即可在线体验，上传您的 .doc 文件即可预览
+
+## 关键词 / Keywords
+
+`doc`, `doc-preview`, `doc-viewer`, `docx`, `docx-preview`, `word`, `word-preview`,
+`word-viewer`, `microsoft word`, `ms word`, `vue`, `vue3`, `vue component`,
+`preview`, `viewer`, `ole2`, `cfb`, `compound file`, `document parser`,
+`word parser`, `binary parser`, `frontend`, `in-browser`, `no backend`,
+`pure frontend`
+
+## Features / 简介 (English)
+
+- **Pure frontend**: parses and renders entirely in the browser — no upload, no
+  server, no API key, no CDN dependency for parsing.
+- **Vue 3 component**: drop-in `<DocPreview :source="file" />` for any Vue 3
+  app; works with file upload, URL, or in-memory `File` object.
+- **Microsoft Word .doc (OLE2 / CFB)**: parses the legacy Word 97-2003 binary
+  format directly, including UTF-16LE and 8-bit compressed text streams, FIB
+  headers, and heuristic format detection for font size / bold / alignment.
+- **DOCX** is not supported by this package — for `.docx` (Open XML) files,
+  use a dedicated DOCX parser. This package is the **`.doc` specialist**.
+- **Web Worker parsing**: files >1 MB are parsed off the main thread so the
+  UI never freezes.
+- **Built-in UX**: keyword search with highlighting, zoom (50%–200%), print
+  (browser print to PDF), text copy, text download, document outline / TOC.
+- **Accessibility**: keyboard shortcuts, ARIA labels, skip-link, dark mode
+  with `localStorage` persistence, mobile responsive.
+- **Privacy**: files never leave the browser — safe for confidential docs.
+
+### Use Cases
+
+- A web app that needs to preview user-uploaded Word documents
+- An intranet tool that displays .doc files in a browser without a server
+- A document preview component for a content management system
+- A privacy-first document viewer (no upload to third-party servers)
 
 ## 功能特性
 

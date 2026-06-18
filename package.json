@@ -1,7 +1,7 @@
 {
   "name": "@zhenghy/doc-preview",
-  "version": "0.3.1",
-  "description": "A Vue 3 component for previewing .doc files in browser",
+  "version": "0.3.2",
+  "description": "Vue 3 component for previewing Microsoft Word .doc files (OLE2/CFB) in the browser. Pure frontend, no server, no backend. Supports search, zoom, print, dark mode.",
   "type": "module",
   "main": "./dist/doc-preview.umd.cjs",
   "module": "./dist/doc-preview.js",
@@ -26,21 +26,44 @@
     "test:coverage": "vitest run --coverage"
   },
   "keywords": [
-    "vue3",
-    "vue",
     "doc",
-    "preview",
+    "doc-preview",
+    "doc-viewer",
+    "docx",
+    "docx-preview",
+    "docx-viewer",
     "word",
+    "word-preview",
+    "word-viewer",
+    "ms-word",
+    "microsoft-word",
+    "vue",
+    "vue3",
+    "vue-component",
+    "preview",
+    "viewer",
     "ole2",
     "cfb",
-    "document",
-    "parser"
+    "compound-file",
+    "document-parser",
+    "word-parser",
+    "binary-parser",
+    "frontend",
+    "browser",
+    "in-browser",
+    "no-backend",
+    "pure-frontend",
+    "vue-plugin"
   ],
   "author": "zhenghy",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/zhenghy-gh/doc-preview.git"
+  },
+  "homepage": "https://github.com/zhenghy-gh/doc-preview#readme",
+  "bugs": {
+    "url": "https://github.com/zhenghy-gh/doc-preview/issues"
   },
   "peerDependencies": {
     "vue": "^3.0.0"
