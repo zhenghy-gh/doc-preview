@@ -2,11 +2,12 @@
 import { ref, computed, watch, onMounted, onUnmounted, onErrorCaptured, nextTick } from 'vue'
 import { parseDocFileWithFormat, parseDocFileFromBuffer } from '../utils/docParser'
 import { parseWithWorker } from '../utils/parseWithWorker'
-import { renderTableHtml, splitTableCells } from '../utils/tableText'
+import { renderTableHtml, renderNestedTableHtml, splitTableCells } from '../utils/tableText'
 import type { CharacterFormat, ParagraphFormat, CharStyleSegment, TableInfo, RevisionMark, RevisionType, BookmarkRange, SectionInfo, PageFieldRange, CrossReferenceRange, ShapeInfo, EquationInfo, ChartInfo, WordArtInfo } from '../utils/docFormat'
 import type { DocumentFields } from '../utils/fieldParser'
 import { applyRevisionsToText } from '../utils/revisionRender'
 import type { RevisionMode } from '../utils/revisionRender'
+import { WORD_VERSION_LABELS, type WordVersion } from '../utils/fibParser'
 
 const WORKER_THRESHOLD = 1024 * 1024 // 1MB — files larger than this use Web Worker
 const isWorkerSupported = typeof Worker !== 'undefined'
@@ -25,7 +26,7 @@ interface PictureInfo {
 
 interface ParserOutput {
   success: boolean
-  document?: { paragraphs: FormattedParagraphOutput[]; stories?: DocumentStories; images?: string[]; pictures?: PictureInfo[]; hyperlinks?: HyperlinkRange[]; toc?: TocEntry[]; properties?: DocumentProperties; docFlags?: DocumentFlags; revisions?: RevisionMark[]; documentFields?: DocumentFields; bookmarks?: BookmarkRange[]; sections?: SectionInfo[]; pageFields?: PageFieldRange[]; crossReferences?: CrossReferenceRange[]; shapes?: ShapeInfo[]; equations?: EquationInfo[]; charts?: ChartInfo[]; wordArts?: WordArtInfo[] }
+  document?: { paragraphs: FormattedParagraphOutput[]; stories?: DocumentStories; images?: string[]; pictures?: PictureInfo[]; hyperlinks?: HyperlinkRange[]; toc?: TocEntry[]; index?: IndexEntry[]; properties?: DocumentProperties; docFlags?: DocumentFlags; wordVersion?: string; revisions?: RevisionMark[]; documentFields?: DocumentFields; bookmarks?: BookmarkRange[]; sections?: SectionInfo[]; pageFields?: PageFieldRange[]; crossReferences?: CrossReferenceRange[]; shapes?: ShapeInfo[]; equations?: EquationInfo[]; charts?: ChartInfo[]; wordArts?: WordArtInfo[]; styleSet?: { name: string; isCustom?: boolean } }
   text?: string
   error?: string
 }
@@ -40,6 +41,13 @@ interface HyperlinkRange {
 interface TocEntry {
   level: number
   text: string
+  pageNumber?: string
+  cp?: number
+}
+
+interface IndexEntry {
+  mainTerm: string
+  subTerm?: string
   pageNumber?: string
   cp?: number
 }
@@ -145,6 +153,19 @@ const loadingTime = ref(0)
 const loadingTimer = ref<ReturnType<typeof setInterval> | null>(null)
 const fileSize = ref('')
 
+// --- Virtual scroll (page-level) ---
+// pages: 每页的 HTML 字符串数组（与 .page-content 一一对应）
+// virtualScrollEnabled: 是否启用虚拟滚动（搜索/打印时临时关闭）
+// visibleStart/visibleEnd: 当前可视页面索引范围（含缓冲区）
+// pageHeights: 已渲染页面的真实高度缓存（px），用于占位高度计算
+const pages = ref<string[]>([])
+const virtualScrollEnabled = ref(true)
+const visibleStart = ref(0)
+const visibleEnd = ref(0)
+const pageHeights = ref<Record<number, number>>({})
+let scrollTicking = false
+const VIRTUAL_BUFFER = 1 // 上下各缓冲的页面数
+
 // 缓存最近的解析结果，用于切换隐藏文字/修订显示等需要重新渲染的场景
 const lastParseResult = ref<{
   paragraphs: ParaWithList[]
@@ -157,11 +178,23 @@ const outline = ref<OutlineItem[]>([])
 const showOutline = ref(false)
 const previewRef = ref<HTMLElement | null>(null)
 
+// --- Shortcuts panel ---
+const showShortcuts = ref(false)
+
 // --- Zoom ---
 const zoomLevel = ref(100)
 const MIN_ZOOM = 50
 const MAX_ZOOM = 200
 const ZOOM_STEP = 10
+
+// --- Dark mode ---
+const darkMode = ref(document.documentElement.classList.contains('dark'))
+
+function toggleDarkMode() {
+  darkMode.value = !darkMode.value
+  document.documentElement.classList.toggle('dark', darkMode.value)
+  localStorage.setItem('dark-mode', String(darkMode.value))
+}
 
 // --- Pagination ---
 const currentPage = ref(1)
@@ -199,24 +232,34 @@ function goToNextPage() {
 }
 
 function scrollToPage(page: number) {
-  const container = previewRef.value?.querySelector('.document-content')
-  if (!container) return
-  const pageElements = container.querySelectorAll('.page-content')
-  const target = pageElements[page - 1]
-  if (target) {
-    target.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  // 虚拟滚动下，目标页面可能未渲染。先扩大可视范围确保目标页可见，再滚动。
+  const idx = page - 1
+  if (virtualScrollEnabled.value && pages.value.length > VIRTUAL_BUFFER * 2 + 1) {
+    if (idx < visibleStart.value || idx > visibleEnd.value) {
+      visibleStart.value = Math.max(0, idx - VIRTUAL_BUFFER)
+      visibleEnd.value = Math.min(pages.value.length - 1, idx + VIRTUAL_BUFFER)
+    }
   }
+  nextTick(() => {
+    const container = previewRef.value?.querySelector('.document-content')
+    if (!container) return
+    const pageElements = container.querySelectorAll('.page-content')
+    const target = pageElements[idx]
+    if (target) {
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    } else {
+      // 回退：滚动到占位 div
+      const placeholders = container.querySelectorAll('.page-placeholder')
+      const ph = placeholders[idx]
+      if (ph) ph.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+  })
 }
 
 function updateTotalPages() {
+  // 虚拟滚动下用 pages 数组长度，避免依赖 DOM 中实际渲染的 .page-content 数量
   nextTick(() => {
-    const container = previewRef.value?.querySelector('.document-content')
-    if (!container) {
-      totalPages.value = 1
-      return
-    }
-    const pageElements = container.querySelectorAll('.page-content')
-    totalPages.value = pageElements.length || 1
+    totalPages.value = pages.value.length || 1
     if (currentPage.value > totalPages.value) {
       currentPage.value = totalPages.value
     }
@@ -230,6 +273,8 @@ const searchResults = ref<SearchMatch[]>([])
 const currentSearchIndex = ref(-1)
 const searchInputRef = ref<HTMLInputElement | null>(null)
 const originalHtml = ref('') // saved before search highlighting
+const searchCaseSensitive = ref(false)
+const searchWholeWord = ref(false)
 
 // --- Document stats ---
 const wordCount = ref(0)
@@ -260,6 +305,10 @@ const hyperlinks = ref<HyperlinkRange[]>([])
 // --- Table of Contents ---
 const toc = ref<TocEntry[]>([])
 const showToc = ref(false)
+
+// --- Index ---
+const index = ref<IndexEntry[]>([])
+const showIndex = ref(false)
 
 // --- Revision marks (track changes: insert / delete) ---
 const revisions = ref<RevisionMark[]>([])
@@ -325,6 +374,9 @@ const showCharts = ref(false)
 // --- WordArt (Office Art Drawing WordArt objects) ---
 const wordArts = ref<WordArtInfo[]>([])
 const showWordArts = ref(false)
+
+// --- Style Set ---
+const styleSet = ref<{ name: string; isCustom?: boolean } | null>(null)
 
 const SHAPE_TYPE_LABEL: Record<string, string> = {
   rectangle: '矩形',
@@ -559,6 +611,12 @@ const docFields = ref<DocumentFields | null>(null)
 // --- Document flags (from DOP) ---
 const docFlags = ref<DocumentFlags | null>(null)
 const showDocFlags = ref(false)
+const wordVersion = ref<string | null>(null)
+
+const wordVersionLabel = computed(() => {
+  if (!wordVersion.value) return ''
+  return WORD_VERSION_LABELS[wordVersion.value as WordVersion] || wordVersion.value
+})
 
 const docFlagItems = computed<Array<{ label: string; description: string }>>(() => {
   if (!docFlags.value) return []
@@ -651,12 +709,37 @@ const storySections = computed<StorySection[]>(() => {
 })
 
 function formatStoryText(text: string): string {
-  return text
-    .split(/\n+/)
-    .map(line => line.trim())
-    .filter(line => line.length > 0)
-    .map(line => `<p style="margin:0 0 6px 0">${escapeHtml(line)}</p>`)
-    .join('')
+  // Split by single newline to preserve paragraph structure.
+  // Empty paragraphs become spacing, but consecutive empties are collapsed.
+  const lines = text.split('\n')
+  const htmlParts: string[] = []
+  let prevEmpty = false
+  for (const raw of lines) {
+    // Trim trailing whitespace only; keep leading spaces (indentation).
+    const line = raw.replace(/\s+$/, '')
+    if (line.length === 0) {
+      if (!prevEmpty && htmlParts.length > 0) {
+        htmlParts.push('<p style="margin:0 0 6px 0">&nbsp;</p>')
+      }
+      prevEmpty = true
+      continue
+    }
+    prevEmpty = false
+    // Handle in-paragraph special chars BEFORE escaping:
+    //   \v (soft break / Shift+Enter) → <br> placeholder
+    //   \f (form feed / page break) → page-break marker placeholder
+    //   \u0007 (table cell mark) → cell separator placeholder
+    // Use placeholders to avoid interference with escapeHtml.
+    const SOFT_BR = '\u000b'
+    const PAGE_BR = '\u000c'
+    const CELL_MARK = '\u0007'
+    const escaped = escapeHtml(line)
+      .replace(new RegExp(SOFT_BR, 'g'), '<br>')
+      .replace(new RegExp(PAGE_BR, 'g'), '<span style="display:inline-block;padding:0 4px;color:#999;font-size:0.85em">[分页]</span>')
+      .replace(new RegExp(CELL_MARK, 'g'), '<span style="display:inline-block;padding:0 4px;color:#999;font-size:0.85em">│</span>')
+    htmlParts.push(`<p style="margin:0 0 6px 0">${escaped}</p>`)
+  }
+  return htmlParts.join('')
 }
 
 // ---- Helpers ----
@@ -840,8 +923,10 @@ const renderResult = (result: ParserOutput) => {
     buildOutline(result.document.paragraphs)
     hyperlinks.value = result.document.hyperlinks || []
     toc.value = result.document.toc || []
+    index.value = result.document.index || []
     docProperties.value = result.document.properties || null
     docFlags.value = result.document.docFlags || null
+    wordVersion.value = result.document.wordVersion || null
     docFields.value = result.document.documentFields || null
     revisions.value = result.document.revisions || []
     showRevisions.value = false
@@ -857,6 +942,7 @@ const renderResult = (result: ParserOutput) => {
     equations.value = result.document.equations || []
     charts.value = result.document.charts || []
     wordArts.value = result.document.wordArts || []
+    styleSet.value = result.document.styleSet || null
     showCrossReferences.value = false
     // 缓存解析结果用于后续重新渲染（如切换隐藏文字显示）
     lastParseResult.value = {
@@ -864,7 +950,7 @@ const renderResult = (result: ParserOutput) => {
       hyperlinks: result.document.hyperlinks,
       revisions: result.document.revisions,
     }
-    htmlContent.value = formatFormattedTextToHtml(result.document.paragraphs, hyperlinks.value, revisions.value)
+    applyFormattedPages(result.document.paragraphs, hyperlinks.value, revisions.value)
     stories.value = result.document.stories || null
     showStories.value = false
     images.value = result.document.images || []
@@ -881,6 +967,7 @@ const renderResult = (result: ParserOutput) => {
     hyperlinks.value = []
     docProperties.value = null
     docFlags.value = null
+    wordVersion.value = null
     revisions.value = []
     revisionMode.value = 'marks'
     bookmarks.value = []
@@ -891,7 +978,12 @@ const renderResult = (result: ParserOutput) => {
     equations.value = []
     charts.value = []
     wordArts.value = []
-    htmlContent.value = formatTextWithInferredFormat(result.text)
+    const inferredHtml = formatTextWithInferredFormat(result.text)
+    pages.value = [inferredHtml]
+    htmlContent.value = inferredHtml
+    pageHeights.value = {}
+    visibleStart.value = 0
+    visibleEnd.value = 0
     stories.value = null
     showStories.value = false
     images.value = []
@@ -1004,9 +1096,10 @@ function extractListItemText(text: string, listType: string): string {
     .replace(/^[○●▪▸►→◇◆▪▫◦‣⁃]\s*/, '')
 }
 
-function collectTableBlock(paragraphs: ParaWithList[], startIndex: number): { rows: string[][]; rowsTableInfo?: TableInfo[]; nextIndex: number } | null {
+function collectTableBlock(paragraphs: ParaWithList[], startIndex: number): { rows: string[][]; rowsTableInfo?: TableInfo[]; rowsDepth?: number[]; nextIndex: number } | null {
   const rows: string[][] = []
   const rowsTableInfo: TableInfo[] = []
+  const rowsDepth: number[] = []
   let hasTableInfo = false
   let i = startIndex
 
@@ -1016,6 +1109,8 @@ function collectTableBlock(paragraphs: ParaWithList[], startIndex: number): { ro
     if (!cells) break
     rows.push(cells)
     const tableInfo = (para.paraFormat as ParagraphFormat).table
+    const depth = tableInfo?.depth ?? 1
+    rowsDepth.push(depth)
     if (tableInfo) {
       hasTableInfo = true
       rowsTableInfo.push(tableInfo)
@@ -1027,7 +1122,7 @@ function collectTableBlock(paragraphs: ParaWithList[], startIndex: number): { ro
   }
 
   if (rows.length < 2) return null
-  return { rows, rowsTableInfo: hasTableInfo ? rowsTableInfo : undefined, nextIndex: i }
+  return { rows, rowsTableInfo: hasTableInfo ? rowsTableInfo : undefined, rowsDepth, nextIndex: i }
 }
 
 interface ListItemNode {
@@ -1044,12 +1139,15 @@ interface ListItemNode {
  * Items are grouped by their `level` field: when a deeper item follows a
  * shallower one, it becomes a child of the previous item; when a shallower
  * item follows a deeper one, the stack pops back to the right parent.
+ *
+ * @param startAt - For ordered lists, the starting number (default 1). Used for list number continuation.
  */
 function renderNestedList(
   listTag: 'ol' | 'ul',
   listStyle: string,
   items: Array<{ text: string; level: number; charFormat: CharacterFormat; paraFormat: ParagraphFormat }>,
   _startLevel: number,
+  startAt: number = 1,
 ): string {
   if (items.length === 0) return ''
 
@@ -1079,17 +1177,18 @@ function renderNestedList(
   }
 
   // Render the tree recursively.
-  const render = (node: ListItemNode): string => {
+  const render = (node: ListItemNode, isRoot: boolean = false): string => {
     if (node.children.length === 0) return ''
     const renderedItems = node.children.map(child => {
       const content = renderParagraphHtml(child.text, child.charFormat, child.paraFormat, 0, child.text.length, [])
         .replace(/^<p[^>]*>/, '').replace(/<\/p>$/, '')
-      const subList = render(child)
+      const subList = render(child, false)
       return `<li>${content}${subList}</li>`
     })
-    return `<${listTag} style="list-style:${listStyle};padding-left:2em">${renderedItems.join('')}</${listTag}>`
+    const startAttr = isRoot && listTag === 'ol' && startAt > 1 ? ` start="${startAt}"` : ''
+    return `<${listTag}${startAttr} style="list-style:${listStyle};padding-left:2em">${renderedItems.join('')}</${listTag}>`
   }
-  return render(root)
+  return render(root, true)
 }
 
 function renderParagraphHtml(
@@ -1179,8 +1278,179 @@ function renderParagraphHtml(
   }))
 }
 
-const formatFormattedTextToHtml = (paragraphs: ParaWithList[], hyperlinks?: HyperlinkRange[], revisions?: RevisionMark[]): string => {
-  if (!paragraphs || paragraphs.length === 0) return '<p>文档内容为空</p>'
+/**
+ * Render a floating textbox anchor marker.
+ *
+ * Textbox shapes from the Office Art Drawing Container carry position (x, y),
+ * size (width, height) and anchor CP information. This marker is displayed
+ * at the anchor paragraph to indicate where the textbox is positioned.
+ *
+ * Position and size are shown in both twips and pixels (1 twip = 1/15 px).
+ */
+function renderTextboxAnchorHtml(shape: ShapeInfo): string {
+  const twipsToPx = (twips: number): number => Math.round(twips / 15)
+  const parts: string[] = []
+  if (shape.x !== undefined && shape.y !== undefined) {
+    parts.push(`位置: ${twipsToPx(shape.x)}×${twipsToPx(shape.y)}px`)
+  }
+  if (shape.width !== undefined && shape.height !== undefined) {
+    parts.push(`尺寸: ${twipsToPx(shape.width)}×${twipsToPx(shape.height)}px`)
+  }
+  if (shape.anchorType) {
+    const anchorLabel = SHAPE_ANCHOR_LABEL[shape.anchorType] || shape.anchorType
+    parts.push(`锚点: ${anchorLabel}`)
+  }
+  const info = parts.length > 0 ? parts.join(' · ') : ''
+  const titleParts: string[] = []
+  if (shape.x !== undefined && shape.y !== undefined) {
+    titleParts.push(`位置: (${shape.x}, ${shape.y}) twips`)
+  }
+  if (shape.width !== undefined && shape.height !== undefined) {
+    titleParts.push(`尺寸: ${shape.width} × ${shape.height} twips`)
+  }
+  if (shape.anchorCp !== undefined) {
+    titleParts.push(`锚点 CP: ${shape.anchorCp}`)
+  }
+  if (shape.spid) {
+    titleParts.push(`SPID: ${shape.spid}`)
+  }
+  if (shape.floating) {
+    titleParts.push('浮动')
+  }
+  const title = titleParts.join(' · ')
+  return `<div class="textbox-anchor-marker" title="${escapeHtml(title)}" data-spid="${shape.spid}">
+  <span class="textbox-anchor-icon">⬚</span>
+  <span class="textbox-anchor-label">文本框</span>
+  ${info ? `<span class="textbox-anchor-info">${escapeHtml(info)}</span>` : ''}
+</div>`
+}
+
+function renderInlinePictureHtml(pic: {
+  format: string
+  dataUrl: string
+  widthPx?: number
+  heightPx?: number
+  floating?: boolean
+  cp?: number
+}): string {
+  const styleParts: string[] = []
+  if (pic.widthPx) {
+    styleParts.push(`max-width: ${Math.min(pic.widthPx, 600)}px`)
+  } else {
+    styleParts.push('max-width: 100%')
+  }
+  if (pic.heightPx) {
+    styleParts.push(`max-height: ${Math.min(pic.heightPx, 500)}px`)
+  }
+  const style = styleParts.join('; ')
+  const caption = `${pic.format.toUpperCase()}${pic.widthPx && pic.heightPx ? ` · ${pic.widthPx}×${pic.heightPx}px` : ''}`
+  return `<div class="inline-picture-container">
+  <img src="${pic.dataUrl}" alt="${escapeHtml(caption)}" class="inline-picture" style="${style}" loading="lazy" />
+  <div class="inline-picture-caption">${escapeHtml(caption)}</div>
+</div>`
+}
+
+/**
+ * 应用格式化页面数组到状态：同步更新 pages（虚拟滚动用）和 htmlContent（打印/复制用），
+ * 并重置虚拟滚动状态（高度缓存、可视范围）。
+ */
+function applyFormattedPages(paragraphs: ParaWithList[], hyperlinks?: HyperlinkRange[], revisions?: RevisionMark[]) {
+  const pageArr = formatFormattedTextToHtml(paragraphs, hyperlinks, revisions)
+  pages.value = pageArr
+  htmlContent.value = pageArr.join('\n')
+  // 重置虚拟滚动状态
+  pageHeights.value = {}
+  visibleStart.value = 0
+  visibleEnd.value = Math.min(pageArr.length, VIRTUAL_BUFFER * 2 + 1)
+  // DOM 更新后测量并刷新可视范围
+  nextTick(() => {
+    measureVisiblePageHeights()
+    updateVisibleRange()
+  })
+}
+
+/** 估算页面占位高度（px）：优先使用缓存的真实高度，否则用 pageHeight 估算 */
+function getPagePlaceholderHeight(idx: number): number {
+  const cached = pageHeights.value[idx]
+  if (cached && cached > 0) return cached
+  // 默认按 A4 页面高度估算（与 formatFormattedTextToHtml 中的 pageHeightPx 一致）
+  return Math.max(400, pageHeight.value * 1.333)
+}
+
+/** 判断页面索引是否在当前可视范围内（应渲染真实内容） */
+function isPageVisible(idx: number): boolean {
+  if (!virtualScrollEnabled.value) return true
+  if (pages.value.length <= VIRTUAL_BUFFER * 2 + 1) return true
+  return idx >= visibleStart.value && idx <= visibleEnd.value
+}
+
+/** 测量已渲染页面的真实高度并缓存 */
+function measureVisiblePageHeights() {
+  const container = previewRef.value?.querySelector('.document-content')
+  if (!container) return
+  const pageEls = container.querySelectorAll('.page-content')
+  pageEls.forEach((el, idx) => {
+    const rect = (el as HTMLElement).getBoundingClientRect()
+    if (rect.height > 0) {
+      pageHeights.value[idx] = rect.height
+    }
+  })
+}
+
+/** 根据滚动位置计算当前可视页面索引范围（含缓冲区） */
+function updateVisibleRange() {
+  if (!virtualScrollEnabled.value) return
+  const container = previewRef.value?.querySelector('.document-content') as HTMLElement | null
+  if (!container) return
+  const total = pages.value.length
+  if (total === 0) return
+  // 小文档不启用虚拟滚动
+  if (total <= VIRTUAL_BUFFER * 2 + 1) {
+    visibleStart.value = 0
+    visibleEnd.value = total - 1
+    return
+  }
+  // 使用容器相对于视口的位置计算可视范围
+  const containerRect = container.getBoundingClientRect()
+  const viewportTop = -containerRect.top
+  const viewportHeight = window.innerHeight
+  // 累加各页面高度，定位当前可视的页面索引
+  let accumulated = 0
+  let start = 0
+  let end = total - 1
+  for (let i = 0; i < total; i++) {
+    const h = getPagePlaceholderHeight(i)
+    const pageBottom = accumulated + h
+    if (pageBottom < viewportTop) {
+      start = i + 1
+    }
+    if (accumulated > viewportTop + viewportHeight) {
+      end = i - 1
+      break
+    }
+    accumulated = pageBottom
+  }
+  start = Math.max(0, start - VIRTUAL_BUFFER)
+  end = Math.min(total - 1, end + VIRTUAL_BUFFER)
+  if (start !== visibleStart.value || end !== visibleEnd.value) {
+    visibleStart.value = start
+    visibleEnd.value = end
+  }
+}
+
+/** 滚动事件处理器（throttle 用 requestAnimationFrame） */
+function handleVirtualScroll() {
+  if (scrollTicking) return
+  scrollTicking = true
+  requestAnimationFrame(() => {
+    updateVisibleRange()
+    measureVisiblePageHeights()
+    scrollTicking = false
+  })
+}
+
+const formatFormattedTextToHtml = (paragraphs: ParaWithList[], hyperlinks?: HyperlinkRange[], revisions?: RevisionMark[]): string[] => {
+  if (!paragraphs || paragraphs.length === 0) return ['<p>文档内容为空</p>']
 
   // Build a map of hyperlinks by paragraph CP range
   const hyperlinkMap = new Map<number, HyperlinkRange[]>()
@@ -1194,14 +1464,52 @@ const formatFormattedTextToHtml = (paragraphs: ParaWithList[], hyperlinks?: Hype
     }
   }
 
+  // Build a sorted list of textbox shapes with anchor CP for inline markers.
+  // These shapes are rendered as floating markers at their anchor paragraph
+  // to indicate where the textbox is positioned in the document.
+  const textBoxShapes = (shapes.value || [])
+    .filter(s => s.type === 'textbox' && s.anchorCp !== undefined && s.anchorCp > 0)
+    .slice()
+    .sort((a, b) => (a.anchorCp! - b.anchorCp!))
+
+  // Build a sorted list of inline pictures (those with a known CP position)
+  // for rendering at the corresponding paragraph in the document body.
+  const inlinePictures = (pictures.value || [])
+    .filter(p => p.cp !== undefined && p.cp >= 0 && !p.floating)
+    .slice()
+    .sort((a, b) => (a.cp! - b.cp!))
+
   const result: string[] = []
   const pageContent: string[] = []
   let currentPageHeight = 0
   const pageHeightPx = pageHeight.value * 1.333
 
+  // Section lookup for multi-column rendering.
+  // We track which section the current paragraph belongs to so that
+  // finalizePage() can apply CSS column-count to the page container.
+  const sectionList = sections.value || []
+  let currentColumnCount = 1
+  let currentColumnSpacingPt: number | undefined
+
+  const findSectionForCp = (cp: number): SectionInfo | undefined => {
+    for (const sec of sectionList) {
+      if (cp >= sec.cpStart && cp < sec.cpEnd) return sec
+    }
+    return undefined
+  }
+
   const finalizePage = () => {
     if (pageContent.length > 0) {
-      result.push(`<div class="page-content">${pageContent.join('\n')}</div>`)
+      const styleParts: string[] = []
+      if (currentColumnCount > 1) {
+        styleParts.push(`column-count: ${currentColumnCount}`)
+        styleParts.push('column-fill: auto')
+        if (currentColumnSpacingPt !== undefined) {
+          styleParts.push(`column-gap: ${Math.round(currentColumnSpacingPt * 1.333)}px`)
+        }
+      }
+      const style = styleParts.length > 0 ? ` style="${styleParts.join('; ')}"` : ''
+      result.push(`<div class="page-content"${style}>${pageContent.join('\n')}</div>`)
       pageContent.length = 0
       currentPageHeight = 0
     }
@@ -1225,18 +1533,36 @@ const formatFormattedTextToHtml = (paragraphs: ParaWithList[], hyperlinks?: Hype
   }
 
   let i = 0
+  const listCounters = new Map<number, number>()
 
   while (i < paragraphs.length) {
     const para = paragraphs[i]
     const text = para.text
     if (!text || !text.trim()) { i++; continue }
 
+    // Track which section this paragraph belongs to and update column settings.
+    // When the column count changes (section switch), finalize the current page
+    // so that content with different column layouts stays in separate pages.
+    const paraCp = (para as any)._cpStart || 0
+    const sec = findSectionForCp(paraCp)
+    if (sec) {
+      const newColumnCount = sec.columnCount || 1
+      const newColumnSpacing = sec.columnSpacingPt
+      if (newColumnCount !== currentColumnCount) {
+        finalizePage()
+        currentColumnCount = newColumnCount
+        currentColumnSpacingPt = newColumnSpacing
+      } else if (newColumnSpacing !== currentColumnSpacingPt) {
+        currentColumnSpacingPt = newColumnSpacing
+      }
+    }
+
     const paraFormat = para.paraFormat
     const listType = (paraFormat as any).listType
     const tableBlock = collectTableBlock(paragraphs, i)
 
     if (tableBlock) {
-      const html = renderTableHtml(tableBlock.rows, tableBlock.rowsTableInfo)
+      const html = renderNestedTableHtml(tableBlock.rows, tableBlock.rowsTableInfo, tableBlock.rowsDepth)
       const estimatedHeight = 100
       addToPage(html, estimatedHeight)
       i = tableBlock.nextIndex
@@ -1246,12 +1572,13 @@ const formatFormattedTextToHtml = (paragraphs: ParaWithList[], hyperlinks?: Hype
     if (listType === 'ordered' || listType === 'unordered') {
       const listStyle = (paraFormat as any).listStyle || (listType === 'ordered' ? 'decimal' : 'disc')
       const startLevel = (paraFormat as any).listLevel ?? 0
+      const listId = (paraFormat as any).listId
 
       const items: Array<{ text: string; level: number; charFormat: CharacterFormat; paraFormat: ParagraphFormat }> = []
       let totalEstimatedHeight = 0
       while (i < paragraphs.length) {
         const item = paragraphs[i]
-        const itemFormat = item.paraFormat as ParagraphFormat & { listType?: string }
+        const itemFormat = item.paraFormat as ParagraphFormat & { listType?: string; listId?: number }
         if (itemFormat.listType !== listType) break
         const itemText = extractListItemText(item.text, listType)
         if (!itemText.trim()) { i++; continue }
@@ -1265,8 +1592,16 @@ const formatFormattedTextToHtml = (paragraphs: ParaWithList[], hyperlinks?: Hype
         i++
       }
 
+      let startAt = 1
+      if (listType === 'ordered' && listId !== undefined && listId !== null) {
+        const prevCount = listCounters.get(listId) || 0
+        startAt = prevCount + 1
+        const levelZeroCount = items.filter(it => it.level === 0).length
+        listCounters.set(listId, prevCount + levelZeroCount)
+      }
+
       const listTag = listType === 'ordered' ? 'ol' : 'ul'
-      const html = renderNestedList(listTag, listStyle, items, startLevel)
+      const html = renderNestedList(listTag, listStyle, items, startLevel, startAt)
       addToPage(html, totalEstimatedHeight)
     } else {
       const charFormat = para.charFormat || {} as CharacterFormat
@@ -1278,13 +1613,39 @@ const formatFormattedTextToHtml = (paragraphs: ParaWithList[], hyperlinks?: Hype
         finalizePage()
       }
       addToPage(html, estimatedHeight)
+
+      // Render textbox floating markers anchored to this paragraph.
+      // Each textbox shape whose anchorCp falls within [paraCpStart, paraCpEnd]
+      // gets a floating marker displayed after the paragraph.
+      if (textBoxShapes.length > 0) {
+        for (const shape of textBoxShapes) {
+          const cp = shape.anchorCp!
+          if (cp >= paraCpStart && cp <= paraCpEnd + 1) {
+            addToPage(renderTextboxAnchorHtml(shape), 24)
+          }
+        }
+      }
+
+      // Render inline pictures anchored to this paragraph.
+      // Each picture whose cp falls within [paraCpStart, paraCpEnd]
+      // gets rendered as an inline image within the paragraph.
+      if (inlinePictures.length > 0) {
+        for (const pic of inlinePictures) {
+          const cp = pic.cp!
+          if (cp >= paraCpStart && cp <= paraCpEnd + 1) {
+            const picHtml = renderInlinePictureHtml(pic)
+            const picHeight = pic.heightPx ? Math.min(pic.heightPx, 400) : 200
+            addToPage(picHtml, picHeight + 16)
+          }
+        }
+      }
       i++
     }
   }
 
   finalizePage()
 
-  return result.join('\n')
+  return result
 }
 
 const formatTextWithCharacterStyles = (
@@ -1620,6 +1981,8 @@ function toggleSearch() {
     currentSearchIndex.value = -1
     // Save original HTML before any highlighting
     originalHtml.value = htmlContent.value
+    // 搜索需要遍历所有页面 DOM，临时禁用虚拟滚动确保全部页面已渲染
+    virtualScrollEnabled.value = false
     nextTick(() => searchInputRef.value?.focus())
   } else {
     // Restore original HTML when closing search
@@ -1628,6 +1991,12 @@ function toggleSearch() {
       htmlContent.value = originalHtml.value
       originalHtml.value = ''
     }
+    // 关闭搜索后恢复虚拟滚动
+    virtualScrollEnabled.value = true
+    nextTick(() => {
+      measureVisiblePageHeights()
+      updateVisibleRange()
+    })
   }
 }
 
@@ -1635,7 +2004,7 @@ function toggleHiddenText() {
   showHiddenText.value = !showHiddenText.value
   // 重新渲染 HTML 以应用隐藏文字样式变化
   if (lastParseResult.value) {
-    htmlContent.value = formatFormattedTextToHtml(
+    applyFormattedPages(
       lastParseResult.value.paragraphs,
       lastParseResult.value.hyperlinks,
       lastParseResult.value.revisions
@@ -1655,7 +2024,7 @@ function toggleHiddenText() {
 function setRevisionMode(mode: RevisionMode) {
   revisionMode.value = mode
   if (lastParseResult.value) {
-    htmlContent.value = formatFormattedTextToHtml(
+    applyFormattedPages(
       lastParseResult.value.paragraphs,
       lastParseResult.value.hyperlinks,
       lastParseResult.value.revisions
@@ -1664,8 +2033,8 @@ function setRevisionMode(mode: RevisionMode) {
 }
 
 function performSearch() {
-  const q = searchQuery.value.trim().toLowerCase()
-  if (!q) {
+  const rawQuery = searchQuery.value.trim()
+  if (!rawQuery) {
     clearHighlights()
     searchResults.value = []
     currentSearchIndex.value = -1
@@ -1679,6 +2048,16 @@ function performSearch() {
   const container = previewRef.value?.querySelector('.document-content')
   if (!container) return
 
+  // Build query: apply case sensitivity and whole-word matching
+  const caseSensitive = searchCaseSensitive.value
+  const wholeWord = searchWholeWord.value
+  const query = caseSensitive ? rawQuery : rawQuery.toLowerCase()
+  // Escape regex special chars for whole-word matching
+  const escapedQuery = rawQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const wordRegex = wholeWord
+    ? new RegExp(`(^|[^\\w])(${escapedQuery})($|[^\\w])`, caseSensitive ? 'g' : 'gi')
+    : null
+
   const treeWalker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null)
   const matches: SearchMatch[] = []
   let index = 0
@@ -1686,21 +2065,46 @@ function performSearch() {
   while (treeWalker.nextNode()) {
     const node = treeWalker.currentNode as Text
     const text = node.textContent || ''
-    const lower = text.toLowerCase()
-    let pos = 0
-    while ((pos = lower.indexOf(q, pos)) !== -1) {
-      const span = document.createElement('span')
-      span.className = 'search-highlight'
-      span.textContent = text.substring(pos, pos + q.length)
-      span.dataset.searchIndex = String(index)
-      const range = document.createRange()
-      range.setStart(node, pos)
-      range.setEnd(node, pos + q.length)
-      range.deleteContents()
-      range.insertNode(span)
-      matches.push({ index, text: q, element: span })
-      index++
-      pos += q.length
+    const lower = caseSensitive ? text : text.toLowerCase()
+
+    if (wordRegex) {
+      // Whole-word matching using regex
+      wordRegex.lastIndex = 0
+      let m: RegExpExecArray | null
+      while ((m = wordRegex.exec(text)) !== null) {
+        const matchStart = m.index + m[1].length
+        const matchEnd = matchStart + m[2].length
+        const span = document.createElement('span')
+        span.className = 'search-highlight'
+        span.textContent = text.substring(matchStart, matchEnd)
+        span.dataset.searchIndex = String(index)
+        const range = document.createRange()
+        range.setStart(node, matchStart)
+        range.setEnd(node, matchEnd)
+        range.deleteContents()
+        range.insertNode(span)
+        matches.push({ index, text: m[2], element: span })
+        index++
+        // Advance past the match to avoid infinite loop on zero-length matches
+        if (m[0].length === 0) wordRegex.lastIndex++
+      }
+    } else {
+      // Substring matching (case-insensitive by default)
+      let pos = 0
+      while ((pos = lower.indexOf(query, pos)) !== -1) {
+        const span = document.createElement('span')
+        span.className = 'search-highlight'
+        span.textContent = text.substring(pos, pos + query.length)
+        span.dataset.searchIndex = String(index)
+        const range = document.createRange()
+        range.setStart(node, pos)
+        range.setEnd(node, pos + query.length)
+        range.deleteContents()
+        range.insertNode(span)
+        matches.push({ index, text: query, element: span })
+        index++
+        pos += query.length
+      }
     }
   }
 
@@ -1752,7 +2156,112 @@ const searchStatusLabel = computed(() => {
 // ---- Print ----
 
 function printDocument() {
-  window.print()
+  if (!htmlContent.value) return
+  
+  const printWindow = window.open('', '_blank')
+  if (!printWindow) {
+    alert('请允许弹出窗口以进行打印')
+    return
+  }
+  
+  const printContent = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${escapeHtml(fileName.value || 'DOC Preview')}</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 25mm 20mm 25mm 20mm;
+      @top-center {
+        content: "${escapeHtml(fileName.value || 'DOC Preview')}";
+        font-size: 10pt;
+        color: #666;
+      }
+      @bottom-center {
+        content: "第 " counter(page) " 页 / 共 " counter(pages) " 页";
+        font-size: 10pt;
+        color: #666;
+      }
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      line-height: 1.8;
+      color: #333;
+      margin: 0;
+      padding: 0;
+    }
+    .document-content {
+      font-size: 11pt;
+    }
+    h1 { font-size: 18pt; font-weight: 600; margin-top: 0; margin-bottom: 12pt; }
+    h2 { font-size: 16pt; font-weight: 600; margin-top: 24pt; margin-bottom: 10pt; }
+    h3 { font-size: 14pt; font-weight: 600; margin-top: 20pt; margin-bottom: 8pt; }
+    h4, h5, h6 { font-size: 12pt; font-weight: 600; margin-top: 16pt; margin-bottom: 6pt; }
+    p { margin-bottom: 12pt; }
+    ul, ol { margin-left: 20pt; margin-bottom: 12pt; }
+    li { margin-bottom: 4pt; }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      margin-bottom: 12pt;
+      font-size: 10pt;
+    }
+    td, th {
+      border: 1px solid #ccc;
+      padding: 6pt 8pt;
+      vertical-align: top;
+    }
+    th {
+      background-color: #f5f5f5;
+      font-weight: 600;
+    }
+    a {
+      color: #667eea;
+      text-decoration: underline;
+    }
+    img {
+      max-width: 100%;
+      height: auto;
+    }
+    .page-break {
+      page-break-before: always;
+    }
+    .search-highlight {
+      background-color: #ffeb3b;
+    }
+    @media screen {
+      body {
+        padding: 40px;
+        max-width: 800px;
+        margin: 0 auto;
+        background: #f5f5f5;
+      }
+      .document-content {
+        background: white;
+        padding: 60px;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.12);
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="document-content">
+    ${htmlContent.value}
+  </div>
+</body>
+</html>`
+  
+  printWindow.document.write(printContent)
+  printWindow.document.close()
+  
+  printWindow.addEventListener('load', () => {
+    setTimeout(() => {
+      printWindow.print()
+      printWindow.close()
+    }, 500)
+  })
 }
 
 // ---- Download ----
@@ -1761,31 +2270,114 @@ function printDocument() {
 
 function scrollToOutline(item: OutlineItem) {
   showOutline.value = false
-  // Find the nth paragraph element in the document
-  const container = previewRef.value?.querySelector('.document-content')
-  if (!container) return
-  const paragraphs = container.querySelectorAll('p, h1, h2, h3, h4')
-  const target = paragraphs[item.index]
-  if (target) {
-    target.scrollIntoView({ block: 'start', behavior: 'smooth' })
-    target.classList.add('outline-highlight')
-    setTimeout(() => target.classList.remove('outline-highlight'), 2000)
+  // 虚拟滚动下目标段落可能未渲染，临时禁用虚拟滚动确保全部页面可查询
+  const wasVirtualEnabled = virtualScrollEnabled.value
+  if (wasVirtualEnabled) {
+    virtualScrollEnabled.value = false
   }
+  nextTick(() => {
+    const container = previewRef.value?.querySelector('.document-content')
+    if (!container) {
+      if (wasVirtualEnabled) virtualScrollEnabled.value = true
+      return
+    }
+    const paragraphs = container.querySelectorAll('p, h1, h2, h3, h4')
+    const target = paragraphs[item.index]
+    if (target) {
+      target.scrollIntoView({ block: 'start', behavior: 'smooth' })
+      target.classList.add('outline-highlight')
+      setTimeout(() => target.classList.remove('outline-highlight'), 2000)
+    }
+    // 滚动动画完成后恢复虚拟滚动
+    if (wasVirtualEnabled) {
+      setTimeout(() => {
+        virtualScrollEnabled.value = true
+        nextTick(() => {
+          measureVisiblePageHeights()
+          updateVisibleRange()
+        })
+      }, 600)
+    }
+  })
 }
 
 async function copyText() {
   if (!plainText.value) return
-  try {
-    await navigator.clipboard.writeText(plainText.value)
-  } catch {
-    // Fallback
-    const ta = document.createElement('textarea')
-    ta.value = plainText.value
-    ta.style.position = 'fixed'; ta.style.opacity = '0'
-    document.body.appendChild(ta)
-    ta.select()
-    document.execCommand('copy')
-    document.body.removeChild(ta)
+  
+  const tryRichCopy = async () => {
+    if (!htmlContent.value) return false
+    
+    const blob = new Blob([htmlContent.value], { type: 'text/html' })
+    const item = new ClipboardItem({ 'text/html': blob })
+    
+    try {
+      await navigator.clipboard.write([item])
+      return true
+    } catch {
+      return false
+    }
+  }
+  
+  const tryExecCommandCopy = () => {
+    const container = previewRef.value?.querySelector('.document-content')
+    if (!container) return false
+    
+    try {
+      const range = document.createRange()
+      range.selectNodeContents(container)
+      const selection = window.getSelection()
+      selection?.removeAllRanges()
+      selection?.addRange(range)
+      
+      const successful = document.execCommand('copy')
+      
+      selection?.removeAllRanges()
+      return successful
+    } catch {
+      return false
+    }
+  }
+  
+  const tryPlainCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(plainText.value)
+      return true
+    } catch {
+      const ta = document.createElement('textarea')
+      ta.value = plainText.value
+      ta.style.position = 'fixed'; ta.style.opacity = '0'
+      document.body.appendChild(ta)
+      ta.select()
+      const successful = document.execCommand('copy')
+      document.body.removeChild(ta)
+      return successful
+    }
+  }
+  
+  const showCopySuccess = () => {
+    const btn = document.querySelector('.toolbar-btn[title*="复制"]')
+    if (btn) {
+      const originalText = btn.innerHTML
+      btn.innerHTML = '✓'
+      setTimeout(() => {
+        btn.innerHTML = originalText
+      }, 2000)
+    }
+  }
+  
+  if (await tryRichCopy()) {
+    showCopySuccess()
+    return
+  }
+  
+  if (tryExecCommandCopy()) {
+    showCopySuccess()
+    return
+  }
+  
+  if (await tryPlainCopy()) {
+    showCopySuccess()
+    return
   }
 }
 
@@ -1801,7 +2393,333 @@ function downloadText() {
   URL.revokeObjectURL(url)
 }
 
+function downloadHtml() {
+  if (!htmlContent.value) return
+  const name = fileName.value.replace(/\.(doc|dot)$/i, '') || 'document'
+  
+  const htmlTemplate = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${escapeHtml(fileName.value || 'DOC Preview')}</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 40px 20px;
+      line-height: 1.8;
+      color: #333;
+      background: #f5f5f5;
+    }
+    .document-content {
+      background: white;
+      padding: 60px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.12);
+    }
+    h1, h2, h3, h4, h5, h6 {
+      margin-top: 24px;
+      margin-bottom: 12px;
+      font-weight: 600;
+    }
+    p {
+      margin-bottom: 16px;
+    }
+    ul, ol {
+      margin-left: 24px;
+      margin-bottom: 16px;
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      margin-bottom: 16px;
+    }
+    td, th {
+      border: 1px solid #ddd;
+      padding: 8px 12px;
+    }
+    tr:nth-child(even) {
+      background-color: #f9f9f9;
+    }
+    a {
+      color: #667eea;
+      text-decoration: underline;
+    }
+    .search-highlight {
+      background-color: #ffeb3b;
+    }
+    .search-highlight-current {
+      background-color: #f44336;
+      color: white;
+    }
+    @media print {
+      body {
+        background: white;
+        padding: 0;
+        max-width: none;
+      }
+      .document-content {
+        box-shadow: none;
+        padding: 0;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="document-content">
+    ${htmlContent.value}
+  </div>
+</body>
+</html>`
+  
+  const blob = new Blob([htmlTemplate], { type: 'text/html;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${name}.html`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+// ---- Download Markdown ----
+
+function escapeMdText(text: string): string {
+  return text
+    .replace(/\*/g, '\\*')
+    .replace(/_/g, '\\_')
+    .replace(/`/g, '\\`')
+    .replace(/\[/g, '\\[')
+    .replace(/\]/g, '\\]')
+}
+
+function convertInlineToMd(node: ChildNode): string {
+  if (node.nodeType === Node.TEXT_NODE) {
+    return escapeMdText(node.textContent || '')
+  }
+  if (node.nodeType !== Node.ELEMENT_NODE) return ''
+  const el = node as HTMLElement
+  const tag = el.tagName.toLowerCase()
+  const inner = Array.from(el.childNodes).map(n => convertInlineToMd(n)).join('')
+
+  switch (tag) {
+    case 'strong': case 'b': return `**${inner}**`
+    case 'em': case 'i': return `*${inner}*`
+    case 's': case 'del': case 'strike': return `~~${inner}~~`
+    case 'u': return inner
+    case 'code': return `\`${inner}\``
+    case 'a': {
+      const href = el.getAttribute('href') || ''
+      return `[${inner}](${href})`
+    }
+    case 'img': {
+      const src = el.getAttribute('src') || ''
+      const alt = el.getAttribute('alt') || ''
+      return src ? `![${alt}](${src})` : inner
+    }
+    case 'sub': return `<sub>${inner}</sub>`
+    case 'sup': return `<sup>${inner}</sup>`
+    case 'br': return '\n'
+    case 'span': case 'font': return inner
+    default: return inner
+  }
+}
+
+function getTableColCount(table: HTMLTableElement): number {
+  let maxCols = 0
+  for (const row of table.rows) {
+    let cols = 0
+    for (const cell of row.cells) {
+      cols += parseInt(cell.getAttribute('colspan') || '1')
+    }
+    maxCols = Math.max(maxCols, cols)
+  }
+  return Math.max(maxCols, 1)
+}
+
+function convertTableToMd(table: HTMLTableElement): string {
+  const rows = table.rows
+  if (rows.length === 0) return ''
+
+  const colCount = getTableColCount(table)
+  const lines: string[] = []
+  const isHeaderRow = (row: HTMLTableRowElement) => {
+    for (const cell of row.cells) {
+      if (cell.tagName.toLowerCase() === 'th') return true
+    }
+    return false
+  }
+  let hasHeaderSep = false
+
+  for (let r = 0; r < rows.length; r++) {
+    const cells = rows[r].cells
+    const cellTexts: string[] = []
+    const isHeader = isHeaderRow(rows[r])
+
+    for (let c = 0; c < cells.length; c++) {
+      const cell = cells[c]
+      const colspan = parseInt(cell.getAttribute('colspan') || '1')
+      const cellText = Array.from(cell.childNodes).map(n => convertInlineToMd(n)).join('').trim()
+
+      for (let s = 0; s < colspan; s++) {
+        cellTexts.push(s === 0 ? cellText : '')
+      }
+    }
+
+    while (cellTexts.length < colCount) {
+      cellTexts.push('')
+    }
+
+    lines.push(`| ${cellTexts.join(' | ')} |`)
+
+    if (isHeader && !hasHeaderSep) {
+      const sepCols = Array(colCount).fill('---')
+      lines.push(`| ${sepCols.join(' | ')} |`)
+      hasHeaderSep = true
+    }
+  }
+
+  if (!hasHeaderSep && colCount > 0) {
+    const sepCols = Array(colCount).fill('---')
+    lines.splice(1, 0, `| ${sepCols.join(' | ')} |`)
+  }
+
+  return lines.join('\n')
+}
+
+function convertListToMd(list: HTMLElement, indent: number = 0): string[] {
+  const isOrdered = list.tagName.toLowerCase() === 'ol'
+  const prefix = '  '.repeat(indent)
+  const lines: string[] = []
+
+  for (let i = 0; i < list.children.length; i++) {
+    const li = list.children[i] as HTMLLIElement
+    if (li.tagName.toLowerCase() !== 'li') continue
+
+    const bullet = isOrdered ? `${i + 1}.` : '-'
+    let itemText = ''
+    const nestedLists: string[] = []
+
+    for (const child of li.childNodes) {
+      if (child.nodeType === Node.ELEMENT_NODE) {
+        const childTag = (child as HTMLElement).tagName.toLowerCase()
+        if (childTag === 'ul' || childTag === 'ol') {
+          nestedLists.push(...convertListToMd(child as HTMLElement, indent + 1))
+          continue
+        }
+        if (childTag === 'p') {
+          itemText += convertInlineToMd(child)
+          continue
+        }
+      }
+      itemText += convertInlineToMd(child)
+    }
+
+    lines.push(`${prefix}${bullet} ${itemText.trim()}`)
+    lines.push(...nestedLists)
+  }
+
+  return lines
+}
+
+function convertBlockToMd(node: ChildNode): string {
+  if (node.nodeType === Node.TEXT_NODE) {
+    const text = node.textContent || ''
+    return text.trim() ? text : ''
+  }
+  if (node.nodeType !== Node.ELEMENT_NODE) return ''
+  const el = node as HTMLElement
+  const tag = el.tagName.toLowerCase()
+
+  switch (tag) {
+    case 'h1': return `# ${convertInlineToMd(el)}`
+    case 'h2': return `## ${convertInlineToMd(el)}`
+    case 'h3': return `### ${convertInlineToMd(el)}`
+    case 'h4': return `#### ${convertInlineToMd(el)}`
+    case 'h5': return `##### ${convertInlineToMd(el)}`
+    case 'h6': return `###### ${convertInlineToMd(el)}`
+    case 'p': {
+      const text = convertInlineToMd(el)
+      return text || ''
+    }
+    case 'ul': case 'ol': return convertListToMd(el).join('\n')
+    case 'table': return convertTableToMd(el as HTMLTableElement)
+    case 'blockquote': {
+      const inner = Array.from(el.childNodes).map(n => convertBlockToMd(n)).filter(Boolean).join('\n')
+      return inner.split('\n').map(l => `> ${l}`).join('\n')
+    }
+    case 'pre': {
+      const code = el.querySelector('code')
+      const lang = code?.getAttribute('class')?.replace(/^language-/, '') || ''
+      const codeText = code ? code.textContent || '' : el.textContent || ''
+      return '```' + lang + '\n' + codeText.replace(/\n$/, '') + '\n```'
+    }
+    case 'hr': return '---'
+    case 'br': return ''
+    case 'div': {
+      if (el.classList.contains('page-content')) {
+        return Array.from(el.childNodes).map(n => convertBlockToMd(n)).filter(Boolean).join('\n\n')
+      }
+      return Array.from(el.childNodes).map(n => convertBlockToMd(n)).filter(Boolean).join('\n')
+    }
+    default: return Array.from(el.childNodes).map(n => convertInlineToMd(n)).join('')
+  }
+}
+
+function downloadMarkdown() {
+  if (!htmlContent.value) return
+
+  const container = document.createElement('div')
+  container.innerHTML = htmlContent.value
+
+  const parts: string[] = []
+  const pageContents = container.querySelectorAll('.page-content')
+
+  pageContents.forEach(pc => {
+    for (const child of pc.childNodes) {
+      const md = convertBlockToMd(child)
+      if (md) parts.push(md)
+    }
+  })
+
+  const mdContent = parts.join('\n\n')
+  const name = fileName.value.replace(/\.(doc|dot)$/i, '') || 'document'
+
+  const blob = new Blob([mdContent], { type: 'text/markdown;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${name}.md`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
 // ---- Keyboard shortcuts ----
+
+interface ShortcutItem {
+  keys: string
+  label: string
+}
+
+const shortcutList: ShortcutItem[] = [
+  { keys: 'Ctrl+F', label: '搜索文档' },
+  { keys: 'F3 / Ctrl+G', label: '下一个匹配' },
+  { keys: 'Shift+F3 / Ctrl+Shift+G', label: '上一个匹配' },
+  { keys: 'Escape', label: '关闭搜索' },
+  { keys: 'Ctrl+P', label: '打印 / 导出 PDF' },
+  { keys: 'Ctrl+= / Ctrl++', label: '放大' },
+  { keys: 'Ctrl+-', label: '缩小' },
+  { keys: 'Ctrl+0', label: '重置缩放' },
+  { keys: 'PageUp', label: '上一页' },
+  { keys: 'PageDown', label: '下一页' },
+  { keys: 'Home', label: '首页' },
+  { keys: 'End', label: '末页' },
+  { keys: '? / Ctrl+/', label: '显示快捷键' },
+]
+
+function toggleShortcuts() {
+  showShortcuts.value = !showShortcuts.value
+}
 
 function handleKeydown(e: KeyboardEvent) {
   const isCtrl = e.ctrlKey || e.metaKey
@@ -1819,9 +2737,15 @@ function handleKeydown(e: KeyboardEvent) {
     return
   }
 
-  if (e.key === 'Escape' && showSearch.value) {
-    toggleSearch()
-    return
+  if (e.key === 'Escape') {
+    if (showSearch.value) {
+      toggleSearch()
+      return
+    }
+    if (showShortcuts.value) {
+      showShortcuts.value = false
+      return
+    }
   }
 
   if (e.key === '=' || e.key === '+') {
@@ -1851,6 +2775,43 @@ function handleKeydown(e: KeyboardEvent) {
     if (showSearch.value) { e.preventDefault(); prevMatch() }
     return
   }
+
+  // PageUp/PageDown for pagination navigation (skip when focus is in input)
+  const target = e.target as HTMLElement
+  const isInputFocused = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+  if (isInputFocused) return
+
+  if (e.key === 'PageUp') {
+    e.preventDefault()
+    goToPrevPage()
+    return
+  }
+
+  if (e.key === 'PageDown') {
+    e.preventDefault()
+    goToNextPage()
+    return
+  }
+
+  // Home/End for first/last page (Ctrl or standalone)
+  if (e.key === 'Home') {
+    e.preventDefault()
+    goToPage(1)
+    return
+  }
+
+  if (e.key === 'End') {
+    e.preventDefault()
+    goToPage(totalPages.value)
+    return
+  }
+
+  // ? or Ctrl+/ to toggle shortcuts panel
+  if (e.key === '?' || (isCtrl && e.key === '/')) {
+    e.preventDefault()
+    toggleShortcuts()
+    return
+  }
 }
 
 // ---- Watchers ----
@@ -1863,6 +2824,8 @@ watch(() => props.source, (newSource) => {
 
 onMounted(() => {
   document.addEventListener('keydown', handleKeydown)
+  window.addEventListener('scroll', handleVirtualScroll, { passive: true })
+  window.addEventListener('resize', handleVirtualScroll, { passive: true })
   if (props.source) {
     typeof props.source === 'string' ? loadFromUrl(props.source) : loadFromFile(props.source)
   }
@@ -1870,6 +2833,8 @@ onMounted(() => {
 
 onUnmounted(() => {
   document.removeEventListener('keydown', handleKeydown)
+  window.removeEventListener('scroll', handleVirtualScroll)
+  window.removeEventListener('resize', handleVirtualScroll)
 })
 
 // ---- Expose for parent components ----
@@ -1938,6 +2903,12 @@ defineExpose({ reload, getPlainText, focusContent })
           <!-- Download text -->
           <button class="toolbar-btn" @click="downloadText" title="下载为文本文件" aria-label="下载为文本文件">📥</button>
 
+          <!-- Download HTML -->
+          <button class="toolbar-btn" @click="downloadHtml" title="下载为 HTML 文件" aria-label="下载为 HTML 文件">🌐</button>
+
+          <!-- Download Markdown -->
+          <button class="toolbar-btn" @click="downloadMarkdown" title="下载为 Markdown 文件" aria-label="下载为 Markdown 文件">📝</button>
+
           <!-- Copy text -->
           <button class="toolbar-btn" @click="copyText" title="复制文本到剪贴板" aria-label="复制文本到剪贴板">📋</button>
 
@@ -1967,6 +2938,28 @@ defineExpose({ reload, getPlainText, focusContent })
           <span class="doc-stats" v-if="wordCount > 0">
             {{ wordCount }} 词 · {{ paragraphCount }} 段 · {{ charCount }} 字
           </span>
+
+          <span class="toolbar-sep" role="separator"></span>
+
+          <!-- Dark mode toggle -->
+          <button
+            class="toolbar-btn"
+            :class="{ active: darkMode }"
+            @click="toggleDarkMode"
+            :title="darkMode ? '切换亮色模式' : '切换暗色模式'"
+            aria-label="切换主题"
+          >
+            {{ darkMode ? '☀️' : '🌙' }}
+          </button>
+
+          <!-- Shortcuts -->
+          <button
+            class="toolbar-btn"
+            :class="{ active: showShortcuts }"
+            @click="toggleShortcuts"
+            title="快捷键 (?)"
+            aria-label="快捷键"
+          >⌨️</button>
 
           <span class="toolbar-sep" role="separator"></span>
 
@@ -2004,6 +2997,14 @@ defineExpose({ reload, getPlainText, focusContent })
           @input="performSearch"
           @keyup.enter="nextMatch"
         />
+        <label class="search-option" title="区分大小写">
+          <input type="checkbox" v-model="searchCaseSensitive" @change="performSearch" />
+          <span>Aa</span>
+        </label>
+        <label class="search-option" title="全词匹配">
+          <input type="checkbox" v-model="searchWholeWord" @change="performSearch" />
+          <span>W</span>
+        </label>
         <span class="search-status">{{ searchStatusLabel }}</span>
         <button class="toolbar-btn" @click="prevMatch" :disabled="searchResults.length === 0" title="上一个">▲</button>
         <button class="toolbar-btn" @click="nextMatch" :disabled="searchResults.length === 0" title="下一个">▼</button>
@@ -2032,10 +3033,20 @@ defineExpose({ reload, getPlainText, focusContent })
 
       <!-- Document content (paper-like) -->
       <div class="paper-page">
-        <div
-          class="document-content"
-          v-html="htmlContent"
-        ></div>
+        <div class="document-content">
+          <template v-for="(pageHtml, idx) in pages" :key="idx">
+            <div
+              v-if="isPageVisible(idx)"
+              class="page-host"
+              v-html="pageHtml"
+            ></div>
+            <div
+              v-else
+              class="page-placeholder"
+              :style="{ height: getPagePlaceholderHeight(idx) + 'px' }"
+            ></div>
+          </template>
+        </div>
       </div>
 
       <!-- Stories panel (headers / footnotes / endnotes / comments / textboxes) -->
@@ -2149,9 +3160,17 @@ defineExpose({ reload, getPlainText, focusContent })
             <span class="property-label">模板:</span>
             <span class="property-value">{{ docProperties.template }}</span>
           </div>
+          <div v-if="styleSet" class="property-item">
+            <span class="property-label">样式集:</span>
+            <span class="property-value">{{ styleSet.name }}{{ styleSet.isCustom ? ' (自定义)' : '' }}</span>
+          </div>
           <div v-if="docProperties.appName" class="property-item">
             <span class="property-label">应用程序:</span>
             <span class="property-value">{{ docProperties.appName }}</span>
+          </div>
+          <div v-if="wordVersionLabel" class="property-item">
+            <span class="property-label">Word 版本:</span>
+            <span class="property-value">{{ wordVersionLabel }}</span>
           </div>
           <div v-if="docProperties.revisionNumber" class="property-item">
             <span class="property-label">修订号:</span>
@@ -2279,6 +3298,32 @@ defineExpose({ reload, getPlainText, focusContent })
               :class="`toc-level-${entry.level}`"
             >
               <span class="toc-text">{{ entry.text }}</span>
+              <span v-if="entry.pageNumber" class="toc-page">{{ entry.pageNumber }}</span>
+            </li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- Index -->
+      <div v-if="index.length > 0" class="toc-panel">
+        <button
+          class="stories-toggle"
+          @click="showIndex = !showIndex"
+          :aria-expanded="showIndex"
+        >
+          <span class="stories-toggle-icon">{{ showIndex ? '▾' : '▸' }}</span>
+          <span>索引（{{ index.length }}）</span>
+        </button>
+        <div v-if="showIndex" class="toc-content">
+          <ul class="toc-list">
+            <li
+              v-for="(entry, i) in index"
+              :key="i"
+              class="toc-item"
+              :class="{ 'toc-level-2': entry.subTerm }"
+            >
+              <span class="toc-text">{{ entry.mainTerm }}</span>
+              <span v-if="entry.subTerm" class="toc-subterm">· {{ entry.subTerm }}</span>
               <span v-if="entry.pageNumber" class="toc-page">{{ entry.pageNumber }}</span>
             </li>
           </ul>
@@ -2700,6 +3745,26 @@ defineExpose({ reload, getPlainText, focusContent })
           </template>
         </div>
       </div>
+
+      <!-- Keyboard shortcuts panel -->
+      <div v-if="showShortcuts" class="shortcuts-overlay" @click.self="showShortcuts = false">
+        <div class="shortcuts-panel" role="dialog" aria-label="快捷键列表">
+          <div class="shortcuts-header">
+            <span>快捷键</span>
+            <button class="shortcuts-close" @click="showShortcuts = false" aria-label="关闭快捷键面板">✕</button>
+          </div>
+          <div class="shortcuts-body">
+            <div
+              v-for="(item, idx) in shortcutList"
+              :key="idx"
+              class="shortcut-row"
+            >
+              <kbd class="shortcut-keys" v-for="key in item.keys.split(' / ')" :key="key">{{ key }}</kbd>
+              <span class="shortcut-label">{{ item.label }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -2935,6 +4000,26 @@ defineExpose({ reload, getPlainText, focusContent })
   margin-bottom: 24px;
 }
 
+.page-content[style*="column-count"] {
+  column-fill: auto;
+  overflow: hidden;
+}
+
+.page-content[style*="column-count"] > * {
+  break-inside: avoid;
+}
+
+/* v-html 容器：使用 display:contents 让 .page-content 直接作为 .document-content 子元素参与布局 */
+.page-host {
+  display: contents;
+}
+
+/* 虚拟滚动占位：非可视页面用此 div 保持滚动条高度正确 */
+.page-placeholder {
+  width: 100%;
+  background: transparent;
+}
+
 @media print {
   .page-content {
     break-after: page;
@@ -2974,6 +4059,42 @@ defineExpose({ reload, getPlainText, focusContent })
   color: var(--text-muted);
   min-width: 50px;
   text-align: center;
+}
+
+.search-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  border: 1px solid transparent;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.search-option:hover {
+  background: var(--bg-secondary, #f0f0f0);
+  border-color: var(--border-color, #ddd);
+}
+
+.search-option input {
+  display: none;
+}
+
+.search-option:has(input:checked) {
+  background: #e3f2fd;
+  border-color: #2196f3;
+  color: #1565c0;
+}
+
+:root.dark .search-option:has(input:checked) {
+  background: #1e3a5f;
+  border-color: #64b5f6;
+  color: #90caf9;
 }
 
 /* ==================== Document info ==================== */
@@ -3854,6 +4975,93 @@ defineExpose({ reload, getPlainText, focusContent })
   gap: 10px;
 }
 
+.textbox-anchor-marker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0 6px 0;
+  padding: 3px 10px;
+  background: linear-gradient(135deg, #eef5ff, #e8f0fe);
+  border: 1px dashed #4a90d9;
+  border-radius: 12px;
+  font-size: 0.78rem;
+  color: #2c6fbb;
+  cursor: help;
+  user-select: none;
+  transition: all 0.15s ease;
+}
+
+.textbox-anchor-marker:hover {
+  background: linear-gradient(135deg, #dde9fa, #d4e4f8);
+  border-color: #2c6fbb;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(74, 144, 217, 0.25);
+}
+
+.textbox-anchor-icon {
+  font-size: 1rem;
+  line-height: 1;
+  color: #4a90d9;
+}
+
+.textbox-anchor-label {
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+.textbox-anchor-info {
+  color: #5a7a9b;
+  font-size: 0.72rem;
+  border-left: 1px solid #b8d0e8;
+  padding-left: 6px;
+}
+
+:root.dark .textbox-anchor-marker {
+  background: linear-gradient(135deg, #1e2d44, #243755);
+  border-color: #4a90d9;
+  color: #8cb8e8;
+}
+
+:root.dark .textbox-anchor-marker:hover {
+  background: linear-gradient(135deg, #2a3f5f, #2d4a6e);
+}
+
+:root.dark .textbox-anchor-info {
+  color: #7a9bbf;
+  border-left-color: #3a5a7a;
+}
+
+.inline-picture-container {
+  margin: 12px 0;
+  text-align: center;
+}
+
+.inline-picture {
+  max-width: 100%;
+  height: auto;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.inline-picture-caption {
+  margin-top: 6px;
+  font-size: 0.78rem;
+  color: #888;
+  font-style: italic;
+}
+
+:root.dark .inline-picture {
+  border-color: #444;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+:root.dark .inline-picture-caption {
+  color: #999;
+}
+
 .shape-item {
   padding: 8px 12px;
   background: var(--bg-primary);
@@ -4188,6 +5396,88 @@ defineExpose({ reload, getPlainText, focusContent })
 .image-floating {
   background: #e8f4fd;
   color: #1976d2;
+}
+
+/* ==================== Shortcuts Panel ==================== */
+.shortcuts-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.shortcuts-panel {
+  background: var(--bg-primary, #fff);
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+  width: min(480px, calc(100vw - 32px));
+  max-height: min(70vh, 500px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.shortcuts-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  font-size: 15px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border-color, #e8e8e8);
+}
+
+.shortcuts-close {
+  background: none;
+  border: none;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  color: var(--text-secondary, #666);
+  line-height: 1;
+}
+
+.shortcuts-close:hover {
+  background: var(--bg-secondary, #f0f0f0);
+  color: var(--text-primary, #333);
+}
+
+.shortcuts-body {
+  padding: 8px 0;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.shortcut-row {
+  display: flex;
+  align-items: center;
+  padding: 8px 20px;
+  gap: 12px;
+}
+
+.shortcut-keys {
+  display: inline-block;
+  background: var(--bg-secondary, #f0f0f0);
+  border: 1px solid var(--border-color, #d8d8d8);
+  border-radius: 4px;
+  padding: 2px 7px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  color: var(--text-primary, #333);
+  white-space: nowrap;
+  box-shadow: 0 1px 0 rgba(0,0,0,0.08);
+}
+
+.shortcut-label {
+  font-size: 14px;
+  color: var(--text-primary, #333);
+  margin-left: auto;
+  text-align: right;
+  white-space: nowrap;
 }
 
 /* ==================== Print styles ==================== */

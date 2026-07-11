@@ -132,6 +132,106 @@ export function renderTableHtml(rows: string[][], rowsTableInfo?: TableInfo[]): 
   return `<table${tableStyle ? ` style="${tableStyle}"` : ''}><tbody>${htmlRows.join('')}</tbody></table>`
 }
 
+/**
+ * 渲染嵌套表格。
+ *
+ * 当表格行具有不同的 depth（sprmPTableDepth）时，更深的行作为
+ * 父表格最后一个单元格内的嵌套表格渲染。
+ *
+ * @param rows - 每行的单元格文本数组
+ * @param rowsTableInfo - 每行的表格属性信息
+ * @param rowsDepth - 每行的表格深度（1=顶层）
+ * @returns 嵌套表格 HTML
+ */
+export function renderNestedTableHtml(
+  rows: string[][],
+  rowsTableInfo?: TableInfo[],
+  rowsDepth?: number[],
+): string {
+  if (!rows || rows.length === 0) return ''
+
+  // 无深度信息时回退到普通表格渲染
+  if (!rowsDepth || rowsDepth.length === 0) {
+    return renderTableHtml(rows, rowsTableInfo)
+  }
+
+  // 所有行深度相同（都是 1）时回退到普通表格渲染
+  const allSameDepth = rowsDepth.every(d => d === rowsDepth[0])
+  if (allSameDepth) {
+    return renderTableHtml(rows, rowsTableInfo)
+  }
+
+  return renderNestedTableRecursive(rows, rowsTableInfo, rowsDepth, 0, rows.length, 1)
+}
+
+/**
+ * 递归渲染嵌套表格。
+ *
+ * 从 [start, end) 范围内提取深度为 currentDepth 的连续行作为一个表格，
+ * 当遇到更深的行时递归为子表格，嵌入到父表格最后一个单元格中。
+ *
+ * 使用占位符避免 renderTableHtml 的 escapeHtml 转义子表格 HTML 标签。
+ */
+function renderNestedTableRecursive(
+  rows: string[][],
+  rowsTableInfo: TableInfo[] | undefined,
+  rowsDepth: number[],
+  start: number,
+  end: number,
+  currentDepth: number,
+): string {
+  // 收集当前深度的行，遇到更深的行时递归
+  const tableRows: string[][] = []
+  const tableInfos: TableInfo[] = []
+  // 占位符映射：占位符 → 子表格 HTML
+  const placeholders: Map<string, string> = new Map()
+  let i = start
+
+  while (i < end) {
+    const depth = rowsDepth[i]
+
+    if (depth === currentDepth) {
+      tableRows.push([...rows[i]])
+      tableInfos.push(rowsTableInfo?.[i] ?? { inTable: true })
+      i++
+    } else if (depth > currentDepth) {
+      // 找到更深的行范围，递归渲染子表格
+      const childStart = i
+      while (i < end && rowsDepth[i] >= depth) {
+        i++
+      }
+      const childEnd = i
+      const childHtml = renderNestedTableRecursive(rows, rowsTableInfo, rowsDepth, childStart, childEnd, depth)
+
+      // 将子表格用占位符替换，追加到父表格最后一行的最后一个单元格
+      if (tableRows.length > 0 && childHtml) {
+        const lastRowIdx = tableRows.length - 1
+        const lastCellIdx = tableRows[lastRowIdx].length - 1
+        if (lastCellIdx >= 0) {
+          const placeholder = `\x00NESTED_${placeholders.size}\x00`
+          placeholders.set(placeholder, childHtml)
+          tableRows[lastRowIdx][lastCellIdx] += `\n${placeholder}`
+        }
+      }
+    } else {
+      // depth < currentDepth，返回到上层处理
+      break
+    }
+  }
+
+  if (tableRows.length === 0) return ''
+
+  // 渲染父表格（占位符不会被 escapeHtml 转义，因为 \x00 不在转义列表中）
+  let html = renderTableHtml(tableRows, tableInfos)
+
+  // 将占位符替换回实际的子表格 HTML
+  for (const [ph, childHtml] of placeholders) {
+    html = html.split(ph).join(childHtml)
+  }
+
+  return html
+}
+
 function buildCellStyle(cellInfo?: TableCellInfo): string {
   if (!cellInfo) return ''
   const parts: string[] = []

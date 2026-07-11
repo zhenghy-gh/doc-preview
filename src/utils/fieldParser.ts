@@ -15,7 +15,7 @@ export interface FieldRange {
   cpStart: number
   /** End CP of field (including 0x15). */
   cpEnd: number
-  /** Field type (flt). 37 = HYPERLINK, 19 = TOC. */
+  /** Field type (flt). 37 = HYPERLINK, 19 = TOC, 14 = INDEX. */
   flt: number
   /** Field instruction text (between 0x13 and 0x14). */
   instruction: string
@@ -25,6 +25,10 @@ export interface FieldRange {
   url?: string
   /** For TOC: parsed TOC entries. */
   tocEntries?: TocEntry[]
+  /** For TOC: parsed instruction switches. */
+  tocOptions?: TocOptions
+  /** For INDEX: parsed INDEX entries. */
+  indexEntries?: IndexEntry[]
 }
 
 /**
@@ -36,6 +40,57 @@ export interface TocEntry {
   /** Text of the TOC entry. */
   text: string
   /** Page number (if available). */
+  pageNumber?: string
+  /** Character position where this entry starts in the document. */
+  cp?: number
+}
+
+/**
+ * TOC 域 instruction 开关解析结果。
+ *
+ * TOC 域 instruction 格式：`TOC \o "1-3" \h \z \u`
+ * 开关说明（MS-DOC §2.8.31 / Word 域语法）：
+ * - `\o "levels"`  : 指定大纲级别范围（如 "1-3" 表示级别 1 到 3）
+ * - `\t "style;level;..."` : 使用自定义样式作为目录项
+ * - `\f`           : 包含 TC（目录项）域
+ * - `\p "sep"`     : 指定条目文本与页码之间的分隔符
+ * - `\h`           : 条目为超链接
+ * - `\n`           : 不显示页码
+ * - `\z`           : 隐藏 TabLeader（点引导符）
+ * - `\u`           : 使用应用的大纲级别
+ * - `\d "sep"`     : 设置分隔符（与 \p 类似）
+ * - `\l "levels"`  : 仅包含指定级别（如 "1-1" 仅级别 1）
+ */
+export interface TocOptions {
+  /** 大纲级别范围（\o 开关值），如 { start: 1, end: 3 } */
+  outlineLevels?: { start: number; end: number }
+  /** 自定义样式映射（\t 开关值） */
+  customStyles?: string
+  /** 是否包含 TC 域（\f 开关） */
+  includeTc?: boolean
+  /** 条目与页码的分隔符（\p 开关值） */
+  separator?: string
+  /** 是否生成超链接（\h 开关） */
+  hyperlinks?: boolean
+  /** 是否隐藏页码（\n 开关） */
+  hidePageNumbers?: boolean
+  /** 是否隐藏 TabLeader（\z 开关） */
+  hideTabLeader?: boolean
+  /** 是否使用应用的大纲级别（\u 开关） */
+  useAppliedOutlineLevel?: boolean
+  /** 仅包含指定级别（\l 开关值） */
+  levelsOnly?: { start: number; end: number }
+}
+
+/**
+ * INDEX entry structure extracted from the INDEX field result.
+ */
+export interface IndexEntry {
+  /** The main index term (primary entry). */
+  mainTerm: string
+  /** The sub-term (secondary entry, if any). */
+  subTerm?: string
+  /** Page number where this entry appears. */
   pageNumber?: string
   /** Character position where this entry starts in the document. */
   cp?: number
@@ -256,6 +311,9 @@ export function extractAllFields(
       }
     } else if (begin.flt === 19) {
       field.tocEntries = parseTocResult(result)
+      field.tocOptions = parseTocInstruction(instruction)
+    } else if (begin.flt === 14) {
+      field.indexEntries = parseIndexResult(result)
     }
 
     fields.push(field)
@@ -263,6 +321,69 @@ export function extractAllFields(
   }
 
   return fields
+}
+
+/**
+ * Parse TOC field instruction switches into structured options.
+ *
+ * TOC instruction format: `TOC \o "1-3" \h \z \u`
+ *
+ * Supported switches:
+ * - `\o "1-3"`  : outline level range
+ * - `\t "style;level"` : custom styles
+ * - `\f`        : include TC fields
+ * - `\p "sep"`  : separator between entry and page number
+ * - `\h`        : hyperlinks
+ * - `\n`        : hide page numbers
+ * - `\z`        : hide tab leader
+ * - `\u`        : use applied outline level
+ * - `\l "1-1"`  : levels only
+ *
+ * @param instruction - The TOC field instruction text.
+ * @returns Parsed TOC options.
+ */
+export function parseTocInstruction(instruction: string): TocOptions {
+  const opts: TocOptions = {}
+  if (!instruction) return opts
+
+  // \o "1-3" or \o 1-3 — outline level range
+  const oMatch = instruction.match(/\\o\s+"?(\d+)-(\d+)"?/i)
+  if (oMatch) {
+    opts.outlineLevels = {
+      start: parseInt(oMatch[1], 10),
+      end: parseInt(oMatch[2], 10),
+    }
+  }
+
+  // \t "style;level;..." — custom styles
+  const tMatch = instruction.match(/\\t\s+"([^"]+)"/i)
+  if (tMatch) {
+    opts.customStyles = tMatch[1]
+  }
+
+  // \p "sep" — separator
+  const pMatch = instruction.match(/\\p\s+"([^"]+)"/i)
+  if (pMatch) {
+    opts.separator = pMatch[1]
+  }
+
+  // \l "1-1" — levels only
+  const lMatch = instruction.match(/\\l\s+"?(\d+)-(\d+)"?/i)
+  if (lMatch) {
+    opts.levelsOnly = {
+      start: parseInt(lMatch[1], 10),
+      end: parseInt(lMatch[2], 10),
+    }
+  }
+
+  // Boolean switches
+  if (/\\f\b/i.test(instruction)) opts.includeTc = true
+  if (/\\h\b/i.test(instruction)) opts.hyperlinks = true
+  if (/\\n\b/i.test(instruction)) opts.hidePageNumbers = true
+  if (/\\z\b/i.test(instruction)) opts.hideTabLeader = true
+  if (/\\u\b/i.test(instruction)) opts.useAppliedOutlineLevel = true
+
+  return opts
 }
 
 /**
@@ -289,6 +410,99 @@ export function parseTocResult(result: string): TocEntry[] {
     const entry = parseTocLine(trimmed)
     if (entry) {
       entries.push(entry)
+    }
+  }
+
+  return entries
+}
+
+/**
+ * Parse INDEX field result into structured entries.
+ *
+ * INDEX result format:
+ *   Apple.................1
+ *     Red apple...........2
+ *     Green apple.........3
+ *   Banana................4
+ *     Yellow banana.......5
+ *
+ * Each entry contains: main term + optional sub-term + page number.
+ * Sub-terms are indented with spaces.
+ *
+ * @param result - The INDEX field result text.
+ * @returns Parsed INDEX entries.
+ */
+export function parseIndexResult(result: string): IndexEntry[] {
+  const entries: IndexEntry[] = []
+  const lines = result.split('\n').filter(line => line.trim())
+
+  let currentMainTerm = ''
+
+  for (const line of lines) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+
+    // Check if this is an indented sub-term
+    const leadingSpaces = line.length - trimmed.length
+    const isSubTerm = leadingSpaces >= 2
+
+    // Match dot leader pattern: text + dots + page number
+    const dotPattern = /^(.*?)\.{3,}\s*(\d+)$/
+    const dotMatch = trimmed.match(dotPattern)
+
+    if (dotMatch) {
+      const text = dotMatch[1].trim()
+      const pageNumber = dotMatch[2]
+
+      if (isSubTerm && currentMainTerm) {
+        entries.push({
+          mainTerm: currentMainTerm,
+          subTerm: text,
+          pageNumber,
+        })
+      } else {
+        currentMainTerm = text
+        entries.push({
+          mainTerm: text,
+          pageNumber,
+        })
+      }
+    } else {
+      // Match tab-separated pattern
+      const tabPattern = /^(.*?)\t+(\d+)$/
+      const tabMatch = trimmed.match(tabPattern)
+
+      if (tabMatch) {
+        const text = tabMatch[1].trim()
+        const pageNumber = tabMatch[2]
+
+        if (isSubTerm && currentMainTerm) {
+          entries.push({
+            mainTerm: currentMainTerm,
+            subTerm: text,
+            pageNumber,
+          })
+        } else {
+          currentMainTerm = text
+          entries.push({
+            mainTerm: text,
+            pageNumber,
+          })
+        }
+      } else if (trimmed.length > 0) {
+        // Just text without page number
+        if (isSubTerm && currentMainTerm) {
+          entries.push({
+            mainTerm: currentMainTerm,
+            subTerm: trimmed,
+          })
+        } else {
+          currentMainTerm = trimmed
+          entries.push({
+            mainTerm: trimmed,
+          })
+        }
+      }
     }
   }
 

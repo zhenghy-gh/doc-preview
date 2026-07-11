@@ -3,6 +3,7 @@ import {
   parseStylesheet,
   getHeadingLevel,
   getStyleName,
+  detectStyleSet,
   BUILTIN_STYLES,
 } from '../src/utils/styleParser'
 
@@ -193,6 +194,59 @@ describe('styleParser', () => {
       expect(BUILTIN_STYLES[23]).toBeDefined() // Footnote Text
       expect(BUILTIN_STYLES[24]).toBeDefined() // Footnote Reference
       expect(BUILTIN_STYLES[24].type).toBe('character')
+    })
+  })
+
+  describe('detectStyleSet', () => {
+    it('should detect Default style set with standard heading styles', () => {
+      const styles = [
+        { istd: 0, name: 'Normal', type: 'paragraph' as const },
+        { istd: 1, name: 'Heading 1', type: 'paragraph' as const },
+        { istd: 2, name: 'Heading 2', type: 'paragraph' as const },
+        { istd: 3, name: 'Heading 3', type: 'paragraph' as const },
+      ]
+      const result = detectStyleSet(styles)
+      expect(result).not.toBeNull()
+      expect(result!.name).toBe('Default')
+    })
+
+    it('should detect Elegant style set', () => {
+      const styles = [
+        { istd: 0, name: 'Normal', type: 'paragraph' as const },
+        { istd: 1, name: 'Elegant Heading', type: 'paragraph' as const },
+        { istd: 2, name: 'Elegant Title', type: 'paragraph' as const },
+      ]
+      const result = detectStyleSet(styles)
+      expect(result).not.toBeNull()
+      expect(result!.name).toBe('Elegant')
+    })
+
+    it('should return null for empty styles', () => {
+      expect(detectStyleSet([])).toBeNull()
+    })
+
+    it('should detect custom style set for many styles without known patterns', () => {
+      const styles = Array.from({ length: 25 }, (_, i) => ({
+        istd: i,
+        name: `Custom${i}`,
+        type: 'paragraph' as const,
+      }))
+      const result = detectStyleSet(styles)
+      expect(result).not.toBeNull()
+      expect(result!.isCustom).toBe(true)
+    })
+
+    it('should detect Default for heading styles even without pattern match', () => {
+      const styles = [
+        { istd: 0, name: 'Normal', type: 'paragraph' as const },
+        { istd: 1, name: 'Heading 1', type: 'paragraph' as const },
+        { istd: 2, name: 'Heading 2', type: 'paragraph' as const },
+        { istd: 3, name: 'Body Text', type: 'paragraph' as const },
+        { istd: 4, name: 'Title', type: 'paragraph' as const },
+      ]
+      const result = detectStyleSet(styles)
+      expect(result).not.toBeNull()
+      expect(result!.name).toBe('Default')
     })
   })
 })

@@ -365,3 +365,84 @@ export function getListFormatFromLfo(
 
   return getListFormat(listEntries, lstIdx, level)
 }
+
+/**
+ * 列表段落的简化结构，用于编号续接计算。
+ */
+export interface ListParagraphInfo {
+  /** 列表唯一标识符（ilst 或 ilfo），undefined 表示无真实列表ID */
+  listId?: number
+  /** 列表类型 */
+  listType: 'ordered' | 'unordered'
+  /** 列表级别（0 起算） */
+  listLevel: number
+}
+
+/**
+ * 单个列表块的编号续接信息。
+ */
+export interface ListBlockContinuity {
+  /** 该列表块的起始编号（仅对 ordered 列表有意义） */
+  startAt: number
+}
+
+/**
+ * 计算列表段落数组中每个连续列表块的编号续接信息。
+ *
+ * 规则：
+ * - 相同 listId 的 ordered 列表跨非列表段落续接编号
+ * - 不同 listId 的列表使用独立的计数器
+ * - unordered 列表始终从 1 开始（无编号续接概念）
+ * - listId 为 undefined 的列表块视为独立列表，每次从 1 开始
+ *
+ * @param paragraphs - 按文档顺序排列的列表段落信息数组
+ * @returns 与 paragraphs 等长的数组，每个元素为对应段落所在列表块的续接信息
+ */
+export function computeListContinuity(
+  paragraphs: ListParagraphInfo[],
+): ListBlockContinuity[] {
+  const result: ListBlockContinuity[] = new Array(paragraphs.length)
+  const counters = new Map<number, number>()
+
+  let i = 0
+  while (i < paragraphs.length) {
+    const para = paragraphs[i]
+
+    if (!para.listType) {
+      i++
+      continue
+    }
+
+    // 收集当前连续列表块
+    const blockStart = i
+    const blockListType = para.listType
+    const blockListId = para.listId
+    const blockItems: ListParagraphInfo[] = []
+
+    while (i < paragraphs.length) {
+      const p = paragraphs[i]
+      if (!p.listType || p.listType !== blockListType) break
+      // ordered 列表中 listId 不同时视为新块（不同列表的独立编号）
+      if (blockListType === 'ordered' && p.listId !== undefined && blockListId !== undefined && p.listId !== blockListId) break
+      blockItems.push(p)
+      i++
+    }
+
+    // 计算该块的起始编号
+    let startAt = 1
+    if (blockListType === 'ordered' && blockListId !== undefined && blockListId !== null) {
+      const prevCount = counters.get(blockListId) || 0
+      startAt = prevCount + 1
+      // 更新计数器：统计该块中 level 0 的项数
+      const levelZeroCount = blockItems.filter(p => (p.listLevel ?? 0) === 0).length
+      counters.set(blockListId, prevCount + levelZeroCount)
+    }
+
+    // 为块中每个段落设置相同的 startAt
+    for (let j = blockStart; j < i; j++) {
+      result[j] = { startAt }
+    }
+  }
+
+  return result
+}

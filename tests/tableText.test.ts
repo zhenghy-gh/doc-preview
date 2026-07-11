@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { isTableRowText, isWordTableRow, renderTableHtml, splitTableCells } from '../src/utils/tableText'
+import { isTableRowText, isWordTableRow, renderTableHtml, renderNestedTableHtml, splitTableCells } from '../src/utils/tableText'
 
 describe('tableText', () => {
   it('should split tab-delimited rows into cells', () => {
@@ -61,6 +61,68 @@ describe('tableText', () => {
     it('should handle CJK cell content', () => {
       expect(splitTableCells('姓名\u0007年龄\u0007城市\u0007')).toEqual(['姓名', '年龄', '城市'])
       expect(isTableRowText('姓名\u0007年龄\u0007城市\u0007')).toBe(true)
+    })
+  })
+
+  describe('Nested tables (renderNestedTableHtml)', () => {
+    it('should fall back to flat rendering when no depth info', () => {
+      const html = renderNestedTableHtml([
+        ['A', 'B'],
+        ['C', 'D'],
+      ])
+      expect(html).toContain('<table>')
+      expect(html).toContain('<td>A</td>')
+      expect(html).toContain('<td>D</td>')
+    })
+
+    it('should fall back to flat rendering when all depths are the same', () => {
+      const html = renderNestedTableHtml(
+        [
+          ['A', 'B'],
+          ['C', 'D'],
+        ],
+        undefined,
+        [1, 1],
+      )
+      expect(html).toContain('<table>')
+      expect(html).toContain('<td>A</td>')
+    })
+
+    it('should render nested table inside parent cell when depth increases', () => {
+      // Parent row depth=1, child row depth=2
+      const html = renderNestedTableHtml(
+        [
+          ['Parent'],
+          ['Child1', 'Child2'],
+        ],
+        undefined,
+        [1, 2],
+      )
+      // Should contain two <table> elements (parent + nested)
+      const tableCount = (html.match(/<table/g) || []).length
+      expect(tableCount).toBe(2)
+      // Parent cell should contain child table
+      expect(html).toContain('Parent')
+      expect(html).toContain('Child1')
+      expect(html).toContain('Child2')
+    })
+
+    it('should handle three levels of nesting', () => {
+      const html = renderNestedTableHtml(
+        [
+          ['L1'],
+          ['L2'],
+          ['L3'],
+        ],
+        undefined,
+        [1, 2, 3],
+      )
+      const tableCount = (html.match(/<table/g) || []).length
+      expect(tableCount).toBe(3)
+    })
+
+    it('should return empty string for empty rows', () => {
+      expect(renderNestedTableHtml([], undefined, [])).toBe('')
     })
   })
 })

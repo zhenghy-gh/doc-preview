@@ -89,6 +89,8 @@ export interface ParagraphFormat {
   listStyle?: string
   /** 列表层级（0 起算，按前导缩进推断）。同一连续块内 listLevel 不同的项会被渲染为嵌套列表。 */
   listLevel?: number
+  /** 列表唯一标识符（ilst 或 ilfo 派生），用于跨非列表段落的编号续接。 */
+  listId?: number
   /** 大纲级别（0-8，来自 sprmPOutlineLvl） */
   outlineLevel?: number
   /** 段落背景色（来自 sprmPShd） */
@@ -320,8 +322,12 @@ export interface ParsedDocument {
   hyperlinks?: Array<{ cpStart: number; cpEnd: number; url: string; result: string }>
   /** 目录条目列表，无目录时为 undefined。 */
   toc?: Array<{ level: number; text: string; pageNumber?: string; cp?: number }>
+  /** 索引条目列表（来自 INDEX 域），无索引时为 undefined。 */
+  index?: Array<{ mainTerm: string; subTerm?: string; pageNumber?: string; cp?: number }>
   /** 文档级标志（来自 DOP），无 DOP 数据时为 undefined。 */
   docFlags?: DocumentFlags
+  /** 创建文档的 Word 版本（基于 nFib 检测），未检测到时为 undefined。 */
+  wordVersion?: string
   /** 修订标记列表（来自 sprmCRMark/sprmCFRMark/sprmCFRMarkDel），无修订时为 undefined。 */
   revisions?: RevisionMark[]
   /** 文档域（来自 PlcfFld 的 AUTHOR/TITLE/DATE 等域），无域数据时为 undefined。 */
@@ -367,6 +373,8 @@ export interface ParsedDocument {
   charts?: ChartInfo[]
   /** WordArt 列表（来自 Office Art Drawing WordArt 对象），无艺术字时为 undefined。 */
   wordArts?: WordArtInfo[]
+  /** 样式集信息（来自 STSH 扩展数据或样式名推断），无样式集数据时为 undefined。 */
+  styleSet?: { name: string; isCustom?: boolean }
 }
 
 /**

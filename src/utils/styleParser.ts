@@ -37,6 +37,16 @@ export interface StyleDefinition {
   fontIndex?: number
 }
 
+/** Known style set names. */
+export type StyleSetName = 'Default' | 'Elegant' | 'Formal' | 'Modern' | 'Professional' | 'Simple' | 'Traditional' | 'Custom'
+
+export interface StyleSetInfo {
+  /** Style set name. */
+  name: StyleSetName
+  /** Whether this is a custom style set. */
+  isCustom?: boolean
+}
+
 // Built-in style indices (istd) for common styles.
 export const BUILTIN_STYLES: Record<number, { name: string; type: string }> = {
   0: { name: 'Normal', type: 'paragraph' },
@@ -502,6 +512,41 @@ export function parseStylesheet(data: Uint8Array, fc: number, lcb: number): Styl
  * Check if a style is a heading style (Heading 1-9).
  * Returns the heading level (1-9) or null if not a heading.
  */
+const STYLE_SETS: Array<{ name: StyleSetName; patterns: string[] }> = [
+  { name: 'Default', patterns: ['Normal', 'Heading 1', 'Heading 2', 'Heading 3'] },
+  { name: 'Elegant', patterns: ['Elegant', 'Elegant Heading', 'Elegant Title'] },
+  { name: 'Formal', patterns: ['Formal', 'Formal Heading', 'Formal Title'] },
+  { name: 'Modern', patterns: ['Modern', 'Modern Heading', 'Modern Title'] },
+  { name: 'Professional', patterns: ['Professional', 'Professional Heading'] },
+  { name: 'Simple', patterns: ['Simple', 'Simple Heading'] },
+  { name: 'Traditional', patterns: ['Traditional', 'Traditional Heading'] },
+]
+
+export function detectStyleSet(styles: StyleDefinition[]): StyleSetInfo | null {
+  const styleNames = styles.map(s => s.name.toLowerCase())
+
+  for (const styleSet of STYLE_SETS) {
+    const matched = styleSet.patterns.filter(p => {
+      const lowerP = p.toLowerCase()
+      return styleNames.includes(lowerP) || styleNames.some(sn => sn.includes(lowerP))
+    })
+    if (matched.length >= 2) {
+      return { name: styleSet.name }
+    }
+  }
+
+  const hasHeadingStyles = styles.some(s => getHeadingLevel(s.name) !== null)
+  if (hasHeadingStyles && styles.length >= 5) {
+    return { name: 'Default', isCustom: false }
+  }
+
+  if (styles.length > 20) {
+    return { name: 'Custom', isCustom: true }
+  }
+
+  return null
+}
+
 export function getHeadingLevel(styleName: string): number | null {
   const match = styleName.match(/^heading\s*(\d+)$/i)
   if (match) {

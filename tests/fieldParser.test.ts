@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parsePlcfFld, extractHyperlinks, extractDocumentFields, extractPageFields, extractCrossReferences } from '../src/utils/fieldParser'
+import { parsePlcfFld, extractHyperlinks, extractDocumentFields, extractPageFields, extractCrossReferences, parseIndexResult, parseTocInstruction } from '../src/utils/fieldParser'
 
 function writeUint32(buffer: Uint8Array, offset: number, value: number): void {
   buffer[offset] = value & 0xFF
@@ -574,6 +574,152 @@ describe('fieldParser', () => {
       ]
       const result = extractCrossReferences(fldEntries, 'x', new Uint8Array(10))
       expect(result.length).toBe(0)
+    })
+  })
+
+  describe('parseIndexResult', () => {
+    it('should parse simple index entries with dot leaders', () => {
+      const result = `Apple.................1
+Banana................2
+Cherry................3`
+      const entries = parseIndexResult(result)
+      expect(entries.length).toBe(3)
+      expect(entries[0].mainTerm).toBe('Apple')
+      expect(entries[0].pageNumber).toBe('1')
+      expect(entries[1].mainTerm).toBe('Banana')
+      expect(entries[1].pageNumber).toBe('2')
+    })
+
+    it('should parse entries with sub-terms (indented)', () => {
+      const result = `Apple.................1
+  Red apple...........2
+  Green apple.........3
+Banana................4`
+      const entries = parseIndexResult(result)
+      expect(entries.length).toBe(4)
+      expect(entries[0].mainTerm).toBe('Apple')
+      expect(entries[0].pageNumber).toBe('1')
+      expect(entries[1].mainTerm).toBe('Apple')
+      expect(entries[1].subTerm).toBe('Red apple')
+      expect(entries[1].pageNumber).toBe('2')
+      expect(entries[3].mainTerm).toBe('Banana')
+      expect(entries[3].pageNumber).toBe('4')
+    })
+
+    it('should parse tab-separated entries', () => {
+      const result = `Apple\t1
+Banana\t2`
+      const entries = parseIndexResult(result)
+      expect(entries.length).toBe(2)
+      expect(entries[0].mainTerm).toBe('Apple')
+      expect(entries[0].pageNumber).toBe('1')
+    })
+
+    it('should handle entries without page numbers', () => {
+      const result = `Apple
+Banana`
+      const entries = parseIndexResult(result)
+      expect(entries.length).toBe(2)
+      expect(entries[0].mainTerm).toBe('Apple')
+      expect(entries[0].pageNumber).toBeUndefined()
+    })
+
+    it('should return empty array for empty result', () => {
+      expect(parseIndexResult('')).toEqual([])
+      expect(parseIndexResult('   \n   ')).toEqual([])
+    })
+
+    it('should handle CJK index entries', () => {
+      const result = `苹果.................1
+  红苹果...............2
+香蕉..................3`
+      const entries = parseIndexResult(result)
+      expect(entries.length).toBe(3)
+      expect(entries[0].mainTerm).toBe('苹果')
+      expect(entries[0].pageNumber).toBe('1')
+      expect(entries[1].mainTerm).toBe('苹果')
+      expect(entries[1].subTerm).toBe('红苹果')
+      expect(entries[2].mainTerm).toBe('香蕉')
+    })
+  })
+
+  describe('parseTocInstruction', () => {
+    it('should return empty options for empty instruction', () => {
+      expect(parseTocInstruction('')).toEqual({})
+      expect(parseTocInstruction('   ')).toEqual({})
+    })
+
+    it('should parse outline level range with quotes', () => {
+      const opts = parseTocInstruction('TOC \\o "1-3" \\h \\z \\u')
+      expect(opts.outlineLevels).toEqual({ start: 1, end: 3 })
+      expect(opts.hyperlinks).toBe(true)
+      expect(opts.hideTabLeader).toBe(true)
+      expect(opts.useAppliedOutlineLevel).toBe(true)
+    })
+
+    it('should parse outline level range without quotes', () => {
+      const opts = parseTocInstruction('TOC \\o 1-3')
+      expect(opts.outlineLevels).toEqual({ start: 1, end: 3 })
+    })
+
+    it('should parse custom styles switch', () => {
+      const opts = parseTocInstruction('TOC \\t "Heading 1;1;Heading 2;2"')
+      expect(opts.customStyles).toBe('Heading 1;1;Heading 2;2')
+    })
+
+    it('should parse separator switch', () => {
+      const opts = parseTocInstruction('TOC \\p "-"')
+      expect(opts.separator).toBe('-')
+    })
+
+    it('should parse levelsOnly switch', () => {
+      const opts = parseTocInstruction('TOC \\l "1-1"')
+      expect(opts.levelsOnly).toEqual({ start: 1, end: 1 })
+    })
+
+    it('should parse boolean switches', () => {
+      const opts = parseTocInstruction('TOC \\f \\h \\n \\z \\u')
+      expect(opts.includeTc).toBe(true)
+      expect(opts.hyperlinks).toBe(true)
+      expect(opts.hidePageNumbers).toBe(true)
+      expect(opts.hideTabLeader).toBe(true)
+      expect(opts.useAppliedOutlineLevel).toBe(true)
+    })
+
+    it('should not set boolean switches when absent', () => {
+      const opts = parseTocInstruction('TOC \\o "1-3"')
+      expect(opts.includeTc).toBeUndefined()
+      expect(opts.hyperlinks).toBeUndefined()
+      expect(opts.hidePageNumbers).toBeUndefined()
+      expect(opts.hideTabLeader).toBeUndefined()
+      expect(opts.useAppliedOutlineLevel).toBeUndefined()
+    })
+
+    it('should handle complex instruction with all switches', () => {
+      const opts = parseTocInstruction('TOC \\o "1-3" \\t "Custom;1" \\f \\p "—" \\h \\n \\z \\u \\l "2-2"')
+      expect(opts.outlineLevels).toEqual({ start: 1, end: 3 })
+      expect(opts.customStyles).toBe('Custom;1')
+      expect(opts.includeTc).toBe(true)
+      expect(opts.separator).toBe('—')
+      expect(opts.hyperlinks).toBe(true)
+      expect(opts.hidePageNumbers).toBe(true)
+      expect(opts.hideTabLeader).toBe(true)
+      expect(opts.useAppliedOutlineLevel).toBe(true)
+      expect(opts.levelsOnly).toEqual({ start: 2, end: 2 })
+    })
+
+    it('should be case-insensitive for switch letters', () => {
+      const opts = parseTocInstruction('TOC \\O "1-3" \\H \\Z')
+      expect(opts.outlineLevels).toEqual({ start: 1, end: 3 })
+      expect(opts.hyperlinks).toBe(true)
+      expect(opts.hideTabLeader).toBe(true)
+    })
+
+    it('should not misinterpret unrelated text as switches', () => {
+      // "officer" contains "o" but should not match \\o
+      const opts = parseTocInstruction('TOC officer \\h')
+      expect(opts.outlineLevels).toBeUndefined()
+      expect(opts.hyperlinks).toBe(true)
     })
   })
 })

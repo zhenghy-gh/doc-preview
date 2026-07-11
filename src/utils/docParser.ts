@@ -12,12 +12,12 @@ import { extractPicturesFromDataStream, parsePicfAt } from './pictureParser'
 import type { ParsedPicture } from './pictureParser'
 import { parseChpxRuns, parsePapxRuns, mergeCharFormatForParagraph } from './formatParser'
 import type { ChpxRun, PapxRun } from './formatParser'
-import { parseStylesheet, getHeadingLevel } from './styleParser'
-import type { StyleDefinition } from './styleParser'
+import { parseStylesheet, getHeadingLevel, detectStyleSet } from './styleParser'
+import type { StyleDefinition, StyleSetInfo } from './styleParser'
 import { parseFontTable } from './fontParser'
 import { parseListTable, getListFormat, getListFormatFromLfo, parsePlcfLfo } from './listParser'
 import type { ListEntry, LfoEntry } from './listParser'
-import { parsePlcfFld, extractHyperlinks, extractAllFields, extractDocumentFields, extractPageFields, extractCrossReferences, TocEntry } from './fieldParser'
+import { parsePlcfFld, extractHyperlinks, extractAllFields, extractDocumentFields, extractPageFields, extractCrossReferences, TocEntry, IndexEntry } from './fieldParser'
 import type { FieldRange, DocumentFields, PageFieldInfo, CrossReferenceInfo } from './fieldParser'
 import { parseSummaryInformation, parseDocumentSummaryInformation, hasProperties } from './propertyParser'
 import type { DocumentProperties } from './propertyParser'
@@ -242,6 +242,12 @@ export class DocParser {
       if (extracted.equations && extracted.equations.length > 0) {
         document.equations = extracted.equations
       }
+      if (extracted.indexEntries && extracted.indexEntries.length > 0) {
+        document.index = extracted.indexEntries
+      }
+      if (extracted.styleSet) {
+        document.styleSet = extracted.styleSet
+      }
 
       // Extract document properties from SummaryInformation stream
       const props = this.extractProperties(directory)
@@ -266,6 +272,10 @@ export class DocParser {
           if (Object.keys(docFlags).length > 0) {
             document.docFlags = docFlags
           }
+        }
+        // Surface the detected Word version (from nFib) for UI display
+        if (fib.wordVersion && fib.wordVersion !== 'unknown') {
+          document.wordVersion = fib.wordVersion
         }
       }
 
@@ -313,7 +323,9 @@ export class DocParser {
     }
 
     if (fib.fcMin === 0 || fib.fcMac === 0) {
-      return this.extractTextWithAutoDetect(data, fib.fComplex)
+      // textutil files have unreliable fComplex — ignore it and lean toward UTF-16
+      const suggestedComplex = fib.isTextutil ? false : fib.fComplex
+      return this.extractTextWithAutoDetect(data, suggestedComplex)
     }
 
     return this.extractTextSimple(data, { fcMin: fib.fcMin, fComplex: fib.fComplex })
@@ -396,11 +408,59 @@ export class DocParser {
   private static readonly JUNK_CHAR_CLASS = '伀倀藠俹醫蠀耀頀琀餀栀儀騀甀攀爀愀氀攀漀漀渀'
   private static readonly EXTRA_JUNK_CHARS = '伇倈俼俿儀儜厬唀唕嘀噀圀堀嬀崀崜帀幀弰彀戀戀'
 
-  /** Shared set of CJK/symbol codepoints valid in UTF-16LE .doc text. */
-  private static readonly VALID_CJK_CODEPOINTS = new Set([
-    0x3001, 0x3002, 0xFF0C, 0xFF0E, 0x300A, 0x300B, 0x2018, 0x2019,
-    0x201C, 0x201D, 0xFF08, 0xFF09, 0xFF1F, 0xFF01, 0xFF1A, 0x3000,
-  ])
+  /**
+   * Check whether a UTF-16 code unit is a printable character that should
+   * be preserved in extracted text. Uses a "blocklist + range" strategy:
+   * accept most Unicode printable characters, only reject control chars
+   * and surrogate halves.
+   */
+  private static isValidPrintableChar(charCode: number): boolean {
+    if (charCode < 0x20) return false
+    if (charCode === 0x7F) return false
+    if (charCode >= 0x80 && charCode <= 0x9F) return false
+    if (charCode >= 0xD800 && charCode <= 0xDFFF) return false
+    if (charCode >= 0xFDD0 && charCode <= 0xFDEF) return false
+    if ((charCode & 0xFFFE) === 0xFFFE) return false
+    return true
+  }
+
+  /**
+   * Mapping from 8-bit compressed (fComplex) high-byte characters (0x80-0xFF)
+   * to their Unicode equivalents, following Windows-1252 / Word's conventions.
+   * Index 0 corresponds to byte 0x80; index 127 corresponds to byte 0xFF.
+   * null / undefined means "use the byte value as-is" (Latin-1 fallback).
+   */
+  private static readonly HIGH_BYTE_MAP: (string | null)[] = (() => {
+    const map: (string | null)[] = new Array(128).fill(null)
+    map[0x80 - 0x80] = '\u20AC'
+    map[0x82 - 0x80] = '\u201A'
+    map[0x83 - 0x80] = '\u0192'
+    map[0x84 - 0x80] = '\u201E'
+    map[0x85 - 0x80] = '\u2026'
+    map[0x86 - 0x80] = '\u2020'
+    map[0x87 - 0x80] = '\u2021'
+    map[0x88 - 0x80] = '\u02C6'
+    map[0x89 - 0x80] = '\u2030'
+    map[0x8A - 0x80] = '\u0160'
+    map[0x8B - 0x80] = '\u2039'
+    map[0x8C - 0x80] = '\u0152'
+    map[0x8E - 0x80] = '\u017D'
+    map[0x91 - 0x80] = '\u2018'
+    map[0x92 - 0x80] = '\u2019'
+    map[0x93 - 0x80] = '\u201C'
+    map[0x94 - 0x80] = '\u201D'
+    map[0x95 - 0x80] = '\u2022'
+    map[0x96 - 0x80] = '\u2013'
+    map[0x97 - 0x80] = '\u2014'
+    map[0x98 - 0x80] = '\u02DC'
+    map[0x99 - 0x80] = '\u2122'
+    map[0x9A - 0x80] = '\u0161'
+    map[0x9B - 0x80] = '\u203A'
+    map[0x9C - 0x80] = '\u0153'
+    map[0x9E - 0x80] = '\u017E'
+    map[0x9F - 0x80] = '\u0178'
+    return map
+  })()
 
   /**
    * Scan UTF-16LE bytes and yield characters into a buffer.
@@ -420,20 +480,23 @@ export class DocParser {
     // 0x09 0x00 = tab, keep it for table rendering
     if (byte1 === 0x09 && byte2 === 0x00) return { ch: '\t', advance: 2 }
 
-    // ASCII range (byte2 is high byte, must be 0x00 for single-byte chars)
+    const charCode = (byte2 << 8) | byte1
+
+    // ASCII printable range (byte2 === 0x00)
     if (byte2 === 0x00 && byte1 >= 0x20 && byte1 <= 0x7E) {
       return { ch: String.fromCharCode(byte1), advance: 2 }
     }
 
-    const charCode = (byte2 << 8) | byte1
-    // CJK Unified Ideographs
-    if (charCode >= 0x4E00 && charCode <= 0x9FFF) {
+    // CJK Unified Ideographs + Extension A
+    if (charCode >= 0x3400 && charCode <= 0x9FFF) {
       return { ch: String.fromCharCode(charCode), advance: 2 }
     }
-    // CJK symbols and punctuation
-    if (DocParser.VALID_CJK_CODEPOINTS.has(charCode)) {
+
+    // General printable Unicode check (punctuation, symbols, letters, etc.)
+    if (DocParser.isValidPrintableChar(charCode)) {
       return { ch: String.fromCharCode(charCode), advance: 2 }
     }
+
     return null
   }
 
@@ -807,13 +870,17 @@ export class DocParser {
         const byte = data[i]
         if (byte === 0x0D) text += '\n'
         else if (byte === 0x09) text += '\t'
-        else if (byte === 0x0C) text += '\f' // 分页符 (Form Feed)
-        else if (byte === 0x0B) text += '\v' // 软换行 (Shift+Enter / Vertical Tab)
-        else if (byte === 0x07) text += '\u0007' // Word table cell mark
-        else if (byte === 0xA0) text += '\u00A0' // 不间断空格 (NBSP)
-        else if (byte === 0xAD) text += '\u00AD' // 可选连字符 (Soft Hyphen)
-        else if (byte === 0x1E) text += '\u2011' // 不间断连字符 (Non-breaking Hyphen)
+        else if (byte === 0x0C) text += '\f'
+        else if (byte === 0x0B) text += '\v'
+        else if (byte === 0x07) text += '\u0007'
+        else if (byte === 0xA0) text += '\u00A0'
+        else if (byte === 0xAD) text += '\u00AD'
+        else if (byte === 0x1E) text += '\u2011'
         else if (byte === 0x0A || byte === 0x00) continue
+        else if (byte >= 0x80 && byte <= 0xFF) {
+          const mapped = DocParser.HIGH_BYTE_MAP[byte - 0x80]
+          text += mapped ?? String.fromCharCode(byte)
+        }
         else if (byte >= 0x20) text += String.fromCharCode(byte)
       }
     } else {
@@ -821,14 +888,14 @@ export class DocParser {
         const charCode = (data[i] | (data[i + 1] << 8)) & 0xFFFF
         if (charCode === 0x000d) text += '\n'
         else if (charCode === 0x0009) text += '\t'
-        else if (charCode === 0x000c) text += '\f' // 分页符 (Form Feed)
-        else if (charCode === 0x000b) text += '\v' // 软换行 (Shift+Enter / Vertical Tab)
-        else if (charCode === 0x0007) text += '\u0007' // Word table cell mark
-        else if (charCode === 0x00a0) text += '\u00A0' // 不间断空格 (NBSP)
-        else if (charCode === 0x00ad) text += '\u00AD' // 可选连字符 (Soft Hyphen)
-        else if (charCode === 0x001e) text += '\u2011' // 不间断连字符 (Non-breaking Hyphen)
+        else if (charCode === 0x000c) text += '\f'
+        else if (charCode === 0x000b) text += '\v'
+        else if (charCode === 0x0007) text += '\u0007'
+        else if (charCode === 0x00a0) text += '\u00A0'
+        else if (charCode === 0x00ad) text += '\u00AD'
+        else if (charCode === 0x001e) text += '\u2011'
         else if (charCode === 0x000a || charCode === 0x0000) continue
-        else if ((charCode >= 0x0020 && charCode <= 0x007E) || (charCode >= 0x4E00 && charCode <= 0x9FFF) || (charCode >= 0x3000 && charCode <= 0x303F) || (charCode >= 0xFF00 && charCode <= 0xFFEF) || (charCode === 0x2018 || charCode === 0x2019 || charCode === 0x201C || charCode === 0x201D)) {
+        else if (DocParser.isValidPrintableChar(charCode)) {
           text += String.fromCharCode(charCode)
         }
       }
@@ -850,15 +917,17 @@ export class DocParser {
     directory: DirectoryEntry[],
     wordDocData?: Uint8Array,
     text?: string,
-  ): { chpxRuns: ChpxRun[]; papxRuns: PapxRun[]; styles: StyleDefinition[]; fontNames: string[]; listEntries: ListEntry[]; lfoEntries: LfoEntry[]; hyperlinks: FieldRange[]; tocEntries: TocEntry[]; authors: string[]; revisions: RevisionMark[]; documentFields: DocumentFields; bookmarks: BookmarkRange[]; sections: SectionInfo[]; pageFields: PageFieldInfo[]; crossReferences: CrossReferenceInfo[]; shapes: ShapeInfo[]; equations: EquationInfo[]; charts: ChartInfo[]; wordArts: WordArtInfo[] } {
+  ): { chpxRuns: ChpxRun[]; papxRuns: PapxRun[]; styles: StyleDefinition[]; fontNames: string[]; listEntries: ListEntry[]; lfoEntries: LfoEntry[]; hyperlinks: FieldRange[]; tocEntries: TocEntry[]; indexEntries: IndexEntry[]; authors: string[]; revisions: RevisionMark[]; documentFields: DocumentFields; bookmarks: BookmarkRange[]; sections: SectionInfo[]; pageFields: PageFieldInfo[]; crossReferences: CrossReferenceInfo[]; shapes: ShapeInfo[]; equations: EquationInfo[]; charts: ChartInfo[]; wordArts: WordArtInfo[]; styleSet?: StyleSetInfo } {
     const chpxRuns: ChpxRun[] = []
     const papxRuns: PapxRun[] = []
     let styles: StyleDefinition[] = []
+    let styleSet: StyleSetInfo | undefined
     let fontNames: string[] = []
     let listEntries: ListEntry[] = []
     const lfoEntries: LfoEntry[] = []
     const hyperlinks: FieldRange[] = []
     const tocEntries: TocEntry[] = []
+    const indexEntries: IndexEntry[] = []
     let authors: string[] = []
     const revisions: RevisionMark[] = []
     const documentFields: DocumentFields = {}
@@ -869,10 +938,10 @@ export class DocParser {
     let shapes: ShapeInfo[] = []
     const equations: EquationInfo[] = []
 
-    if (!fib) return { chpxRuns, papxRuns, styles, fontNames, listEntries, lfoEntries, hyperlinks, tocEntries, authors, revisions, documentFields, bookmarks, sections, pageFields, crossReferences, shapes, equations, charts: [], wordArts: [] }
+    if (!fib) return { chpxRuns, papxRuns, styles, fontNames, listEntries, lfoEntries, hyperlinks, tocEntries, indexEntries, authors, revisions, documentFields, bookmarks, sections, pageFields, crossReferences, shapes, equations, charts: [], wordArts: [] }
 
     const tableData = this.readTableStream(fib, directory)
-    if (!tableData || tableData.length === 0) return { chpxRuns, papxRuns, styles, fontNames, listEntries, lfoEntries, hyperlinks, tocEntries, authors, revisions, documentFields, bookmarks, sections, pageFields, crossReferences, shapes, equations, charts: [], wordArts: [] }
+    if (!tableData || tableData.length === 0) return { chpxRuns, papxRuns, styles, fontNames, listEntries, lfoEntries, hyperlinks, tocEntries, indexEntries, authors, revisions, documentFields, bookmarks, sections, pageFields, crossReferences, shapes, equations, charts: [], wordArts: [] }
 
     try {
       if (fib.lcbPlcfBteChpx > 0 &&
@@ -943,6 +1012,11 @@ export class DocParser {
         if (parsedStyles.length > 0) {
           logger.info(`解析到 ${parsedStyles.length} 个样式定义`)
           styles = parsedStyles
+          const detected = detectStyleSet(parsedStyles)
+          if (detected) {
+            logger.info(`检测到样式集: ${detected.name}`)
+            styleSet = detected
+          }
         }
       }
     } catch (e) {
@@ -1003,6 +1077,16 @@ export class DocParser {
           }
           if (tocEntries.length > 0) {
             logger.info(`解析到 ${tocEntries.length} 个目录条目`)
+          }
+
+          const indexFields = allFields.filter(f => f.flt === 14 && f.indexEntries && f.indexEntries.length > 0)
+          for (const indexField of indexFields) {
+            if (indexField.indexEntries) {
+              ;(indexEntries as IndexEntry[]).push(...indexField.indexEntries)
+            }
+          }
+          if (indexEntries.length > 0) {
+            logger.info(`解析到 ${indexEntries.length} 个索引条目`)
           }
 
           const fields = extractDocumentFields(fldEntries, text, wordDocData)
@@ -1192,7 +1276,7 @@ export class DocParser {
       logger.warn(`WordArt 解析失败: ${e}`)
     }
 
-    return { chpxRuns, papxRuns, styles, fontNames, listEntries, lfoEntries, hyperlinks, tocEntries, authors, revisions, documentFields, bookmarks, sections, pageFields, crossReferences, shapes, equations, charts, wordArts }
+    return { chpxRuns, papxRuns, styles, fontNames, listEntries, lfoEntries, hyperlinks, tocEntries, indexEntries, authors, revisions, documentFields, bookmarks, sections, pageFields, crossReferences, shapes, equations, charts, wordArts, styleSet }
   }
 
   /**
@@ -1317,6 +1401,7 @@ export class DocParser {
               newPara.paraFormat.listType = listFmt.listType
               newPara.paraFormat.listStyle = listFmt.listStyle
               newPara.paraFormat.listLevel = listFmt.listLevel
+              newPara.paraFormat.listId = papx.ilfo
               newPara.paraFormatFromReal = true
             }
           } else if (papx.ilst !== undefined && listEntries && listEntries.length > 0) {
@@ -1326,6 +1411,7 @@ export class DocParser {
               newPara.paraFormat.listType = listFmt.listType
               newPara.paraFormat.listStyle = listFmt.listStyle
               newPara.paraFormat.listLevel = listFmt.listLevel
+              newPara.paraFormat.listId = papx.ilst
               newPara.paraFormatFromReal = true
             }
           }
@@ -1397,12 +1483,12 @@ export class DocParser {
   private extractFormattedText(
     wordStream: StreamData,
     directory: DirectoryEntry[],
-  ): { paragraphs: any[]; stories?: DocumentStories; chpxRuns?: ChpxRun[]; papxRuns?: PapxRun[]; styles?: StyleDefinition[]; hyperlinks?: FieldRange[]; tocEntries?: TocEntry[]; revisions?: RevisionMark[]; documentFields?: DocumentFields; bookmarks?: BookmarkRange[]; sections?: SectionInfo[]; pageFields?: PageFieldInfo[]; crossReferences?: CrossReferenceInfo[]; shapes?: ShapeInfo[]; equations?: EquationInfo[]; charts?: ChartInfo[]; wordArts?: WordArtInfo[] } {
+  ): { paragraphs: any[]; stories?: DocumentStories; chpxRuns?: ChpxRun[]; papxRuns?: PapxRun[]; styles?: StyleDefinition[]; hyperlinks?: FieldRange[]; tocEntries?: TocEntry[]; indexEntries?: IndexEntry[]; revisions?: RevisionMark[]; documentFields?: DocumentFields; bookmarks?: BookmarkRange[]; sections?: SectionInfo[]; pageFields?: PageFieldInfo[]; crossReferences?: CrossReferenceInfo[]; shapes?: ShapeInfo[]; equations?: EquationInfo[]; charts?: ChartInfo[]; wordArts?: WordArtInfo[]; styleSet?: StyleSetInfo } {
     const data = wordStream.data
     const fib = parseFib(data)
 
     if (fib && fib.fcMin > 0 && fib.fcMac > 0) {
-      return { paragraphs: this.extractTextWithFormatFromFib(data, fib), tocEntries: [], documentFields: {}, equations: [] }
+      return { paragraphs: this.extractTextWithFormatFromFib(data, fib), tocEntries: [], indexEntries: [], documentFields: {}, equations: [] }
     }
 
     // Prefer CLX-driven extraction: it correctly handles per-piece encoding
@@ -1432,7 +1518,7 @@ export class DocParser {
 
         if (mainText.length > 0) {
           // Parse formats AFTER we have the text (needed for hyperlink extraction)
-          const { chpxRuns, papxRuns, styles, fontNames, listEntries, lfoEntries, hyperlinks, tocEntries, revisions, documentFields, bookmarks, sections, pageFields, crossReferences, shapes, equations, charts, wordArts } =
+          const { chpxRuns, papxRuns, styles, fontNames, listEntries, lfoEntries, hyperlinks, tocEntries, indexEntries, revisions, documentFields, bookmarks, sections, pageFields, crossReferences, shapes, equations, charts, wordArts, styleSet } =
             this.parseFormatRuns(fib, directory, data, mainText)
 
           // Replace page field placeholders in mainText before paragraph splitting.
@@ -1466,6 +1552,7 @@ export class DocParser {
               styles,
               hyperlinks,
               tocEntries,
+              indexEntries,
               revisions,
               documentFields,
               bookmarks,
@@ -1476,14 +1563,21 @@ export class DocParser {
               equations,
               charts,
               wordArts,
+              styleSet,
             }
           }
         }
       }
     }
 
-    const suggestedComplex = fib ? fib.fComplex : false
-    logger.warn(`FIB无有效偏移，自动检测编码(fComplex=${suggestedComplex})`)
+    // textutil-generated files have fComplex bit always set (byte 10=0xBF),
+    // but the content is often UTF-16LE. Ignore fComplex for those files
+    // and lean toward UTF-16 in the scoring fallback.
+    const isTextutil = fib?.isTextutil === true
+    const suggestedComplex = isTextutil ? false : (fib?.fComplex ?? false)
+    logger.warn(
+      `FIB无有效偏移，自动检测编码(fComplex=${fib?.fComplex}, textutil=${isTextutil}, useSuggested=${suggestedComplex})`
+    )
 
     const binaryDetect = this.detectEncodingFromBinary(data)
     if (binaryDetect !== null) {
@@ -1495,7 +1589,11 @@ export class DocParser {
     const raw16 = this.extractParagraphsWithFormat(data, { fcMin: 0, fComplex: false })
     const score8 = this.scoreRawParagraphs(raw8)
     const score16 = this.scoreRawParagraphs(raw16)
-    const useComplex = suggestedComplex ? score8 >= score16 * 0.4 : score16 < score8 * 0.4
+    // For textutil files, weight UTF-16 more heavily (textutil usually produces UTF-16)
+    const scoreThreshold = isTextutil ? 0.6 : 0.4
+    const useComplex = suggestedComplex
+      ? score8 >= score16 * scoreThreshold
+      : score16 < score8 * scoreThreshold
     return { paragraphs: this.filterParagraphsWithGenericLogic(useComplex ? raw8 : raw16), tocEntries: undefined }
   }
 
@@ -1704,9 +1802,13 @@ export class DocParser {
 
       const pictures: ParsedPicture[] = []
       const seenFcPics = new Set<number>()
+      const fcPicToCp = new Map<number, number>()
 
       for (const run of chpxRuns) {
         if (run.fcPic === undefined) continue
+        if (!fcPicToCp.has(run.fcPic)) {
+          fcPicToCp.set(run.fcPic, run.cpStart)
+        }
         if (seenFcPics.has(run.fcPic)) continue
         seenFcPics.add(run.fcPic)
         const pic = parsePicfAt(dataStream.data, run.fcPic)
@@ -1772,6 +1874,9 @@ export class DocParser {
         if (pic.widthPx !== undefined) item.widthPx = pic.widthPx
         if (pic.heightPx !== undefined) item.heightPx = pic.heightPx
         if (pic.floating !== undefined) item.floating = pic.floating
+        if (pic.dataOffset !== undefined && fcPicToCp.has(pic.dataOffset)) {
+          item.cp = fcPicToCp.get(pic.dataOffset)
+        }
 
         result.push(item)
       }

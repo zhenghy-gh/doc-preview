@@ -95,6 +95,23 @@ src/
 23. **分页支持** — 按页面高度（A4 默认 842pt）自动分割内容为 `.page-content` 容器，工具栏分页导航控件（上一页/下一页/页码显示），支持 `pageBreakBefore` 段落强制换页，基于节信息动态计算页面尺寸
 24. **表格增强** — sprmTDefTable 完整解析 TC 结构（TCGrpf 位域 + 4 个 Brc 边框），单元格级边框渲染（上/下/左/右），水平合并（fHorzMerge → colspan）+ 垂直合并（fVertMerge → rowspan）完整支持
 25. **表格对齐与缩进** — sprmTJTable (0xD632) 表格对齐方式（左/居中/右），sprmTDxaTableIndent (0xD609) 表格缩进（twips），CSS margin 实现表格居中/右对齐/缩进渲染
+26. **索引域解析** — PlcfFld 中 INDEX 域（flt=14）识别，`parseIndexResult` 函数解析索引结果文本（点引导符/制表符分隔），提取主索引项（mainTerm）、子索引项（subTerm）和页码（pageNumber），DocPreview.vue 索引面板展示（`fieldParser.ts`）
+27. **样式集检测** — `detectStyleSet` 函数基于样式名称模式匹配识别内置样式集（Default/Elegant/Formal/Modern/Professional/Simple/Traditional），根据样式数量和标题存在性推断自定义样式集，样式集信息在文档属性面板展示（`styleParser.ts`）
+28. **嵌套表格渲染** — `renderNestedTableHtml` 函数根据 sprmPTableDepth 深度字段递归渲染嵌套表格，更深的行作为父表格最后一个单元格内的子表格，使用占位符机制避免 escapeHtml 转义子表格 HTML（`tableText.ts`）
+29. **TOC 域指令开关解析** — `parseTocInstruction` 函数解析 TOC 域 instruction 中的所有开关（\o 大纲级别范围、\t 自定义样式、\f 包含 TC 域、\p 分隔符、\h 超链接、\n 隐藏页码、\z 隐藏 TabLeader、\u 使用应用大纲级别、\l 仅指定级别），`TocOptions` 结构化返回，TOC 域（flt=19）完整解析（`fieldParser.ts`）
+30. **列表编号续接** — `computeListContinuity` 纯函数按 `listId`（ilst/ilfo）追踪编号连续性，跨非列表段落续接编号，不同列表ID使用独立计数器，支持多级列表（仅 level-0 计入编号），`<ol start="N">` HTML 属性实现续接渲染（`listParser.ts` + `DocPreview.vue`）
+31. **特殊符号增强** — UTF-16 模式从白名单策略升级为黑名单策略（`isValidPrintableChar`），完整支持所有可打印 Unicode 字符；8-bit 压缩模式新增 Windows-1252 高字节映射（HIGH_BYTE_MAP，27 个排版符号：em dash、en dash、省略号、弯引号、项目符号、商标符号、欧元符号等）
+32. **文本框内容增强** — `formatStoryText` 函数改进：按单个段落标记分割保留段落结构，保留前导空格（缩进），压缩连续空段落，渲染软换行（`<br>`）、分页符（`[分页]` 标记）、表格单元格标记（`│` 分隔符）；惠及所有 story（页眉页脚/脚注/尾注/批注/文本框）的展示
+33. **macOS textutil 兼容增强** — `isTextutilFib()` 检测 textutil 生成的文件（byte 10=0xBF、FIB 结构最小化特征，编码检测时忽略不可靠的 fComplex 标志，优先尝试 UTF-16LE，评分机制提高 UTF-16 权重（0.6 阈值）
+34. **文本框浮动位置渲染** — `renderTextboxAnchorHtml()` 通过 ShapeInfo.anchorCp 将文本框形状定位到主文档锚点段落（CP 落在段落 `_cpStart`~`_cpEnd` 范围内），生成浮动标记展示位置/尺寸（twips→px 转换）+ 锚点类型，tooltip 包含完整 twips/CP/SPID 信息，暗黑模式适配
+35. **嵌入式图片内联渲染** — 在 `extractPictures` 中通过 fcPic→cp 映射记录图片在文档中的字符位置；在 DocPreview.vue 中基于 cp 将嵌入式图片渲染到对应段落，显示图片 + 格式/尺寸说明文字，支持最大尺寸限制和暗黑模式样式
+36. **分栏渲染** — 在 `formatFormattedTextToHtml` 中通过 `findSectionForCp` 查找段落所属 section，跟踪 `currentColumnCount`/`currentColumnSpacingPt`；`finalizePage` 时根据栏数给 `.page-content` 添加 CSS `column-count`/`column-gap`/`column-fill: auto` 样式实现实际分栏渲染；section 切换（栏数变化）时自动 `finalizePage` 确保不同分栏配置的内容分属不同页面
+37. **Word 版本检测** — `detectWordVersion` 函数基于 FIB 偏移 2-3 的 nFib 值检测 Word 版本（Word 6.0/95/97/2000/2002/2003/2007+），`WORD_VERSION_LABELS` 提供显示名称映射；FibData 新增 `nFib`/`wordVersion` 字段，ParsedDocument 新增 `wordVersion` 字段，文档属性面板展示版本信息（`fibParser.ts` + `docParser.ts` + `DocPreview.vue`）
+38. **分页键盘快捷键** — `handleKeydown` 中新增 PageUp/PageDown（上一页/下一页）、Home/End（首页/末页）键盘快捷键；输入框聚焦时跳过导航快捷键避免干扰文本编辑（`DocPreview.vue`）
+39. **搜索选项增强** — 搜索栏新增大小写敏感（`Aa`）和全词匹配（`W`）复选框；`performSearch` 函数根据选项构建正则表达式（`(^|[^\w])(query)($|[^\w])`）或子串匹配，全词匹配时转义 regex 特殊字符；切换选项自动重新搜索，`:has(input:checked)` CSS 选择器实现选中态高亮（`DocPreview.vue`）
+40. **虚拟滚动（性能优化）** — `formatFormattedTextToHtml` 返回页面数组 `string[]`，新增 `pages` ref 与 `virtualScrollEnabled`/`visibleStart`/`visibleEnd`/`pageHeights` 状态；模板用 `v-for` 渲染页面，`isPageVisible`/`getPagePlaceholderHeight` 控制可视页面渲染真实内容、非可视页面用占位 div（高度缓存）；`updateVisibleRange` 基于 `getBoundingClientRect` 计算可视索引范围（含 ±1 页缓冲），`measureVisiblePageHeights` 缓存真实高度；window scroll/resize 监听 + requestAnimationFrame throttle；搜索/大纲导航时临时禁用虚拟滚动确保全部页面可查询；小文档（≤3 页）自动跳过虚拟滚动（`DocPreview.vue`）
+41. **导出为 Markdown** — `downloadMarkdown` 函数使用 DOM 解析器将预览 HTML 转换为标准 Markdown 格式；`convertBlockToMd` 处理块级元素（h1-h6→# 标题、p→正文、ul/ol→列表、table→Markdown 表格语法、pre→代码块、blockquote→引用），`convertInlineToMd` 处理内联格式（strong→**粗体**、em→*斜体*、s→~~删除线~~、a→[链接]、img→![图片]），`convertTableToMd` 支持表头识别和 colspan 适配，`convertListToMd` 支持嵌套列表和缩进；工具栏 📝 按钮一键下载 `.md` 文件（`DocPreview.vue`）
+42. **快捷键面板** — `showShortcuts` ref + `shortcutList` 常量数组定义 13 条快捷键说明；工具栏 ⌨️ 按钮、`?` 键、`Ctrl+/` 三种触发方式，Escape/点击遮罩关闭；`v-if` 渲染模态遮罩 + 圆角面板，`kbd` 标签显示组合键，多键名下 `v-for` 拆分为多个 `<kbd>`（`DocPreview.vue`）
 
 两条解析路径：
 - `parse()` — 只提取纯文本
@@ -157,6 +174,6 @@ src/
 - `docParser.ts` 有 `DEBUG_MODE = true` 常量，控制调试日志输出
 - Vite resolve 别名 `@` 指向 `src/` 目录
 - 确认无任何硬编码的文档特定模式；所有规则均基于通用文本特征
-- macOS `textutil` 创建的 .doc 文件 byte 12 始终为 0xBF，fComplex 标志不可靠
+- macOS `textutil` 创建的 .doc 文件 byte 10 为 0xBF，fComplex 标志不可靠 — 已通过 `isTextutilFib()` 检测并自动优化编码选择
 - 图片提取采用双层策略：优先通过 CHPX `fcPic` + PICF 结构精确解析，回退到 Data 流魔数扫描；浮动图片通过 Office Art Drawing Container 解析获取形状锚点定位
 - `ParsedDocument.images`（data URL 数组）保留用于向后兼容；新增 `pictures` 字段提供结构化信息（format/widthPx/heightPx/floating/cp）
