@@ -121,6 +121,14 @@ function toggleDarkMode() {
   localStorage.setItem('dark-mode', String(darkMode.value))
 }
 
+// --- Web Font ---
+const useWebFont = ref(localStorage.getItem('use-webfont') === 'true')
+
+function toggleWebFont() {
+  useWebFont.value = !useWebFont.value
+  localStorage.setItem('use-webfont', String(useWebFont.value))
+}
+
 // Sync dark class on mount and changes
 if (darkMode.value) {
   document.documentElement.classList.add('dark')
@@ -190,6 +198,14 @@ watch(darkMode, (val) => {
         <div class="preview-header">
           <span class="file-name">{{ typeof previewSource === 'string' ? previewSource.split('/').pop() : selectedFile?.name || '文档预览' }}</span>
           <div class="header-actions">
+            <button
+              class="header-btn"
+              @click="toggleWebFont"
+              :class="{ active: useWebFont }"
+              :title="useWebFont ? '关闭 Web Font' : '启用 Web Font'"
+            >
+              🔤
+            </button>
             <button class="header-btn" @click="toggleReaderMode" :title="readerMode ? '退出阅读模式' : '阅读模式'">
               {{ readerMode ? '⊟' : '⊞' }}
             </button>
@@ -198,7 +214,7 @@ watch(darkMode, (val) => {
             </button>
           </div>
         </div>
-        <DocPreview :source="previewSource" />
+        <DocPreview :source="previewSource" :use-web-font="useWebFont" />
       </template>
     </main>
   </div>
@@ -457,6 +473,11 @@ watch(darkMode, (val) => {
 
 .header-btn:hover {
   background: #e0e0e0;
+}
+
+.header-btn.active {
+  background: #667eea;
+  color: white;
 }
 
 /* Reader mode: full-width, hide header/main padding */

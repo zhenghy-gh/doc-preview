@@ -2,7 +2,8 @@
 import { ref, computed, watch, onMounted, onUnmounted, onErrorCaptured, nextTick } from 'vue'
 import { parseDocFileWithFormat, parseDocFileFromBuffer } from '../utils/docParser'
 import { parseWithWorker } from '../utils/parseWithWorker'
-import type { CharacterFormat, ParagraphFormat, CharStyleSegment } from '../utils/docFormat'
+import { renderTableHtml, splitTableCells } from '../utils/tableText'
+import type { CharacterFormat, ParagraphFormat, CharStyleSegment, TableInfo } from '../utils/docFormat'
 
 const WORKER_THRESHOLD = 1024 * 1024 // 1MB — files larger than this use Web Worker
 const isWorkerSupported = typeof Worker !== 'undefined'
@@ -12,9 +13,72 @@ const isUsingWorker = ref(false)
 
 interface ParserOutput {
   success: boolean
-  document?: { paragraphs: FormattedParagraphOutput[] }
+  document?: { paragraphs: FormattedParagraphOutput[]; stories?: DocumentStories; images?: string[]; hyperlinks?: HyperlinkRange[]; toc?: TocEntry[]; properties?: DocumentProperties; docFlags?: DocumentFlags }
   text?: string
   error?: string
+}
+
+interface HyperlinkRange {
+  cpStart: number
+  cpEnd: number
+  url: string
+  result: string
+}
+
+interface TocEntry {
+  level: number
+  text: string
+  pageNumber?: string
+  cp?: number
+}
+
+interface DocumentFlags {
+  facingPages?: boolean
+  titlePage?: boolean
+  pmhMain?: boolean
+  trackChanges?: boolean
+  ftnRestart?: boolean
+  ftnEnd?: boolean
+  ftnAtEnd?: boolean
+}
+
+interface DocumentProperties {
+  title?: string
+  subject?: string
+  author?: string
+  keywords?: string
+  comments?: string
+  lastAuthor?: string
+  pageCount?: number
+  wordCount?: number
+  charCount?: number
+  template?: string
+  appName?: string
+  revisionNumber?: string
+  editTime?: number
+  createdTime?: number
+  lastSavedTime?: number
+  category?: string
+  company?: string
+  manager?: string
+  lineCount?: number
+  paragraphCount?: number
+  byteCount?: number
+  charCountWithSpaces?: number
+}
+
+interface DocumentStories {
+  headers?: string
+  footnotes?: string
+  endnotes?: string
+  comments?: string
+  textboxes?: string
+}
+
+interface StorySection {
+  key: keyof DocumentStories
+  label: string
+  text: string
 }
 
 interface FormattedParagraphOutput {
@@ -46,6 +110,7 @@ interface SearchMatch {
 
 const props = defineProps<{
   source: File | string | null
+  useWebFont?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -90,6 +155,173 @@ const charCount = ref(0)
 const paragraphCount = ref(0)
 const chineseCharCount = ref(0)
 const isRichFormat = ref(false)
+
+// --- Stories (headers / footnotes / endnotes / comments / textboxes) ---
+const stories = ref<DocumentStories | null>(null)
+const showStories = ref(false)
+const STORY_LABELS: Record<keyof DocumentStories, string> = {
+  headers: '页眉/页脚',
+  footnotes: '脚注',
+  endnotes: '尾注',
+  comments: '批注',
+  textboxes: '文本框',
+}
+
+// --- Embedded images extracted from the Data stream ---
+const images = ref<string[]>([])
+const showImages = ref(false)
+
+// --- Hyperlinks extracted from PlcfFld ---
+const hyperlinks = ref<HyperlinkRange[]>([])
+
+// --- Table of Contents ---
+const toc = ref<TocEntry[]>([])
+const showToc = ref(false)
+
+// --- Web Font ---
+const webFontLoaded = ref(false)
+
+const FONT_ALIASES: Record<string, string[]> = {
+  '宋体': ['Noto+Serif+SC', 'SimSun'],
+  '仿宋': ['Noto+Serif+SC', 'FangSong'],
+  '仿宋_GB2312': ['Noto+Serif+SC', 'FangSong_GB2312'],
+  '黑体': ['Noto+Sans+SC', 'SimHei'],
+  '楷体': ['Noto+Serif+SC', 'KaiTi'],
+  '隶书': ['Noto+Serif+SC', 'LiSu'],
+  '幼圆': ['Noto+Sans+SC', 'YouYuan'],
+  'Times New Roman': ['Noto+Serif', 'Times+New+Roman'],
+  'Arial': ['Noto+Sans', 'Arial'],
+  'Verdana': ['Noto+Sans', 'Verdana'],
+  'Georgia': ['Noto+Serif', 'Georgia'],
+  'Microsoft YaHei': ['Noto+Sans+SC', 'Microsoft+YaHei'],
+  '微软雅黑': ['Noto+Sans+SC', 'Microsoft+YaHei'],
+  '华文中宋': ['Noto+Serif+SC', 'STZhongsong'],
+  '华文仿宋': ['Noto+Serif+SC', 'STFangsong'],
+  '华文黑体': ['Noto+Sans+SC', 'STHeiti'],
+  '华文楷体': ['Noto+Serif+SC', 'STKaiti'],
+  '新宋体': ['Noto+Serif+SC', 'NSimSun'],
+}
+
+function loadWebFonts() {
+  if (!props.useWebFont || webFontLoaded.value) return
+
+  const families = 'Noto+Serif+SC|Noto+Sans+SC|Noto+Serif|Noto+Sans'
+  const link = document.createElement('link')
+  link.href = `https://fonts.googleapis.com/css2?family=${families}&display=swap`
+  link.rel = 'stylesheet'
+  link.onload = () => {
+    webFontLoaded.value = true
+    injectWebFontOverrides()
+  }
+  link.onerror = () => {
+    console.warn('Web Font loading failed, falling back to system fonts')
+  }
+  document.head.appendChild(link)
+}
+
+function getWebFontFamily(fontName?: string): string {
+  if (!props.useWebFont) return ''
+
+  const alias = fontName ? FONT_ALIASES[fontName] : undefined
+  if (alias) {
+    const googleFont = alias[0].replace('+', ' ')
+    return `${googleFont}, `
+  }
+  return ''
+}
+
+function injectWebFontOverrides() {
+  if (!props.useWebFont) return
+
+  const styleId = 'doc-preview-webfont-overrides'
+  let style = document.getElementById(styleId) as HTMLStyleElement
+  if (!style) {
+    style = document.createElement('style')
+    style.id = styleId
+    document.head.appendChild(style)
+  }
+
+  style.textContent = `
+    .document-content h1 {
+      font-family: 'Noto Serif SC', '华文中宋', 'SimHei', serif !important;
+    }
+    .document-content h2 {
+      font-family: 'Noto Serif SC', '华文中宋', 'SimHei', serif !important;
+    }
+    .document-content h3 {
+      font-family: 'Noto Serif SC', serif !important;
+    }
+    .document-content p {
+      font-family: 'Noto Serif SC', '宋体', 'SimSun', serif !important;
+    }
+    .document-content li {
+      font-family: 'Noto Serif SC', '宋体', 'SimSun', serif !important;
+    }
+    .document-content th,
+    .document-content td {
+      font-family: 'Noto Serif SC', '宋体', 'SimSun', serif !important;
+    }
+    .document-content blockquote {
+      font-family: 'Noto Serif SC', '宋体', serif !important;
+    }
+  `
+}
+
+// --- Document properties ---
+const docProperties = ref<DocumentProperties | null>(null)
+const showProperties = ref(false)
+
+// --- Document flags (from DOP) ---
+const docFlags = ref<DocumentFlags | null>(null)
+const showDocFlags = ref(false)
+
+const docFlagItems = computed<Array<{ label: string; description: string }>>(() => {
+  if (!docFlags.value) return []
+  const items: Array<{ label: string; description: string }> = []
+  if (docFlags.value.facingPages) {
+    items.push({ label: '奇偶页不同', description: 'fFacingPages — 奇数页和偶数页有不同的页眉页脚' })
+  }
+  if (docFlags.value.titlePage) {
+    items.push({ label: '首页不同', description: 'fTitlePage — 首页有独立的页眉页脚' })
+  }
+  if (docFlags.value.pmhMain) {
+    items.push({ label: '有页眉', description: 'fPMHMain — 主文档包含页眉' })
+  }
+  if (docFlags.value.trackChanges) {
+    items.push({ label: '修订模式', description: 'fRMW — 文档启用了修订记录（track changes）' })
+  }
+  if (docFlags.value.ftnRestart) {
+    items.push({ label: '脚注重编号', description: 'fFtnRestart — 脚注每页或每节重新编号' })
+  }
+  if (docFlags.value.ftnEnd) {
+    items.push({ label: '脚注在节末', description: 'fFtnEnd — 脚注位于节末' })
+  }
+  if (docFlags.value.ftnAtEnd) {
+    items.push({ label: '脚注在文末', description: 'fFtnAtEnd — 脚注位于文档末尾' })
+  }
+  return items
+})
+
+const storySections = computed<StorySection[]>(() => {
+  if (!stories.value) return []
+  const out: StorySection[] = []
+  for (const key of Object.keys(STORY_LABELS) as Array<keyof DocumentStories>) {
+    const text = stories.value[key]
+    if (text && text.trim()) {
+      out.push({ key, label: STORY_LABELS[key], text: text.trim() })
+    }
+  }
+  return out
+})
+
+function formatStoryText(text: string): string {
+  return text
+    .split(/\n+/)
+    .map(line => line.trim())
+    .filter(line => line.length > 0)
+    .map(line => `<p style="margin:0 0 6px 0">${escapeHtml(line)}</p>`)
+    .join('')
+}
 
 // ---- Helpers ----
 
@@ -241,11 +473,16 @@ function buildOutline(paragraphs: FormattedParagraphOutput[]) {
 
     // Determine heading level from format heuristics
     let level = 0
-    if (fontSize >= 32) level = 1
-    else if (fontSize >= 22) level = 2
-    else if (fontSize >= 18 && isBold) level = 2
-    else if (isBold && text.length <= 40 && fontSize >= 16) level = 3
-    else if (align === 'center' && text.length <= 30) level = 3
+    const realHeadingLevel = (para.paraFormat as any)?.headingLevel
+    if (realHeadingLevel && realHeadingLevel >= 1 && realHeadingLevel <= 9) {
+      level = realHeadingLevel
+    } else {
+      if (fontSize >= 32) level = 1
+      else if (fontSize >= 22) level = 2
+      else if (fontSize >= 18 && isBold) level = 2
+      else if (isBold && text.length <= 40 && fontSize >= 16) level = 3
+      else if (align === 'center' && text.length <= 30) level = 3
+    }
 
     if (level > 0) {
       items.push({ text, level, index: i })
@@ -265,12 +502,29 @@ const renderResult = (result: ParserOutput) => {
     plainText.value = rawText
     computeStats(rawText)
     buildOutline(result.document.paragraphs)
-    htmlContent.value = formatFormattedTextToHtml(result.document.paragraphs)
+    hyperlinks.value = result.document.hyperlinks || []
+    toc.value = result.document.toc || []
+    docProperties.value = result.document.properties || null
+    docFlags.value = result.document.docFlags || null
+    htmlContent.value = formatFormattedTextToHtml(result.document.paragraphs, hyperlinks.value)
+    stories.value = result.document.stories || null
+    showStories.value = false
+    images.value = result.document.images || []
+    showImages.value = false
+    loadWebFonts()
   } else if (result.text) {
     isRichFormat.value = false
     plainText.value = result.text
     computeStats(result.text)
+    hyperlinks.value = []
+    docProperties.value = null
+    docFlags.value = null
     htmlContent.value = formatTextWithInferredFormat(result.text)
+    stories.value = null
+    showStories.value = false
+    images.value = []
+    showImages.value = false
+    loadWebFonts()
   } else {
     error.value = '⚠️ 文档内容为空或无法提取文本\n\n可能原因：\n• 文件格式不受支持\n• 文件已损坏\n• 文档内容为空'
   }
@@ -294,21 +548,257 @@ function getTextAlignment(paraFormat: ParagraphFormat, charFormat: CharacterForm
   return 'justify'
 }
 
+const BORDER_COLOR_MAP: Record<number, string> = {
+  1: '#000000',  // Black
+  2: '#0000FF',  // Blue
+  3: '#00FFFF',  // Cyan
+  4: '#00FF00',  // Green
+  5: '#FF00FF',  // Magenta
+  6: '#FF0000',  // Red
+  7: '#FFFF00',  // Yellow
+  8: '#FFFFFF',  // White
+  9: '#000080',  // Dark Blue
+  10: '#008080', // Dark Cyan
+  11: '#008000', // Dark Green
+  12: '#800080', // Dark Magenta
+  13: '#800000', // Dark Red
+  14: '#808000', // Dark Yellow (Olive)
+  15: '#808080', // Dark Gray
+  16: '#C0C0C0', // Light Gray
+}
+
+const BORDER_TYPE_MAP: Record<number, string> = {
+  0: 'none',
+  1: 'solid',
+  2: 'dotted',
+  3: 'dashed',
+  4: 'double',
+  5: 'double',
+  6: 'solid',
+  7: 'dashed',
+}
+
+function getBorderStyle(border: any): string {
+  if (!border || border.borderType === 0) return ''
+  const width = border.lineWidth ? `${border.lineWidth / 8}pt` : '1pt'
+  const style = BORDER_TYPE_MAP[border.borderType] || 'solid'
+  const color = border.colorIndex ? (BORDER_COLOR_MAP[border.colorIndex] || '#000000') : '#000000'
+  return `${width} ${style} ${color}`
+}
+
+function getBorderCss(borders: any): { top: string; left: string; bottom: string; right: string } {
+  return {
+    top: borders?.top ? getBorderStyle(borders.top) : '',
+    left: borders?.left ? getBorderStyle(borders.left) : '',
+    bottom: borders?.bottom ? getBorderStyle(borders.bottom) : '',
+    right: borders?.right ? getBorderStyle(borders.right) : '',
+  }
+}
+
 interface ParaWithList {
   text: string
   charFormat: CharacterFormat
-  paraFormat: ParagraphFormat & { listType?: string; listStyle?: string }
+  paraFormat: ParagraphFormat & { listType?: string; listStyle?: string; listLevel?: number }
 }
 
+/**
+ * Strip a leading list marker from the paragraph text so the rendered
+ * `<li>` content does not duplicate the marker (the browser renders its
+ * own via `list-style`).
+ *
+ * Supports the same markers as `DocParser.detectListInfo`: Arabic / Latin /
+ * Roman / CJK ideographic / circled numerals, parenthesized forms, and
+ * ASCII / CJK bullets.
+ */
 function extractListItemText(text: string, listType: string): string {
+  const trimmed = text.trimStart()
+  // Ordered markers
   if (listType === 'ordered') {
-    return text.replace(/^[a-zA-Z0-9]+[\.\)]\s*/, '')
+    return trimmed
+      .replace(/^\d+(?:\.\d+)+[\.\s\t]+/, '')            // 1.1 / 1.2.3
+      .replace(/^\d+[\.\)][\s\t]+/, '')                   // 1. / 2)
+      .replace(/^[\(\（\[]\d+[\)\）\]][\s\t]+/, '')        // (1) / （2） / [3]
+      .replace(/^[a-zA-Z][\.\)][\s\t]+/, '')              // a. / B)
+      .replace(/^[\(\（][a-zA-Z][\)\）][\s\t]+/, '')       // (a) / （B）
+      .replace(/^(?:i{1,3}|iv|v|vi{0,3}|ix|x|I{1,3}|IV|V|VI{0,3}|IX|X)[\.\)][\s\t]+/, '') // i. / II.
+      .replace(/^([一二三四五六七八九十百千零〇]{1,4}|[甲乙丙丁戊己庚辛壬癸]|[壹贰叁肆伍陆柒捌玖拾佰仟]{1,4})[\、\.\)][\s\t]*/, '') // 一、 / 甲.
+      .replace(/^[\(\（]([一二三四五六七八九十]{1,4}|[甲乙丙丁戊己庚辛壬癸])[）\)][\s\t]+/, '') // （一）
+      .replace(/^[\u2460-\u2473\u3251-\u325F\u32B1-\u32BF][\s\t]+/, '') // ① ②
   }
-  return text.replace(/^[•\-\*○●▪▸►→]\s*/, '')
+  // Unordered markers
+  return trimmed
+    .replace(/^[•\-\*][\s\t]+/, '')
+    .replace(/^[○●▪▸►→◇◆▪▫◦‣⁃]\s*/, '')
 }
 
-const formatFormattedTextToHtml = (paragraphs: ParaWithList[]): string => {
+function collectTableBlock(paragraphs: ParaWithList[], startIndex: number): { rows: string[][]; rowsTableInfo?: TableInfo[]; nextIndex: number } | null {
+  const rows: string[][] = []
+  const rowsTableInfo: TableInfo[] = []
+  let hasTableInfo = false
+  let i = startIndex
+
+  while (i < paragraphs.length) {
+    const para = paragraphs[i]
+    const cells = splitTableCells(para.text.trim())
+    if (!cells) break
+    rows.push(cells)
+    const tableInfo = (para.paraFormat as ParagraphFormat).table
+    if (tableInfo) {
+      hasTableInfo = true
+      rowsTableInfo.push(tableInfo)
+    } else {
+      // Push a placeholder so indices align with rows[].
+      rowsTableInfo.push({ inTable: true })
+    }
+    i++
+  }
+
+  if (rows.length < 2) return null
+  return { rows, rowsTableInfo: hasTableInfo ? rowsTableInfo : undefined, nextIndex: i }
+}
+
+interface ListItemNode {
+  text: string
+  level: number
+  charFormat: CharacterFormat
+  paraFormat: ParagraphFormat
+  children: ListItemNode[]
+}
+
+/**
+ * Render a (possibly nested) `<ol>` / `<ul>` from a flat list of items.
+ *
+ * Items are grouped by their `level` field: when a deeper item follows a
+ * shallower one, it becomes a child of the previous item; when a shallower
+ * item follows a deeper one, the stack pops back to the right parent.
+ */
+function renderNestedList(
+  listTag: 'ol' | 'ul',
+  listStyle: string,
+  items: Array<{ text: string; level: number; charFormat: CharacterFormat; paraFormat: ParagraphFormat }>,
+  _startLevel: number,
+): string {
+  if (items.length === 0) return ''
+
+  // Build a tree from the flat list using a stack.
+  const root: ListItemNode = {
+    text: '', level: -1,
+    charFormat: {} as CharacterFormat,
+    paraFormat: {} as ParagraphFormat,
+    children: [],
+  }
+  const stack: ListItemNode[] = [root]
+
+  for (const it of items) {
+    while (stack.length > 1 && stack[stack.length - 1].level >= it.level) {
+      stack.pop()
+    }
+    const parent = stack[stack.length - 1]
+    const node: ListItemNode = {
+      text: it.text,
+      level: it.level,
+      charFormat: it.charFormat,
+      paraFormat: it.paraFormat,
+      children: [],
+    }
+    parent.children.push(node)
+    stack.push(node)
+  }
+
+  // Render the tree recursively.
+  const render = (node: ListItemNode): string => {
+    if (node.children.length === 0) return ''
+    const renderedItems = node.children.map(child => {
+      const content = renderParagraphHtml(child.text, child.charFormat, child.paraFormat, 0, child.text.length, [])
+        .replace(/^<p[^>]*>/, '').replace(/<\/p>$/, '')
+      const subList = render(child)
+      return `<li>${content}${subList}</li>`
+    })
+    return `<${listTag} style="list-style:${listStyle};padding-left:2em">${renderedItems.join('')}</${listTag}>`
+  }
+  return render(root)
+}
+
+function renderParagraphHtml(
+  text: string,
+  charFormat: CharacterFormat,
+  paraFormat: ParagraphFormat,
+  paraCpStart: number,
+  paraCpEnd: number,
+  hyperlinks?: HyperlinkRange[],
+): string {
+  const textAlign = getTextAlignment(paraFormat, charFormat)
+  const isCentered = textAlign === 'center'
+  const isRightAligned = textAlign === 'right'
+  const hasCharStyles = charFormat.styles && charFormat.styles.length > 0
+
+  // Apply hyperlinks to the paragraph text
+  let textWithLinks = text
+  if (hyperlinks && hyperlinks.length > 0) {
+    // Find hyperlinks that overlap with this paragraph
+    const paraLinks = hyperlinks.filter(link =>
+      link.cpEnd > paraCpStart && link.cpStart < paraCpEnd
+    )
+
+    if (paraLinks.length > 0) {
+      // For each hyperlink, wrap the corresponding text in <a> tags
+      // Sort by cpStart descending to avoid offset shifts
+      paraLinks.sort((a, b) => b.cpStart - a.cpStart)
+
+      for (const link of paraLinks) {
+        // Calculate text offset within this paragraph
+        const linkStartInPara = Math.max(0, link.cpStart - paraCpStart)
+        const linkEndInPara = Math.min(text.length, link.cpEnd - paraCpStart)
+
+        if (linkStartInPara < linkEndInPara && link.url) {
+          const before = textWithLinks.substring(0, linkStartInPara)
+          const linkText = textWithLinks.substring(linkStartInPara, linkEndInPara)
+          const after = textWithLinks.substring(linkEndInPara)
+          // Use result text if available, otherwise use the link text
+          const displayText = link.result || linkText
+          textWithLinks = `${before}<a href="${escapeHtml(link.url)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent);text-decoration:underline;">${escapeHtml(displayText)}</a>${after}`
+        }
+      }
+    }
+  }
+
+  if (hasCharStyles) {
+    return formatTextWithCharacterStyles(textWithLinks, charFormat.styles!, {
+      isCentered,
+      isRightAligned,
+      charFormat: { ...charFormat },
+      paraFormat: { ...paraFormat },
+    }, true) // hasHtml = true to skip escapeHtml
+  }
+
+  // If hyperlinks were applied, skip escapeHtml since the text contains <a> tags
+  if (textWithLinks !== text) {
+    return formatTextWithDefaultStyles(textWithLinks, charFormat, paraFormat, {
+      isCentered,
+      isRightAligned,
+    }, true)
+  }
+
+  return formatTextWithDefaultStyles(text, charFormat, paraFormat, {
+    isCentered,
+    isRightAligned,
+  })
+}
+
+const formatFormattedTextToHtml = (paragraphs: ParaWithList[], hyperlinks?: HyperlinkRange[]): string => {
   if (!paragraphs || paragraphs.length === 0) return '<p>文档内容为空</p>'
+
+  // Build a map of hyperlinks by paragraph CP range
+  const hyperlinkMap = new Map<number, HyperlinkRange[]>()
+  if (hyperlinks && hyperlinks.length > 0) {
+    for (const link of hyperlinks) {
+      // Group links by their start CP (we'll match to paragraphs later)
+      if (!hyperlinkMap.has(link.cpStart)) {
+        hyperlinkMap.set(link.cpStart, [])
+      }
+      hyperlinkMap.get(link.cpStart)!.push(link)
+    }
+  }
 
   const result: string[] = []
   let i = 0
@@ -320,56 +810,46 @@ const formatFormattedTextToHtml = (paragraphs: ParaWithList[]): string => {
 
     const paraFormat = para.paraFormat
     const listType = (paraFormat as any).listType
+    const tableBlock = collectTableBlock(paragraphs, i)
+
+    if (tableBlock) {
+      result.push(renderTableHtml(tableBlock.rows, tableBlock.rowsTableInfo))
+      i = tableBlock.nextIndex
+      continue
+    }
 
     if (listType === 'ordered' || listType === 'unordered') {
-      // Collect consecutive list items
-      const listTag = listType === 'ordered' ? 'ol' : 'ul'
-      const items: string[] = []
+      // Collect consecutive list items with the same listType. Items with
+      // different listLevel get nested as sub-lists inside the parent <li>.
       const listStyle = (paraFormat as any).listStyle || (listType === 'ordered' ? 'decimal' : 'disc')
+      const startLevel = (paraFormat as any).listLevel ?? 0
 
+      // Collect all consecutive items with the same listType (any level).
+      const items: Array<{ text: string; level: number; charFormat: CharacterFormat; paraFormat: ParagraphFormat }> = []
       while (i < paragraphs.length) {
         const item = paragraphs[i]
-        const itemFormat = item.paraFormat
-        if ((itemFormat as any).listType !== listType) break
-
+        const itemFormat = item.paraFormat as ParagraphFormat & { listType?: string }
+        if (itemFormat.listType !== listType) break
         const itemText = extractListItemText(item.text, listType)
         if (!itemText.trim()) { i++; continue }
-
-        const charFormat = item.charFormat || {} as CharacterFormat
-        const textAlign = getTextAlignment(itemFormat, charFormat)
-        const isCentered = textAlign === 'center'
-        const isRightAligned = textAlign === 'right'
-        const hasCharStyles = charFormat.styles && charFormat.styles.length > 0
-
-        let content: string
-        if (hasCharStyles) {
-          content = formatTextWithCharacterStyles(itemText, charFormat.styles!, {
-            isCentered, isRightAligned, charFormat: { ...charFormat }, paraFormat: { ...itemFormat }
-          }).replace(/^<p[^>]*>/, '').replace(/<\/p>$/, '')
-        } else {
-          content = formatTextWithDefaultStyles(itemText, charFormat, itemFormat, { isCentered, isRightAligned })
-            .replace(/^<p[^>]*>/, '').replace(/<\/p>$/, '')
-        }
-        items.push(`<li>${content}</li>`)
+        items.push({
+          text: itemText,
+          level: (itemFormat as any).listLevel ?? 0,
+          charFormat: item.charFormat || ({} as CharacterFormat),
+          paraFormat: itemFormat,
+        })
         i++
       }
 
-      result.push(`<${listTag} style="list-style:${listStyle};padding-left:2em">${items.join('')}</${listTag}>`)
+      // Build nested <ul>/<ol> from the flat item list.
+      const listTag = listType === 'ordered' ? 'ol' : 'ul'
+      result.push(renderNestedList(listTag, listStyle, items, startLevel))
     } else {
       // Regular paragraph
       const charFormat = para.charFormat || {} as CharacterFormat
-      const textAlign = getTextAlignment(paraFormat, charFormat)
-      const isCentered = textAlign === 'center'
-      const isRightAligned = textAlign === 'right'
-      const hasCharStyles = charFormat.styles && charFormat.styles.length > 0
-
-      if (hasCharStyles) {
-        result.push(formatTextWithCharacterStyles(text, charFormat.styles!, {
-          isCentered, isRightAligned, charFormat: { ...charFormat }, paraFormat: { ...paraFormat }
-        }))
-      } else {
-        result.push(formatTextWithDefaultStyles(text, charFormat, paraFormat, { isCentered, isRightAligned }))
-      }
+      const paraCpStart = (para as any)._cpStart || 0
+      const paraCpEnd = paraCpStart + (text?.length || 0)
+      result.push(renderParagraphHtml(text, charFormat, paraFormat, paraCpStart, paraCpEnd, hyperlinks))
       i++
     }
   }
@@ -378,7 +858,7 @@ const formatFormattedTextToHtml = (paragraphs: ParaWithList[]): string => {
 }
 
 const formatTextWithCharacterStyles = (
-  text: string, charStyles: CharStyleSegment[], options: CharStyleOptions
+  text: string, charStyles: CharStyleSegment[], options: CharStyleOptions, hasHtml: boolean = false
 ): string => {
   const { isCentered, charFormat, paraFormat } = options
   const isRightAligned = paraFormat.alignment === 'right'
@@ -389,7 +869,7 @@ const formatTextWithCharacterStyles = (
   let totalLength = 0
   for (const s of charStyles) totalLength += (s.end - s.start)
   if (totalLength < text.length * 0.8) {
-    return formatTextWithDefaultStyles(text, charFormat, {} as ParagraphFormat, { isCentered, isRightAligned })
+    return formatTextWithDefaultStyles(text, charFormat, paraFormat, { isCentered, isRightAligned }, hasHtml)
   }
 
   let htmlContent = ''
@@ -397,56 +877,156 @@ const formatTextWithCharacterStyles = (
   for (const style of charStyles) {
     if (style.start > lastEnd) {
       const gap = text.substring(lastEnd, style.start)
-      if (gap) htmlContent += escapeHtml(gap)
+      if (gap) htmlContent += hasHtml ? gap : escapeHtml(gap)
     }
     const segment = text.substring(style.start, style.end)
     if (!segment) continue
 
     const css: string[] = []
-    css.push(`font-family: '${style.style.fontName || '宋体'}', serif`)
+    css.push(`font-family: ${getWebFontFamily(style.style.fontName)}'${style.style.fontName || '宋体'}', serif`)
     css.push(`font-size: ${fontSize}`)
     css.push(`font-weight: ${fontWeight}`)
-    if (style.style.underline) css.push('text-decoration: underline')
-    htmlContent += `<span style="${css.join('; ')}">${escapeHtml(segment)}</span>`
+    if (style.style.italic) css.push('font-style: italic')
+
+    const textDecs: string[] = []
+    if (style.style.underline) textDecs.push('underline')
+    if (style.style.strikethrough) textDecs.push('line-through')
+    if (textDecs.length > 0) css.push(`text-decoration: ${textDecs.join(' ')}`)
+
+    if (style.style.color) css.push(`color: ${style.style.color}`)
+    if (style.style.highlight) css.push(`background-color: ${style.style.highlight}`)
+    if (style.style.superscript) css.push('vertical-align: super; font-size: 0.7em')
+    if (style.style.subscript) css.push('vertical-align: sub; font-size: 0.7em')
+    if (style.style.smallCaps) css.push('font-variant: small-caps')
+    if (style.style.allCaps) css.push('text-transform: uppercase')
+    if (style.style.outline) css.push('text-shadow: 1px 0 0 currentColor, -1px 0 0 currentColor, 0 1px 0 currentColor, 0 -1px 0 currentColor')
+    if (style.style.shadow) css.push('text-shadow: 2px 2px 2px rgba(0,0,0,0.5)')
+    if (style.style.letterSpacing !== undefined && style.style.letterSpacing !== 0) {
+      css.push(`letter-spacing: ${style.style.letterSpacing}pt`)
+    }
+
+    htmlContent += `<span style="${css.join('; ')}">${hasHtml ? segment : escapeHtml(segment)}</span>`
     lastEnd = style.end
   }
   if (lastEnd < text.length) {
     const rem = text.substring(lastEnd)
-    if (rem) htmlContent += escapeHtml(rem)
+    if (rem) htmlContent += hasHtml ? rem : escapeHtml(rem)
   }
-  return `<p style="font-size:${fontSize};text-align:${textAlign}">${htmlContent}</p>`
+
+  const pCss: string[] = []
+  pCss.push(`font-size:${fontSize}`)
+  pCss.push(`text-align:${textAlign}`)
+  if (paraFormat.lineSpacing) pCss.push(`line-height: ${paraFormat.lineSpacing}`)
+  if (paraFormat.spaceBefore) pCss.push(`margin-top: ${paraFormat.spaceBefore}pt`)
+  if (paraFormat.spaceAfter) pCss.push(`margin-bottom: ${paraFormat.spaceAfter}pt`)
+  if (paraFormat.indent) pCss.push(`margin-left: ${paraFormat.indent}pt`)
+  if (paraFormat.rightIndent) pCss.push(`margin-right: ${paraFormat.rightIndent}pt`)
+  if (paraFormat.firstLineIndent) pCss.push(`text-indent: ${paraFormat.firstLineIndent}pt`)
+  if (paraFormat.backgroundColor) pCss.push(`background-color: ${paraFormat.backgroundColor}`)
+  if (paraFormat.borders) {
+    const borderCss = getBorderCss(paraFormat.borders)
+    if (borderCss.top) pCss.push(`border-top: ${borderCss.top}`)
+    if (borderCss.left) pCss.push(`border-left: ${borderCss.left}`)
+    if (borderCss.bottom) pCss.push(`border-bottom: ${borderCss.bottom}`)
+    if (borderCss.right) pCss.push(`border-right: ${borderCss.right}`)
+    pCss.push('padding: 4px')
+  }
+
+  const headingLevel = (paraFormat as any)?.headingLevel
+  if (headingLevel && headingLevel >= 1 && headingLevel <= 6) {
+    return `<h${headingLevel} style="${pCss.join('; ')}">${htmlContent}</h${headingLevel}>`
+  }
+  return `<p style="${pCss.join('; ')}">${htmlContent}</p>`
 }
 
 const formatTextWithDefaultStyles = (
-  text: string, charFormat: CharacterFormat, _paraFormat: ParagraphFormat,
-  options: { isCentered: boolean; isRightAligned: boolean }
+  text: string, charFormat: CharacterFormat, paraFormat: ParagraphFormat,
+  options: { isCentered: boolean; isRightAligned: boolean }, hasHtml: boolean = false
 ): string => {
   const { isCentered, isRightAligned } = options
   const css: string[] = []
-  css.push(`font-family: '${charFormat.fontName || '宋体'}', 'SimSun', serif`)
+  css.push(`font-family: ${getWebFontFamily(charFormat.fontName)}'${charFormat.fontName || '宋体'}', 'SimSun', serif`)
   css.push(`font-size: ${resolveFontSize(charFormat.fontSize, '1.0rem')}`)
   if (charFormat.bold) css.push('font-weight: bold')
   if (charFormat.italic) css.push('font-style: italic')
-  if (charFormat.underline) css.push('text-decoration: underline')
+
+  const textDecorations: string[] = []
+  if (charFormat.underline) textDecorations.push('underline')
+  if (charFormat.strikethrough) textDecorations.push('line-through')
+  if (textDecorations.length > 0) css.push(`text-decoration: ${textDecorations.join(' ')}`)
+
   if (charFormat.color) css.push(`color: ${charFormat.color}`)
+  if (charFormat.highlight) css.push(`background-color: ${charFormat.highlight}`)
+  if (charFormat.superscript) css.push('vertical-align: super; font-size: 0.7em')
+  if (charFormat.subscript) css.push('vertical-align: sub; font-size: 0.7em')
+  if (charFormat.smallCaps) css.push('font-variant: small-caps')
+  if (charFormat.allCaps) css.push('text-transform: uppercase')
+  if (charFormat.outline) css.push('text-shadow: 1px 0 0 currentColor, -1px 0 0 currentColor, 0 1px 0 currentColor, 0 -1px 0 currentColor')
+  if (charFormat.shadow) css.push('text-shadow: 2px 2px 2px rgba(0,0,0,0.5)')
+  if (charFormat.letterSpacing !== undefined && charFormat.letterSpacing !== 0) {
+    css.push(`letter-spacing: ${charFormat.letterSpacing}pt`)
+  }
+
   css.push(`text-align: ${isCentered ? 'center' : isRightAligned ? 'right' : 'justify'}`)
-  return `<p style="${css.join('; ')}">${escapeHtml(text)}</p>`
+
+  if (paraFormat.lineSpacing) css.push(`line-height: ${paraFormat.lineSpacing}`)
+  if (paraFormat.spaceBefore) css.push(`margin-top: ${paraFormat.spaceBefore}pt`)
+  if (paraFormat.spaceAfter) css.push(`margin-bottom: ${paraFormat.spaceAfter}pt`)
+  if (paraFormat.indent) css.push(`margin-left: ${paraFormat.indent}pt`)
+  if (paraFormat.rightIndent) css.push(`margin-right: ${paraFormat.rightIndent}pt`)
+  if (paraFormat.firstLineIndent) css.push(`text-indent: ${paraFormat.firstLineIndent}pt`)
+  if (paraFormat.backgroundColor) css.push(`background-color: ${paraFormat.backgroundColor}`)
+  if (paraFormat.borders) {
+    const borderCss = getBorderCss(paraFormat.borders)
+    if (borderCss.top) css.push(`border-top: ${borderCss.top}`)
+    if (borderCss.left) css.push(`border-left: ${borderCss.left}`)
+    if (borderCss.bottom) css.push(`border-bottom: ${borderCss.bottom}`)
+    if (borderCss.right) css.push(`border-right: ${borderCss.right}`)
+    css.push('padding: 4px')
+  }
+
+  const headingLevel = (paraFormat as any)?.headingLevel
+  if (headingLevel && headingLevel >= 1 && headingLevel <= 6) {
+    return `<h${headingLevel} style="${css.join('; ')}">${hasHtml ? text : escapeHtml(text)}</h${headingLevel}>`
+  }
+  return `<p style="${css.join('; ')}">${hasHtml ? text : escapeHtml(text)}</p>`
 }
 
 const formatTextWithInferredFormat = (text: string): string => {
   const paragraphs = text.split(/\n+/).filter(p => p.trim())
-  if (paragraphs.length === 0) return `<p style="font-family:'宋体',serif;font-size:1.0rem">${escapeHtml(text)}</p>`
+  if (paragraphs.length === 0) return `<p style="font-family:${getWebFontFamily('宋体')}'宋体',serif;font-size:1.0rem">${escapeHtml(text)}</p>`
 
   let html = ''
-  for (const para of paragraphs) {
-    const t = para.trim()
-    if (!t) continue
+  let i = 0
+  while (i < paragraphs.length) {
+    const rowBlock: string[][] = []
+    let j = i
+    while (j < paragraphs.length) {
+      const cells = splitTableCells(paragraphs[j].trim())
+      if (!cells) break
+      rowBlock.push(cells)
+      j++
+    }
+
+    if (rowBlock.length >= 2) {
+      html += renderTableHtml(rowBlock)
+      i = j
+      continue
+    }
+
+    const t = paragraphs[i].trim()
+    if (!t) {
+      i++
+      continue
+    }
+
     const chineseRatio = (t.match(/[\u4e00-\u9fff]/g) || []).length / t.length
     if (t.length < 20 && chineseRatio > 0.5) {
-      html += `<h1 style="font-family:'宋体',serif;font-size:1.375rem;font-weight:bold;text-align:center">${escapeHtml(t)}</h1>`
+      html += `<h1 style="font-family:${getWebFontFamily('宋体')}'宋体',serif;font-size:1.375rem;font-weight:bold;text-align:center">${escapeHtml(t)}</h1>`
     } else {
-      html += `<p style="font-family:'宋体','SimSun',serif;font-size:1.0rem;text-align:justify">${escapeHtml(t)}</p>`
+      html += `<p style="font-family:${getWebFontFamily('宋体')}'宋体','SimSun',serif;font-size:1.0rem;text-align:justify">${escapeHtml(t)}</p>`
     }
+    i++
   }
   return html
 }
@@ -839,6 +1419,191 @@ defineExpose({ reload, getPlainText, focusContent })
           v-html="htmlContent"
         ></div>
       </div>
+
+      <!-- Stories panel (headers / footnotes / endnotes / comments / textboxes) -->
+      <div v-if="storySections.length > 0" class="stories-panel">
+        <button
+          class="stories-toggle"
+          @click="showStories = !showStories"
+          :aria-expanded="showStories"
+        >
+          <span class="stories-toggle-icon">{{ showStories ? '▾' : '▸' }}</span>
+          <span>非正文内容（{{ storySections.length }}）</span>
+          <span class="stories-toggle-summary">
+            {{ storySections.map((s: StorySection) => s.label).join(' · ') }}
+          </span>
+        </button>
+        <div v-if="showStories" class="stories-content">
+          <div
+            v-for="section in storySections"
+            :key="section.key"
+            class="story-section"
+            :class="'story-' + section.key"
+          >
+            <div class="story-section-title">{{ section.label }}</div>
+            <div class="story-section-text" v-html="formatStoryText(section.text)"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Document properties (title / author / keywords etc.) -->
+      <div v-if="docProperties" class="properties-panel">
+        <button
+          class="stories-toggle"
+          @click="showProperties = !showProperties"
+          :aria-expanded="showProperties"
+        >
+          <span class="stories-toggle-icon">{{ showProperties ? '▾' : '▸' }}</span>
+          <span>文档属性</span>
+          <span class="stories-toggle-summary">
+            {{ docProperties.title || docProperties.author || '查看详情' }}
+          </span>
+        </button>
+        <div v-if="showProperties" class="properties-content">
+          <div v-if="docProperties.title" class="property-item">
+            <span class="property-label">标题:</span>
+            <span class="property-value">{{ docProperties.title }}</span>
+          </div>
+          <div v-if="docProperties.subject" class="property-item">
+            <span class="property-label">主题:</span>
+            <span class="property-value">{{ docProperties.subject }}</span>
+          </div>
+          <div v-if="docProperties.author" class="property-item">
+            <span class="property-label">作者:</span>
+            <span class="property-value">{{ docProperties.author }}</span>
+          </div>
+          <div v-if="docProperties.lastAuthor" class="property-item">
+            <span class="property-label">最后修改者:</span>
+            <span class="property-value">{{ docProperties.lastAuthor }}</span>
+          </div>
+          <div v-if="docProperties.keywords" class="property-item">
+            <span class="property-label">关键词:</span>
+            <span class="property-value">{{ docProperties.keywords }}</span>
+          </div>
+          <div v-if="docProperties.comments" class="property-item">
+            <span class="property-label">备注:</span>
+            <span class="property-value">{{ docProperties.comments }}</span>
+          </div>
+          <div v-if="docProperties.pageCount" class="property-item">
+            <span class="property-label">页数:</span>
+            <span class="property-value">{{ docProperties.pageCount }}</span>
+          </div>
+          <div v-if="docProperties.wordCount" class="property-item">
+            <span class="property-label">字数:</span>
+            <span class="property-value">{{ docProperties.wordCount }}</span>
+          </div>
+          <div v-if="docProperties.charCount" class="property-item">
+            <span class="property-label">字符数:</span>
+            <span class="property-value">{{ docProperties.charCount }}</span>
+          </div>
+          <div v-if="docProperties.category" class="property-item">
+            <span class="property-label">类别:</span>
+            <span class="property-value">{{ docProperties.category }}</span>
+          </div>
+          <div v-if="docProperties.company" class="property-item">
+            <span class="property-label">公司:</span>
+            <span class="property-value">{{ docProperties.company }}</span>
+          </div>
+          <div v-if="docProperties.manager" class="property-item">
+            <span class="property-label">经理:</span>
+            <span class="property-value">{{ docProperties.manager }}</span>
+          </div>
+          <div v-if="docProperties.template" class="property-item">
+            <span class="property-label">模板:</span>
+            <span class="property-value">{{ docProperties.template }}</span>
+          </div>
+          <div v-if="docProperties.appName" class="property-item">
+            <span class="property-label">应用程序:</span>
+            <span class="property-value">{{ docProperties.appName }}</span>
+          </div>
+          <div v-if="docProperties.revisionNumber" class="property-item">
+            <span class="property-label">修订号:</span>
+            <span class="property-value">{{ docProperties.revisionNumber }}</span>
+          </div>
+          <div v-if="docProperties.lineCount" class="property-item">
+            <span class="property-label">行数:</span>
+            <span class="property-value">{{ docProperties.lineCount }}</span>
+          </div>
+          <div v-if="docProperties.paragraphCount" class="property-item">
+            <span class="property-label">段落数:</span>
+            <span class="property-value">{{ docProperties.paragraphCount }}</span>
+          </div>
+          <div v-if="docProperties.charCountWithSpaces" class="property-item">
+            <span class="property-label">字符数(含空格):</span>
+            <span class="property-value">{{ docProperties.charCountWithSpaces }}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Document flags from DOP (facing pages / title page / track changes etc.) -->
+      <div v-if="docFlagItems.length > 0" class="doc-flags-panel">
+        <button
+          class="stories-toggle"
+          @click="showDocFlags = !showDocFlags"
+          :aria-expanded="showDocFlags"
+        >
+          <span class="stories-toggle-icon">{{ showDocFlags ? '▾' : '▸' }}</span>
+          <span>文档标志</span>
+          <span class="stories-toggle-summary">{{ docFlagItems.length }} 项</span>
+        </button>
+        <div v-if="showDocFlags" class="doc-flags-content">
+          <div
+            v-for="(item, index) in docFlagItems"
+            :key="index"
+            class="flag-item"
+          >
+            <span class="flag-badge">{{ item.label }}</span>
+            <span class="flag-description">{{ item.description }}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Table of Contents -->
+      <div v-if="toc.length > 0" class="toc-panel">
+        <button
+          class="stories-toggle"
+          @click="showToc = !showToc"
+          :aria-expanded="showToc"
+        >
+          <span class="stories-toggle-icon">{{ showToc ? '▾' : '▸' }}</span>
+          <span>目录（{{ toc.length }}）</span>
+        </button>
+        <div v-if="showToc" class="toc-content">
+          <ul class="toc-list">
+            <li
+              v-for="(entry, index) in toc"
+              :key="index"
+              class="toc-item"
+              :class="`toc-level-${entry.level}`"
+            >
+              <span class="toc-text">{{ entry.text }}</span>
+              <span v-if="entry.pageNumber" class="toc-page">{{ entry.pageNumber }}</span>
+            </li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- Embedded images extracted from the Data stream -->
+      <div v-if="images.length > 0" class="images-panel">
+        <button
+          class="stories-toggle"
+          @click="showImages = !showImages"
+          :aria-expanded="showImages"
+        >
+          <span class="stories-toggle-icon">{{ showImages ? '▾' : '▸' }}</span>
+          <span>文档图片（{{ images.length }}）</span>
+          <span class="stories-toggle-summary">点击展开查看嵌入图片</span>
+        </button>
+        <div v-if="showImages" class="images-content">
+          <div
+            v-for="(src, idx) in images"
+            :key="idx"
+            class="image-item"
+          >
+            <img :src="src" :alt="`图片 ${idx + 1}`" loading="lazy" />
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -1196,6 +1961,16 @@ defineExpose({ reload, getPlainText, focusContent })
   font-style: italic;
 }
 
+.document-content a {
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.document-content a:hover {
+  text-decoration: none;
+}
+
 /* Search highlights */
 :deep(.search-highlight) {
   background: var(--highlight);
@@ -1277,6 +2052,260 @@ defineExpose({ reload, getPlainText, focusContent })
   100% { background: transparent; }
 }
 
+/* ==================== Stories panel ==================== */
+.stories-panel {
+  max-width: 800px;
+  margin: 0 auto 32px auto;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.stories-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 16px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.88rem;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s;
+}
+
+.stories-toggle:hover {
+  background: var(--bg-tertiary);
+}
+
+.stories-toggle-icon {
+  display: inline-block;
+  width: 12px;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.stories-toggle-summary {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+/* ==================== Properties panel ==================== */
+.properties-panel {
+  max-width: 800px;
+  margin: 0 auto 32px auto;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.properties-content {
+  padding: 16px;
+  display: grid;
+  gap: 12px;
+}
+
+.property-item {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.property-label {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  min-width: 80px;
+}
+
+.property-value {
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  word-break: break-word;
+}
+
+.doc-flags-panel {
+  max-width: 800px;
+  margin: 0 auto 32px auto;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.doc-flags-content {
+  padding: 16px;
+  display: grid;
+  gap: 10px;
+}
+
+.flag-item {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.flag-badge {
+  display: inline-block;
+  padding: 2px 10px;
+  background: var(--accent-bg, rgba(59, 130, 246, 0.12));
+  color: var(--accent-color, #3b82f6);
+  border-radius: 12px;
+  font-size: 0.82rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.flag-description {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.toc-panel {
+  max-width: 800px;
+  margin: 0 auto 32px auto;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.toc-content {
+  padding: 16px;
+}
+
+.toc-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.toc-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.toc-item:last-child {
+  border-bottom: none;
+}
+
+.toc-level-1 {
+  font-weight: bold;
+  font-size: 1rem;
+  padding-left: 0;
+}
+
+.toc-level-2 {
+  font-size: 0.95rem;
+  padding-left: 16px;
+}
+
+.toc-level-3 {
+  font-size: 0.9rem;
+  padding-left: 32px;
+}
+
+.toc-level-4,
+.toc-level-5,
+.toc-level-6,
+.toc-level-7,
+.toc-level-8,
+.toc-level-9 {
+  font-size: 0.85rem;
+  padding-left: calc(16px * var(--level, 4));
+}
+
+.toc-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toc-page {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  margin-left: 12px;
+}
+
+.stories-content {
+  padding: 4px 16px 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.story-section {
+  padding: 10px 12px;
+  background: var(--bg-primary);
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+}
+
+.story-section-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--accent);
+  margin-bottom: 6px;
+}
+
+.story-section-text {
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.story-section-text :deep(p) {
+  margin: 0 0 6px 0;
+}
+
+.story-section-text :deep(p:last-child) {
+  margin-bottom: 0;
+}
+
+/* ==================== Embedded images ==================== */
+.images-panel {
+  margin: 16px auto;
+  max-width: var(--page-max-width, 820px);
+  padding: 0 16px;
+  box-sizing: border-box;
+}
+
+.images-content {
+  padding: 4px 16px 14px 16px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.image-item {
+  flex: 0 0 auto;
+  max-width: 100%;
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.08));
+  border-radius: 6px;
+  padding: 6px;
+  background: var(--bg-primary);
+  box-sizing: border-box;
+}
+
+.image-item img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  max-height: 320px;
+  border-radius: 3px;
+}
+
 /* ==================== Print styles ==================== */
 @media print {
   .doc-preview {
@@ -1295,6 +2324,14 @@ defineExpose({ reload, getPlainText, focusContent })
   }
 
   .doc-info {
+    display: none !important;
+  }
+
+  .stories-panel {
+    display: none !important;
+  }
+
+  .images-panel {
     display: none !important;
   }
 

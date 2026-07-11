@@ -10,6 +10,33 @@ function createBuffer(signature: number[]): ArrayBuffer {
   return buf
 }
 
+function writeDirectoryEntry(
+  view: Uint8Array,
+  offset: number,
+  name: string,
+  objectType: number,
+  startSector: number,
+  size: number,
+) {
+  for (let i = 0; i < name.length && offset + i * 2 + 1 < view.length; i++) {
+    const code = name.charCodeAt(i)
+    view[offset + i * 2] = code & 0xff
+    view[offset + i * 2 + 1] = (code >> 8) & 0xff
+  }
+  view[offset + 64] = name.length * 2
+  view[offset + 65] = 0
+  view[offset + 66] = objectType
+  view[offset + 67] = 1
+  view[offset + 116] = startSector & 0xff
+  view[offset + 117] = (startSector >> 8) & 0xff
+  view[offset + 118] = (startSector >> 16) & 0xff
+  view[offset + 119] = (startSector >> 24) & 0xff
+  view[offset + 120] = size & 0xff
+  view[offset + 121] = (size >> 8) & 0xff
+  view[offset + 122] = (size >> 16) & 0xff
+  view[offset + 123] = (size >> 24) & 0xff
+}
+
 describe('OleParser', () => {
   describe('detectFormat', () => {
     it('should detect OLE format', () => {
@@ -285,6 +312,75 @@ describe('OleParser', () => {
     })
   })
 
+  describe('mini stream support', () => {
+    it('should read WordDocument from mini-stream when the stream is smaller than the cutoff', () => {
+      const sectorSize = 512
+      const buf = new ArrayBuffer(sectorSize * 6)
+      const view = new Uint8Array(buf)
+
+      // OLE signature
+      view[0] = 0xD0; view[1] = 0xCF; view[2] = 0x11; view[3] = 0xE0
+      view[4] = 0xA1; view[5] = 0xB1; view[6] = 0x1A; view[7] = 0xE1
+      // v3 + 512-byte sectors
+      view[26] = 0x03; view[27] = 0x00
+      view[30] = 0x09; view[31] = 0x00
+      // mini sector size = 64 bytes
+      view[32] = 0x06; view[33] = 0x00
+      // first directory sector = 2
+      view[48] = 0x02; view[49] = 0x00; view[50] = 0x00; view[51] = 0x00
+      // mini stream cutoff = 4096
+      view[56] = 0x00; view[57] = 0x10; view[58] = 0x00; view[59] = 0x00
+      // first miniFAT sector = 3, count = 1
+      view[60] = 0x03; view[61] = 0x00; view[62] = 0x00; view[63] = 0x00
+      view[64] = 0x01; view[65] = 0x00; view[66] = 0x00; view[67] = 0x00
+      // first DIFAT sector = ENDOFCHAIN, count = 0
+      view[68] = 0xFF; view[69] = 0xFF; view[70] = 0xFF; view[71] = 0xFF
+      view[72] = 0x00; view[73] = 0x00; view[74] = 0x00; view[75] = 0x00
+      // DIFAT[0] = FAT sector 0
+      view[76] = 0x00; view[77] = 0x00; view[78] = 0x00; view[79] = 0x00
+
+      const fatOffset = sectorSize
+      const setFat = (idx: number, value: number) => {
+        const off = fatOffset + idx * 4
+        view[off] = value & 0xff
+        view[off + 1] = (value >> 8) & 0xff
+        view[off + 2] = (value >> 16) & 0xff
+        view[off + 3] = (value >> 24) & 0xff
+      }
+      // FAT sector 0
+      setFat(0, 0xFFFFFFFF)
+      setFat(1, 0xFFFFFFFF)
+      setFat(2, 0xFFFFFFFF)
+      setFat(3, 0xFFFFFFFF)
+      setFat(4, 0xFFFFFFFF)
+
+      const dirOffset = sectorSize * 3
+      writeDirectoryEntry(view, dirOffset, 'Root Entry', 5, 4, 64)
+      writeDirectoryEntry(view, dirOffset + 128, 'WordDocument', 2, 0, 11)
+
+      const miniFatOffset = sectorSize * 4
+      // mini-sector 0 = end of chain
+      view[miniFatOffset] = 0xFF; view[miniFatOffset + 1] = 0xFF
+      view[miniFatOffset + 2] = 0xFF; view[miniFatOffset + 3] = 0xFF
+
+      const rootMiniStreamOffset = sectorSize * 5
+      const content = 'Hello\rWorld'
+      for (let i = 0; i < content.length; i++) {
+        view[rootMiniStreamOffset + i] = content.charCodeAt(i)
+      }
+
+      const parser = new OleParser(buf)
+      const header = parser.parseHeader()
+      const fat = parser.getFatSectors(header)
+      const dirs = parser.getDirectorySectors(header, fat)
+      const stream = parser.findWordDocumentStream(dirs)
+
+      expect(stream).not.toBeNull()
+      expect(stream?.size).toBe(11)
+      expect(new TextDecoder('latin1').decode(stream!.data.slice(0, 5))).toBe('Hello')
+    })
+  })
+
   describe('findWordDocumentStream', () => {
     function makeEntry(name: string, objectType: number, size: number = 0, startSector: number = 0): any {
       return { name, objectType, size, startSector, nameLength: name.length * 2 }
@@ -348,6 +444,93 @@ describe('OleParser', () => {
 
       const result = parser.findWordDocumentStream([])
       expect(result).toBeNull()
+    })
+  })
+
+  describe('findStreamByName', () => {
+    function makeEntry(name: string, objectType: number, size: number = 0, startSector: number = 0): any {
+      return { name, objectType, size, startSector, nameLength: name.length * 2 }
+    }
+
+    it('should find a stream by exact name', () => {
+      const parser = new OleParser(createBuffer([0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]))
+      const dirs = [makeEntry('Root Entry', 5), makeEntry('0Table', 2, 512)]
+      const entry = parser.findStreamByName(dirs, '0Table')
+      expect(entry).not.toBeNull()
+      expect(entry?.name).toBe('0Table')
+    })
+
+    it('should match case-insensitively', () => {
+      const parser = new OleParser(createBuffer([0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]))
+      const dirs = [makeEntry('1table', 2, 512)]
+      const entry = parser.findStreamByName(dirs, '1TABLE')
+      expect(entry).not.toBeNull()
+      expect(entry?.name).toBe('1table')
+    })
+
+    it('should skip non-stream entries (objectType !== 2)', () => {
+      const parser = new OleParser(createBuffer([0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]))
+      const dirs = [makeEntry('0Table', 5, 512)] // root storage, not a stream
+      const entry = parser.findStreamByName(dirs, '0Table')
+      expect(entry).toBeNull()
+    })
+
+    it('should return null when name is empty', () => {
+      const parser = new OleParser(createBuffer([0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]))
+      const dirs = [makeEntry('0Table', 2, 512)]
+      expect(parser.findStreamByName(dirs, '')).toBeNull()
+    })
+
+    it('should return null when no entry matches', () => {
+      const parser = new OleParser(createBuffer([0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]))
+      const dirs = [makeEntry('WordDocument', 2, 512)]
+      expect(parser.findStreamByName(dirs, '0Table')).toBeNull()
+    })
+  })
+
+  describe('findTableStream', () => {
+    function makeEntry(name: string, objectType: number, size: number = 0, startSector: number = 0): any {
+      return { name, objectType, size, startSector, nameLength: name.length * 2 }
+    }
+
+    function makeParser(): OleParser {
+      return new OleParser(createBuffer([0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]))
+    }
+
+    it('should return null when neither 0Table nor 1Table exists', () => {
+      const parser = makeParser()
+      const dirs = [makeEntry('Root Entry', 5), makeEntry('WordDocument', 2, 1024)]
+      const result = parser.findTableStream(dirs, 0)
+      expect(result).toBeNull()
+    })
+
+    it('should locate 0Table when which=0', () => {
+      const parser = makeParser()
+      const dirs = [makeEntry('Root Entry', 5), makeEntry('0Table', 2, 1024, 1)]
+      const result = parser.findTableStream(dirs, 0)
+      expect(result).not.toBeNull()
+    })
+
+    it('should locate 1Table when which=1', () => {
+      const parser = makeParser()
+      const dirs = [makeEntry('Root Entry', 5), makeEntry('1Table', 2, 1024, 1)]
+      const result = parser.findTableStream(dirs, 1)
+      expect(result).not.toBeNull()
+    })
+
+    it('should fall back to the other table stream when the requested one is missing', () => {
+      const parser = makeParser()
+      // Request 1Table but only 0Table exists
+      const dirs = [makeEntry('Root Entry', 5), makeEntry('0Table', 2, 1024, 1)]
+      const result = parser.findTableStream(dirs, 1)
+      expect(result).not.toBeNull()
+    })
+
+    it('should match table stream names case-insensitively', () => {
+      const parser = makeParser()
+      const dirs = [makeEntry('Root Entry', 5), makeEntry('1table', 2, 1024, 1)]
+      const result = parser.findTableStream(dirs, 1)
+      expect(result).not.toBeNull()
     })
   })
 })
