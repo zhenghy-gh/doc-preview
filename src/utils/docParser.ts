@@ -2,15 +2,86 @@ import { logger, enableDebugMode } from './logger'
 export { enableDebugMode }
 
 import { OleParser } from './oleParser'
-import type { StreamData } from './oleParser'
+import type { StreamData, DirectoryEntry } from './oleParser'
 
 import { parseFib } from './fibParser'
-import type { FibData } from './fibParser'
+import type { FibData, RgCcp } from './fibParser'
+import { isTableRowText } from './tableText'
+import { extractImagesFromStream, imagesToDataUrls } from './imageExtractor'
+import { parseChpxRuns, parsePapxRuns, mergeCharFormatForParagraph } from './formatParser'
+import type { ChpxRun, PapxRun } from './formatParser'
+import { parseStylesheet, getHeadingLevel } from './styleParser'
+import type { StyleDefinition } from './styleParser'
+import { parseFontTable } from './fontParser'
+import { parseListTable, getListFormat, getListFormatFromLfo, parsePlcfLfo } from './listParser'
+import type { ListEntry, LfoEntry } from './listParser'
+import { parsePlcfFld, extractHyperlinks, extractAllFields, TocEntry } from './fieldParser'
+import type { FieldRange } from './fieldParser'
+import { parseSummaryInformation, parseDocumentSummaryInformation, hasProperties } from './propertyParser'
+import type { DocumentProperties } from './propertyParser'
+import { parseDop } from './dopParser'
+import type { DopData } from './dopParser'
+import type { DocumentStories, CharacterFormat, DocumentFlags } from './docFormat'
 
 // ---- DocParser ----
 
 /** Default max bytes to scan in a WordDocument stream (10MB). */
 const DEFAULT_MAX_SCAN_BYTES = 10 * 1024 * 1024
+
+/**
+ * Parsed piece metadata from a PlcPcd. Does not hold the extracted text —
+ * callers decide how to slice the byte range (whole piece, or a sub-range
+ * when splitting across story boundaries) and call extractTextFromRange.
+ */
+interface Piece {
+  /** Global character position where this piece starts. */
+  cpStart: number
+  /** Global character position where this piece ends (exclusive). */
+  cpEnd: number
+  /** Raw file offset in the WordDocument stream (fc & 0x3FFFFFFF). */
+  fcValue: number
+  /** True = 8-bit compressed; False = UTF-16LE. */
+  fCompressed: boolean
+  /** True = this piece has an associated CHPX (accessed via chpxIndex). */
+  fChp: boolean
+  /** Index into the PlcfBteChpx when fChp is true (else undefined). */
+  chpxIndex?: number
+  /** Character count (cpEnd - cpStart). */
+  charCount: number
+}
+
+/**
+ * Text bucketed by story. Word stores all stories in one continuous
+ * character stream; we split it back out using FibRgLw's rgCcp.
+ */
+interface StoryText {
+  /** Main document body (ccpText). */
+  main: string
+  /** Footnotes (ccpFtn). */
+  footnotes: string
+  /** Headers and footers (ccpHdd). */
+  headers: string
+  /** Endnotes (ccpEdn). */
+  endnotes: string
+  /** Comments / annotations (ccpAtn). */
+  comments: string
+  /** Text boxes (ccpTxbx + ccpHdrTxbx). */
+  textboxes: string
+}
+
+/**
+ * Per-character CHPX association produced by parseClxWithStories. For each
+ * story, lists pieces as (start, end, chpxIndex?) — chpxIndex is set when the
+ * piece's fChp flag is on. Used to apply piece-level CHP at the right cp range.
+ */
+interface StoryPieceMap {
+  main: Array<{ start: number; end: number; chpxIndex?: number }>
+  footnotes: Array<{ start: number; end: number; chpxIndex?: number }>
+  headers: Array<{ start: number; end: number; chpxIndex?: number }>
+  endnotes: Array<{ start: number; end: number; chpxIndex?: number }>
+  comments: Array<{ start: number; end: number; chpxIndex?: number }>
+  textboxes: Array<{ start: number; end: number; chpxIndex?: number }>
+}
 
 /**
  * Synchronous .doc (OLE2/CFB) file parser.
@@ -69,7 +140,7 @@ export class DocParser {
         return { text: '', success: false, error: '未找到 WordDocument 流' }
       }
 
-      this.text = this.extractTextWithFib(wordDocumentStream)
+      this.text = this.extractTextWithFib(wordDocumentStream, directory)
       if (this.text.length === 0) {
         this.text = this.extractTextSimple(wordDocumentStream.data)
       }
@@ -113,9 +184,9 @@ export class DocParser {
         return { success: false, error: '未找到 WordDocument 流' }
       }
 
-      const formattedParagraphs = this.extractFormattedText(wordDocumentStream)
+      const extracted = this.extractFormattedText(wordDocumentStream, directory)
 
-      if (formattedParagraphs.length === 0) {
+      if (extracted.paragraphs.length === 0) {
         const fallbackText = this.extractTextSimple(wordDocumentStream.data)
         if (fallbackText.length > 0) {
           return { success: true, text: fallbackText }
@@ -123,8 +194,48 @@ export class DocParser {
         return { success: false, error: '文档内容为空' }
       }
 
-      const plainText = formattedParagraphs.map(p => p.text).join('\n\n')
-      return { success: true, document: { paragraphs: formattedParagraphs }, text: plainText }
+      const plainText = extracted.paragraphs.map(p => p.text).join('\n\n')
+      const document: any = { paragraphs: extracted.paragraphs }
+      if (extracted.stories) document.stories = extracted.stories
+      if (extracted.hyperlinks && extracted.hyperlinks.length > 0) {
+        document.hyperlinks = extracted.hyperlinks
+      }
+      if (extracted.tocEntries && extracted.tocEntries.length > 0) {
+        document.toc = extracted.tocEntries
+      }
+
+      // Extract document properties from SummaryInformation stream
+      const props = this.extractProperties(directory)
+      if (props && hasProperties(props)) {
+        document.properties = props
+      }
+
+      // Extract DOP (Document Properties) flags from the table stream.
+      // Provides facing-pages / title-page / track-changes / footnote flags.
+      const fib = parseFib(wordDocumentStream.data)
+      if (fib) {
+        const dop = this.extractDop(fib, directory)
+        if (dop) {
+          const docFlags: DocumentFlags = {}
+          if (dop.facingPages) docFlags.facingPages = true
+          if (dop.titlePage) docFlags.titlePage = true
+          if (dop.pmhMain) docFlags.pmhMain = true
+          if (dop.trackChanges) docFlags.trackChanges = true
+          if (dop.ftnRestart) docFlags.ftnRestart = true
+          if (dop.ftnEnd) docFlags.ftnEnd = true
+          if (dop.ftnAtEnd) docFlags.ftnAtEnd = true
+          if (Object.keys(docFlags).length > 0) {
+            document.docFlags = docFlags
+          }
+        }
+      }
+
+      // Extract embedded images (PNG/JPEG/BMP/GIF) from the Data stream,
+      // falling back to the WordDocument stream. Attached as data URLs.
+      const images = this.extractImages(directory, wordDocumentStream.data)
+      if (images.length > 0) document.images = images
+
+      return { success: true, document, text: plainText }
     } catch (error) {
       const message = error instanceof Error ? `${error.message}\n${error.stack}` : '未知错误'
       logger.error('解析过程发生异常', message)
@@ -134,15 +245,25 @@ export class DocParser {
 
   // ==================== Text extraction ====================
 
-  private extractTextWithFib(wordStream: StreamData): string {
+  private extractTextWithFib(wordStream: StreamData, directory: DirectoryEntry[]): string {
     const data = wordStream.data
     if (data.length < 32) return ''
 
     const fib = parseFib(data)
     if (!fib) return this.extractTextSimple(data)
 
-    if (fib.lcbClx > 0 && fib.fcClx + fib.lcbClx <= data.length) {
-      const clxData = data.subarray(fib.fcClx, fib.fcClx + fib.lcbClx)
+    const clxData = this.readClxData(fib, data, directory)
+    if (clxData) {
+      // Prefer story-split extraction: it keeps header/footer/footnote text
+      // out of the main body when rgCcp is populated.
+      if (fib.rgCcp.ccpText > 0) {
+        const result = this.parseClxWithStories(clxData, data, fib.rgCcp)
+        if (result && result.stories.main.trim().length > 0) {
+          return result.stories.main.trim()
+        }
+      }
+
+      // Fall back to whole-document concatenation.
       const textFromClx = this.parseClx(clxData, data)
       if (textFromClx.length > 0) return textFromClx
     }
@@ -152,6 +273,57 @@ export class DocParser {
     }
 
     return this.extractTextSimple(data, { fcMin: fib.fcMin, fComplex: fib.fComplex })
+  }
+
+  /**
+   * Read the CLX blob that `fib.fcClx`/`lcbClx` points at.
+   *
+   * Per MS-DOC, the CLX lives in the table stream selected by `fWhichTblStm`
+   * (0 → 0Table, 1 → 1Table), not in the WordDocument stream. We try the
+   * correct table stream first, then fall back to the WordDocument stream for
+   * files where the table stream is missing or the FIB points elsewhere — this
+   * preserves the previous behavior for those edge cases.
+   */
+  private readClxData(
+    fib: FibData,
+    wordDocData: Uint8Array,
+    directory: DirectoryEntry[],
+  ): Uint8Array | null {
+    if (fib.lcbClx <= 0) return null
+
+    const which: 0 | 1 = fib.fWhichTblStm ? 1 : 0
+    const tableStream = this.ole.findTableStream(directory, which)
+    if (tableStream) {
+      const tableData = tableStream.data
+      if (fib.fcClx + fib.lcbClx <= tableData.length) {
+        return tableData.subarray(fib.fcClx, fib.fcClx + fib.lcbClx)
+      }
+      logger.warn(`表格流中 CLX 越界 (fcClx=${fib.fcClx}, lcbClx=${fib.lcbClx}, tableLen=${tableData.length})`)
+    }
+
+    // Fallback: try reading from WordDocument stream (previous behavior).
+    if (fib.fcClx + fib.lcbClx <= wordDocData.length) {
+      logger.warn('回退到 WordDocument 流读取 CLX（规范上应在 0Table/1Table）')
+      return wordDocData.subarray(fib.fcClx, fib.fcClx + fib.lcbClx)
+    }
+
+    return null
+  }
+
+  /**
+   * Read the table stream (0Table or 1Table) data.
+   * Returns the stream data, or null if not found.
+   */
+  private readTableStream(
+    fib: FibData,
+    directory: DirectoryEntry[],
+  ): Uint8Array | null {
+    const which: 0 | 1 = fib.fWhichTblStm ? 1 : 0
+    const tableStream = this.ole.findTableStream(directory, which)
+    if (tableStream && tableStream.data.length > 0) {
+      return tableStream.data
+    }
+    return null
   }
 
   private extractTextWithAutoDetect(data: Uint8Array, suggestedComplex: boolean): string {
@@ -201,6 +373,8 @@ export class DocParser {
     if (byte1 === 0x0D && byte2 === 0x00) return null
     // 0x0A 0x00 = line feed, skip
     if (byte1 === 0x0A && byte2 === 0x00) return { ch: '', advance: 2 }
+    // 0x09 0x00 = tab, keep it for table rendering
+    if (byte1 === 0x09 && byte2 === 0x00) return { ch: '\t', advance: 2 }
 
     // ASCII range (byte2 is high byte, must be 0x00 for single-byte chars)
     if (byte2 === 0x00 && byte1 >= 0x20 && byte1 <= 0x7E) {
@@ -232,6 +406,10 @@ export class DocParser {
         if (byte === 0x0D) {
           if (currentParagraph.trim().length >= 2) paragraphs.push(currentParagraph.trim())
           currentParagraph = ''
+          continue
+        }
+        if (byte === 0x09) {
+          currentParagraph += '\t'
           continue
         }
         if (byte === 0x0A || byte === 0x00) continue
@@ -290,62 +468,694 @@ export class DocParser {
     return filtered.join('\n\n').trim()
   }
 
-  private parseClx(clxData: Uint8Array, wordDocData: Uint8Array): string {
-    if (clxData.length < 4) return ''
-    const clxt = clxData[0]
-    if (clxt !== 2) return this.extractTextSimple(wordDocData)
+  private static readonly MAX_PIECE_COUNT = 1000
+  private static readonly MAX_TOTAL_CHARS = 10 * 1024 * 1024
+  /** Maximum number of images to extract from a single document. */
+  private static readonly MAX_IMAGES = 50
 
-    let offset = 1
-    const lcb = clxData[offset] | (clxData[offset + 1] << 8) | (clxData[offset + 2] << 16) | (clxData[offset + 3] << 24)
-    offset += 4
-    if (lcb <= 0 || offset + lcb > clxData.length) return this.extractTextSimple(wordDocData)
-
-    const clxt2 = clxData[offset]; offset += 1
-    if (clxt2 !== 1) return this.extractTextSimple(wordDocData)
-
-    offset += 4
-
-    const rgCcp: number[] = []
-    while (offset + 4 <= clxData.length) {
-      const ccp = clxData[offset] | (clxData[offset + 1] << 8) | (clxData[offset + 2] << 16) | (clxData[offset + 3] << 24)
-      if (ccp === 0 && rgCcp.length > 0) break
-      rgCcp.push(ccp); offset += 4
-    }
-
-    let text = ''
-    let lastCcp = 0
-    for (const ccp of rgCcp) {
-      if (ccp > lastCcp && ccp > 0) {
-        text += this.extractTextFromRange(wordDocData, lastCcp, ccp)
-      }
-      lastCcp = ccp
-    }
-    return text.length > 0 ? text : this.extractTextSimple(wordDocData)
+  private static readUint32(data: Uint8Array, offset: number): number {
+    if (offset < 0 || offset + 4 > data.length) return 0
+    return (data[offset] | (data[offset + 1] << 8) | (data[offset + 2] << 16) | (data[offset + 3] << 24)) >>> 0
   }
 
-  private extractTextFromRange(data: Uint8Array, start: number, end: number): string {
+  private static readUint16(data: Uint8Array, offset: number): number {
+    if (offset < 0 || offset + 2 > data.length) return 0
+    return (data[offset] | (data[offset + 1] << 8)) & 0xFFFF
+  }
+
+  /**
+   * Parse the Clx (complex file information) structure to extract text from pieces.
+   *
+   * Clx structure:
+   *   clxt (1 byte) = 0x02  → indicates Pcdt follows
+   *   lcb  (4 bytes)       → length of Pcdt data
+   *   Pcdt (variable)
+   *
+   * Pcdt structure:
+   *   clxt      (1 byte) = 0x01
+   *   reserved  (2 bytes)
+   *   lcbPlcPcd (4 bytes) → length of PlcPcd
+   *   PlcPcd    (variable)
+   *
+   * PlcPcd structure:
+   *   n       (4 bytes)   → number of pieces
+   *   rgCcp   ((n+1)*4 bytes) → character positions for each piece
+   *   rgPcd   (n*8 bytes) → PCD entries for each piece
+   *
+   * PCD entry (8 bytes each):
+   *   reserved (2 bytes)  → flags / unused
+   *   fc       (4 bytes)  → file offset + compression flag
+   *                          bit 30: fCompressed (1 = 8-bit, 0 = UTF-16LE)
+   *                          bits 0-29: actual file offset
+   *   prm      (2 bytes)  → property modifier (CHP/PAP info, unused here)
+   *
+   * This overload concatenates text from ALL pieces. When the FIB exposes
+   * per-story character counts (rgCcp), prefer parseClxWithStories() — it
+   * splits pieces by story boundary so header/footer/footnote text does
+   * not leak into the main body.
+   */
+  private parseClx(clxData: Uint8Array, wordDocData: Uint8Array): string {
+    const pieces = this.parseClxPieces(clxData)
+    if (pieces.length === 0) return this.extractTextSimple(wordDocData)
+
+    const pieceTexts: string[] = []
+    let totalChars = 0
+
+    for (const piece of pieces) {
+      totalChars += piece.charCount
+      if (totalChars > DocParser.MAX_TOTAL_CHARS) {
+        logger.warn('总字符数超出限制，停止读取')
+        break
+      }
+
+      const byteStart = piece.fcValue
+      const byteEnd = piece.fCompressed
+        ? piece.fcValue + piece.charCount
+        : piece.fcValue + piece.charCount * 2
+
+      if (byteStart < 0 || byteEnd > wordDocData.length) {
+        logger.warn(`Piece (cp=${piece.cpStart}) 越界，跳过`)
+        continue
+      }
+
+      const pieceText = this.extractTextFromRange(
+        wordDocData, byteStart, byteEnd, piece.fCompressed,
+      )
+      if (pieceText.trim().length > 0) {
+        pieceTexts.push(pieceText.trim())
+      }
+    }
+
+    if (pieceTexts.length > 0) return pieceTexts.join('\n\n')
+    return this.extractTextSimple(wordDocData)
+  }
+
+  /**
+   * Parse the PlcPcd inside a CLX blob and return piece metadata.
+   * Returns an empty array when the structure is malformed or exceeds
+   * safety limits — callers should fall back to extractTextSimple.
+   */
+  private parseClxPieces(clxData: Uint8Array): Piece[] {
+    if (clxData.length < 5) return []
+    const clxt = clxData[0]
+    if (clxt !== 2) return []
+
+    let offset = 1
+    const lcb = DocParser.readUint32(clxData, offset)
+    offset += 4
+    if (lcb <= 0 || lcb > clxData.length - offset) return []
+
+    const pcdtStart = offset
+    const clxt2 = clxData[pcdtStart]
+    if (clxt2 !== 1) return []
+
+    const lcbPlcPcd = DocParser.readUint32(clxData, pcdtStart + 3)
+    const plcPcdStart = pcdtStart + 7
+
+    if (lcbPlcPcd <= 0 || plcPcdStart + lcbPlcPcd > clxData.length) return []
+
+    const n = DocParser.readUint32(clxData, plcPcdStart)
+    if (n <= 0 || n > DocParser.MAX_PIECE_COUNT) {
+      logger.warn(`PlcPcd n=${n} 超出范围`)
+      return []
+    }
+
+    const ccpCount = n + 1
+    const ccpByteSize = ccpCount * 4
+    const pcdByteSize = n * 8
+    const expectedSize = 4 + ccpByteSize + pcdByteSize
+
+    if (plcPcdStart + expectedSize > clxData.length) {
+      logger.warn('PlcPcd 数据越界')
+      return []
+    }
+
+    const plcCp: number[] = []
+    for (let i = 0; i < ccpCount; i++) {
+      const cp = DocParser.readUint32(clxData, plcPcdStart + 4 + i * 4)
+      if (cp > DocParser.MAX_TOTAL_CHARS) {
+        logger.warn(`CP 值过大: ${cp}`)
+        return []
+      }
+      plcCp.push(cp)
+    }
+
+    const rgPcdStart = plcPcdStart + 4 + ccpByteSize
+    const pieces: Piece[] = []
+
+    for (let i = 0; i < n; i++) {
+      const pcdOffset = rgPcdStart + i * 8
+      // PCD (8 bytes, MS-DOC §2.5.6.4):
+      //   Pn (2 bytes): paragraph number (or 0)
+      //   Fc (4 bytes): bit 0-29 = fc; bit 30 = fCompressed; bit 31 = fChp
+      //   Prm (2 bytes): CHPX index when fChp is set
+      const fcAndFlags = DocParser.readUint32(clxData, pcdOffset + 2)
+      const fCompressed = (fcAndFlags & 0x40000000) !== 0
+      const fChp = (fcAndFlags & 0x80000000) !== 0
+      const fcValue = fcAndFlags & 0x3FFFFFFF
+      const chpxIndex = fChp ? DocParser.readUint16(clxData, pcdOffset + 6) : undefined
+
+      const cpStart = plcCp[i]
+      const cpEnd = plcCp[i + 1]
+      const charCount = cpEnd - cpStart
+      if (charCount <= 0) continue
+
+      const piece: Piece = { cpStart, cpEnd, fcValue, fCompressed, fChp, charCount }
+      if (chpxIndex !== undefined) piece.chpxIndex = chpxIndex
+      pieces.push(piece)
+    }
+
+    return pieces
+  }
+
+  /**
+   * Split pieces into per-story text using FibRgLw's rgCcp boundaries.
+   *
+   * Word stores all stories as one continuous character stream:
+   *   [main][footnotes][headers/footers][macro][comments][endnotes][textboxes][header textboxes]
+   *
+   * Each piece's global CP range is intersected with each story's CP range.
+   * When a piece straddles a story boundary, the byte range is sliced by
+   * character offset so each story gets only its own characters.
+   *
+   * Returns null when there are no pieces or ccpText is zero (caller should
+   * fall back to parseClx's whole-document concatenation).
+   */
+  private splitPiecesByStory(
+    pieces: Piece[],
+    rgCcp: RgCcp,
+    wordDocData: Uint8Array,
+  ): { stories: StoryText; pieceMap: StoryPieceMap } | null {
+    if (pieces.length === 0 || rgCcp.ccpText <= 0) return null
+
+    // Build story CP boundaries in order. Names map to StoryText fields.
+    // macro (ccpMcr) is skipped — we don't expose macro text.
+    let cp = 0
+    const bounds: Array<{ name: keyof StoryText; start: number; end: number }> = []
+    const addBound = (name: keyof StoryText, count: number) => {
+      bounds.push({ name, start: cp, end: cp + count })
+      cp += count
+    }
+    addBound('main', rgCcp.ccpText)
+    addBound('footnotes', rgCcp.ccpFtn)
+    addBound('headers', rgCcp.ccpHdd)
+    cp += rgCcp.ccpMcr // skip macro
+    addBound('comments', rgCcp.ccpAtn)
+    addBound('endnotes', rgCcp.ccpEdn)
+    addBound('textboxes', rgCcp.ccpTxbx)
+    // ccpHdrTxbx folded into textboxes per our StoryText shape
+    cp += rgCcp.ccpHdrTxbx
+
+    const stories: StoryText = {
+      main: '',
+      footnotes: '',
+      headers: '',
+      endnotes: '',
+      comments: '',
+      textboxes: '',
+    }
+    const pieceMap: StoryPieceMap = {
+      main: [],
+      footnotes: [],
+      headers: [],
+      endnotes: [],
+      comments: [],
+      textboxes: [],
+    }
+
+    let totalChars = 0
+    // Per-piece running character offsets within each story (post-skip).
+    const storyOffset: Record<keyof StoryText, number> = {
+      main: 0, footnotes: 0, headers: 0, endnotes: 0, comments: 0, textboxes: 0,
+    }
+
+    for (const piece of pieces) {
+      for (const b of bounds) {
+        if (b.end <= b.start) continue
+        // No overlap between piece CP range and this story's CP range.
+        if (piece.cpEnd <= b.start || piece.cpStart >= b.end) continue
+
+        const overlapCpStart = Math.max(piece.cpStart, b.start)
+        const overlapCpEnd = Math.min(piece.cpEnd, b.end)
+        const overlapCharCount = overlapCpEnd - overlapCpStart
+        if (overlapCharCount <= 0) continue
+
+        totalChars += overlapCharCount
+        if (totalChars > DocParser.MAX_TOTAL_CHARS) {
+          logger.warn('总字符数超出限制，停止 story 分流')
+          return { stories, pieceMap }
+        }
+
+        // Translate the overlap's character offset into a byte offset
+        // within this piece's storage in the WordDocument stream.
+        const charOffset = overlapCpStart - piece.cpStart
+        const byteOffset = piece.fCompressed ? charOffset : charOffset * 2
+        const byteLen = piece.fCompressed ? overlapCharCount : overlapCharCount * 2
+        const segStart = piece.fcValue + byteOffset
+        const segEnd = segStart + byteLen
+
+        if (segStart < 0 || segEnd > wordDocData.length) {
+          logger.warn(`Story segment 越界 (cp=${overlapCpStart})，跳过`)
+          continue
+        }
+
+        const segText = this.extractTextFromRange(
+          wordDocData, segStart, segEnd, piece.fCompressed,
+        )
+        const segTextLen = segText.length
+        const segStartInStory = storyOffset[b.name]
+        stories[b.name] += segText
+        if (segTextLen > 0) {
+          pieceMap[b.name].push({
+            start: segStartInStory,
+            end: segStartInStory + segTextLen,
+            chpxIndex: piece.fChp ? piece.chpxIndex : undefined,
+          })
+        }
+        storyOffset[b.name] += segTextLen
+      }
+    }
+
+    return { stories, pieceMap }
+  }
+
+  /**
+   * Parse CLX and split by story. Returns null when story splitting is not
+   * applicable (no pieces, or ccpText is zero); callers should fall back to
+   * parseClx() which concatenates all pieces.
+   */
+  private parseClxWithStories(
+    clxData: Uint8Array,
+    wordDocData: Uint8Array,
+    rgCcp: RgCcp,
+  ): { stories: StoryText; pieceMap: StoryPieceMap } | null {
+    const pieces = this.parseClxPieces(clxData)
+    if (pieces.length === 0) return null
+    return this.splitPiecesByStory(pieces, rgCcp, wordDocData)
+  }
+
+  private extractTextFromRange(data: Uint8Array, start: number, end: number, isCompressed: boolean = false): string {
+    if (start < 0 || end > data.length || start >= end) return ''
+
     let text = ''
-    const actualStart = Math.max(0, start)
-    const actualEnd = Math.min(data.length, end)
-    for (let i = actualStart; i < actualEnd - 1; i += 2) {
-      const charCode = data[i] | (data[i + 1] << 8)
-      if (charCode === 0x000d) text += '\n'
-      else if (charCode === 0x000a || charCode === 0x0000) continue
-      else if ((charCode >= 0x0020 && charCode <= 0x007E) || (charCode >= 0x4E00 && charCode <= 0x9FFF) || (charCode >= 0x3000 && charCode <= 0x303F) || (charCode >= 0xFF00 && charCode <= 0xFFEF) || (charCode === 0x2018 || charCode === 0x2019 || charCode === 0x201C || charCode === 0x201D)) {
-        text += String.fromCharCode(charCode)
+    if (isCompressed) {
+      for (let i = start; i < end; i++) {
+        const byte = data[i]
+        if (byte === 0x0D) text += '\n'
+        else if (byte === 0x09) text += '\t'
+        else if (byte === 0x07) text += '\u0007' // Word table cell mark
+        else if (byte === 0x0A || byte === 0x00) continue
+        else if (byte >= 0x20) text += String.fromCharCode(byte)
+      }
+    } else {
+      for (let i = start; i < end - 1; i += 2) {
+        const charCode = (data[i] | (data[i + 1] << 8)) & 0xFFFF
+        if (charCode === 0x000d) text += '\n'
+        else if (charCode === 0x0009) text += '\t'
+        else if (charCode === 0x0007) text += '\u0007' // Word table cell mark
+        else if (charCode === 0x000a || charCode === 0x0000) continue
+        else if ((charCode >= 0x0020 && charCode <= 0x007E) || (charCode >= 0x4E00 && charCode <= 0x9FFF) || (charCode >= 0x3000 && charCode <= 0x303F) || (charCode >= 0xFF00 && charCode <= 0xFFEF) || (charCode === 0x2018 || charCode === 0x2019 || charCode === 0x201C || charCode === 0x201D)) {
+          text += String.fromCharCode(charCode)
+        }
       }
     }
     return text
   }
 
+  // ==================== CHP/PAP format parsing ====================
+
+  /**
+   * Parse CHPX (character property) and PAPX (paragraph property) runs from
+   * the table stream. Returns empty arrays if the data is missing or malformed.
+   *
+   * The CHP/PAP tables are stored in the table stream (0Table / 1Table) and
+   * their offsets are given by fcPlcfBteChpx / fcPlcfBtePapx in the FIB.
+   */
+  private parseFormatRuns(
+    fib: FibData,
+    directory: DirectoryEntry[],
+    wordDocData?: Uint8Array,
+    text?: string,
+  ): { chpxRuns: ChpxRun[]; papxRuns: PapxRun[]; styles: StyleDefinition[]; fontNames: string[]; listEntries: ListEntry[]; lfoEntries: LfoEntry[]; hyperlinks: FieldRange[]; tocEntries: TocEntry[] } {
+    const chpxRuns: ChpxRun[] = []
+    const papxRuns: PapxRun[] = []
+    let styles: StyleDefinition[] = []
+    let fontNames: string[] = []
+    let listEntries: ListEntry[] = []
+    const lfoEntries: LfoEntry[] = []
+    const hyperlinks: FieldRange[] = []
+    const tocEntries: TocEntry[] = []
+
+    if (!fib) return { chpxRuns, papxRuns, styles, fontNames, listEntries, lfoEntries, hyperlinks, tocEntries }
+
+    const tableData = this.readTableStream(fib, directory)
+    if (!tableData || tableData.length === 0) return { chpxRuns, papxRuns, styles, fontNames, listEntries, lfoEntries, hyperlinks, tocEntries }
+
+    try {
+      if (fib.lcbPlcfBteChpx > 0 &&
+          fib.fcPlcfBteChpx + fib.lcbPlcfBteChpx <= tableData.length) {
+        const runs = parseChpxRuns(tableData, fib.fcPlcfBteChpx, fib.lcbPlcfBteChpx)
+        if (runs.length > 0) {
+          logger.info(`解析到 ${runs.length} 个 CHPX 字符格式运行`)
+          chpxRuns.push(...runs)
+        }
+      }
+    } catch (e) {
+      logger.warn(`CHPX 解析失败: ${e}`)
+    }
+
+    try {
+      if (fib.lcbPlcfBtePapx > 0 &&
+          fib.fcPlcfBtePapx + fib.lcbPlcfBtePapx <= tableData.length) {
+        const runs = parsePapxRuns(tableData, fib.fcPlcfBtePapx, fib.lcbPlcfBtePapx)
+        if (runs.length > 0) {
+          logger.info(`解析到 ${runs.length} 个 PAPX 段落格式运行`)
+          papxRuns.push(...runs)
+        }
+      }
+    } catch (e) {
+      logger.warn(`PAPX 解析失败: ${e}`)
+    }
+
+    try {
+      if (fib.lcbStshf > 0 &&
+          fib.fcStshf + fib.lcbStshf <= tableData.length) {
+        const parsedStyles = parseStylesheet(tableData, fib.fcStshf, fib.lcbStshf)
+        if (parsedStyles.length > 0) {
+          logger.info(`解析到 ${parsedStyles.length} 个样式定义`)
+          styles = parsedStyles
+        }
+      }
+    } catch (e) {
+      logger.warn(`样式表解析失败: ${e}`)
+    }
+
+    try {
+      if (fib.lcbSttbfFfn > 0 &&
+          fib.fcSttbfFfn + fib.lcbSttbfFfn <= tableData.length) {
+        fontNames = parseFontTable(tableData, fib.fcSttbfFfn, fib.lcbSttbfFfn)
+        if (fontNames.length > 0) {
+          logger.info(`解析到 ${fontNames.length} 个字体名称`)
+        }
+      }
+    } catch (e) {
+      logger.warn(`字体表解析失败: ${e}`)
+    }
+
+    try {
+      if (fib.lcbLst > 0 &&
+          fib.fcLst + fib.lcbLst <= tableData.length) {
+        listEntries = parseListTable(tableData, fib.fcLst, fib.lcbLst)
+        if (listEntries.length > 0) {
+          logger.info(`解析到 ${listEntries.length} 个列表定义`)
+        }
+      }
+
+      // Parse PlcfLfo (List Format Override table)
+      if (fib.lcbPlcfLfo > 0 && fib.fcPlcfLfo + fib.lcbPlcfLfo <= tableData.length) {
+        const parsed = parsePlcfLfo(tableData, fib.fcPlcfLfo, fib.lcbPlcfLfo)
+        if (parsed.length > 0) {
+          ;(lfoEntries as LfoEntry[]).push(...parsed)
+          logger.info(`解析到 ${parsed.length} 个列表格式覆盖 (LFO)`)
+        }
+      }
+    } catch (e) {
+      logger.warn(`列表表解析失败: ${e}`)
+    }
+
+    // Parse PlcfFld (field positions) and extract hyperlinks and TOC
+    try {
+      if (fib.lcbPlcfFldMom > 0 &&
+          fib.fcPlcfFldMom + fib.lcbPlcfFldMom <= tableData.length) {
+        const fldEntries = parsePlcfFld(tableData, fib.fcPlcfFldMom, fib.lcbPlcfFldMom)
+        if (fldEntries.length > 0 && wordDocData && text) {
+          const links = extractHyperlinks(fldEntries, text, wordDocData)
+          if (links.length > 0) {
+            ;(hyperlinks as FieldRange[]).push(...links)
+            logger.info(`解析到 ${links.length} 个超链接`)
+          }
+
+          const allFields = extractAllFields(fldEntries, text, wordDocData)
+          const tocFields = allFields.filter(f => f.flt === 19 && f.tocEntries && f.tocEntries.length > 0)
+          for (const tocField of tocFields) {
+            if (tocField.tocEntries) {
+              ;(tocEntries as TocEntry[]).push(...tocField.tocEntries)
+            }
+          }
+          if (tocEntries.length > 0) {
+            logger.info(`解析到 ${tocEntries.length} 个目录条目`)
+          }
+        }
+      }
+    } catch (e) {
+      logger.warn(`域表解析失败: ${e}`)
+    }
+
+    return { chpxRuns, papxRuns, styles, fontNames, listEntries, lfoEntries, hyperlinks, tocEntries }
+  }
+
+  /**
+   * Create formatted paragraphs with real CHP/PAP format data.
+   * Uses single newline splitting and original paragraph indices for accurate
+   * PAPX matching, and text offset as cp estimate for CHPX matching.
+   *
+   * @param pieceMap - Optional piece map from splitPiecesByStory that gives
+   *   per-character CHPX associations via piece-level chpxIndex.
+   */
+  private createParagraphsWithRealFormats(
+    text: string,
+    chpxRuns: ChpxRun[],
+    papxRuns: PapxRun[],
+    styles: StyleDefinition[],
+    fontNames: string[],
+    pieceMap?: Array<{ start: number; end: number; chpxIndex?: number }>,
+    listEntries?: ListEntry[],
+    lfoEntries?: LfoEntry[],
+  ): any[] {
+    const allParagraphs: Array<{ text: string; cpStart: number; originalIndex: number }> = []
+    let cp = 0
+
+    const parts = text.split(/\n/)
+    for (let i = 0; i < parts.length; i++) {
+      const paraText = parts[i]
+      const paraLen = paraText.length
+      allParagraphs.push({ text: paraText, cpStart: cp, originalIndex: i })
+      cp += paraLen + 1 // +1 for the \n (paragraph mark)
+    }
+
+    const result: any[] = []
+    for (let i = 0; i < allParagraphs.length; i++) {
+      const para = allParagraphs[i]
+      const cleaned = this.cleanParagraph(para.text.trim())
+      if (!this.shouldSkipParagraph(cleaned) && cleaned.length > 0) {
+        const paraFormat = this.detectParagraphFormat(cleaned, i, allParagraphs.length)
+        const charFormat = this.guessCharFormat(cleaned, i)
+        const newPara: any = {
+          text: cleaned,
+          paraFormat,
+          charFormat,
+          _cpStart: para.cpStart, // 保留 CP 位置供超链接映射
+        }
+
+        if (papxRuns.length > 0 && para.originalIndex < papxRuns.length) {
+          const papx = papxRuns[para.originalIndex]
+          if (papx.format && Object.keys(papx.format).length > 0) {
+            newPara.paraFormat = {
+              ...newPara.paraFormat,
+              ...papx.format,
+            }
+            newPara.paraFormatFromReal = true
+          }
+          // Use outlineLevel from PAPX (sprmPOutlineLvl) as heading level
+          if (papx.format.outlineLevel !== undefined && papx.format.outlineLevel >= 0 && papx.format.outlineLevel <= 8) {
+            newPara.paraFormat.headingLevel = papx.format.outlineLevel + 1 // 0-based → 1-based
+          }
+          if (styles.length > 0 && papx.istd !== undefined) {
+            const style = styles.find(s => s.istd === papx.istd)
+            if (style) {
+              newPara.paraFormat.styleName = style.name
+              // Apply style's base paragraph format (inheritance)
+              if (style.paraFormat && Object.keys(style.paraFormat).length > 0) {
+                // Style base format → PAPX overrides (already applied above)
+                newPara.paraFormat = {
+                  ...style.paraFormat,
+                  ...newPara.paraFormat,
+                }
+              }
+              // Apply style's base character format
+              if (style.charFormat && Object.keys(style.charFormat).length > 0) {
+                newPara.charFormat = {
+                  ...style.charFormat,
+                  ...newPara.charFormat,
+                }
+              }
+              // Apply style's font name
+              if (style.fontIndex !== undefined && fontNames && fontNames.length > style.fontIndex) {
+                if (!newPara.charFormat.fontName) {
+                  newPara.charFormat.fontName = fontNames[style.fontIndex]
+                }
+              }
+              // Only use style-name-based heading level if outlineLevel wasn't set
+              if (newPara.paraFormat.headingLevel === undefined) {
+                const headingLevel = getHeadingLevel(style.name)
+                if (headingLevel !== null) {
+                  newPara.paraFormat.headingLevel = headingLevel
+                }
+              }
+            }
+          }
+          // Apply real list format from LST/LFO table (replaces heuristic detectListInfo)
+          // Priority: ilfo (LFO override) > ilst (direct LST reference)
+          if (papx.ilfo !== undefined && papx.ilfo > 0 && lfoEntries && lfoEntries.length > 0 && listEntries && listEntries.length > 0) {
+            const level = papx.ilvl ?? 0
+            const listFmt = getListFormatFromLfo(listEntries, lfoEntries, papx.ilfo, level)
+            if (listFmt) {
+              newPara.paraFormat.listType = listFmt.listType
+              newPara.paraFormat.listStyle = listFmt.listStyle
+              newPara.paraFormat.listLevel = listFmt.listLevel
+              newPara.paraFormatFromReal = true
+            }
+          } else if (papx.ilst !== undefined && listEntries && listEntries.length > 0) {
+            const level = papx.ilvl ?? 0
+            const listFmt = getListFormat(listEntries, papx.ilst, level)
+            if (listFmt) {
+              newPara.paraFormat.listType = listFmt.listType
+              newPara.paraFormat.listStyle = listFmt.listStyle
+              newPara.paraFormat.listLevel = listFmt.listLevel
+              newPara.paraFormatFromReal = true
+            }
+          }
+          // Apply table info from TAP SPRMs (sprmPFInTable / sprmTDefTable / sprmTTableBorders)
+          if (papx.table) {
+            newPara.paraFormat.table = papx.table
+            newPara.paraFormatFromReal = true
+          }
+        }
+
+        const cpStart = para.cpStart
+        const cpEnd = cpStart + para.text.length
+        // 1. Try piece-level CHPX first (most accurate when prm/fChp is set)
+        let merged: Partial<CharacterFormat> = {}
+        let usedPieceChp = false
+        if (pieceMap && pieceMap.length > 0) {
+          // Find pieces that overlap the paragraph's [cpStart, cpEnd).
+          // We need to know the paragraph's range in piece-map coordinates.
+          // Since pieceMap and para are both based on `text`, para.cpStart
+          // IS the offset in the same coordinate system.
+          const overlapping = pieceMap.filter(p =>
+            !(p.end <= cpStart || p.start >= cpEnd),
+          )
+          if (overlapping.length > 0) {
+            const ratio = overlapping.reduce((s, p) => {
+              const overlapStart = Math.max(p.start, cpStart)
+              const overlapEnd = Math.min(p.end, cpEnd)
+              return s + (overlapEnd - overlapStart)
+            }, 0) / (cpEnd - cpStart)
+            // If overlapping pieces cover >= 50% of the paragraph, use them.
+            if (ratio >= 0.5) {
+              for (const p of overlapping) {
+                if (p.chpxIndex !== undefined && p.chpxIndex < chpxRuns.length) {
+                  const pieceChp = chpxRuns[p.chpxIndex]
+                  if (pieceChp.format) {
+                    merged = { ...merged, ...pieceChp.format }
+                    usedPieceChp = true
+                  }
+                  if (pieceChp.fontIndex !== undefined && fontNames && fontNames[pieceChp.fontIndex]) {
+                    merged.fontName = fontNames[pieceChp.fontIndex]
+                    usedPieceChp = true
+                  }
+                }
+              }
+            }
+          }
+        }
+        // 2. Fall back to CHPX range matching when no piece-level data.
+        if (!usedPieceChp && chpxRuns.length > 0 && cleaned.length > 0) {
+          merged = mergeCharFormatForParagraph(chpxRuns, cpStart, cpEnd, fontNames)
+        }
+        if (Object.keys(merged).length > 0) {
+          newPara.charFormat = {
+            ...newPara.charFormat,
+            ...merged,
+          }
+          newPara.charFormatFromReal = true
+        }
+
+        result.push(newPara)
+      }
+    }
+
+    return result
+  }
+
   // ==================== Format extraction ====================
 
-  private extractFormattedText(wordStream: StreamData): any[] {
+  private extractFormattedText(
+    wordStream: StreamData,
+    directory: DirectoryEntry[],
+  ): { paragraphs: any[]; stories?: DocumentStories; chpxRuns?: ChpxRun[]; papxRuns?: PapxRun[]; styles?: StyleDefinition[]; hyperlinks?: FieldRange[]; tocEntries?: TocEntry[] } {
     const data = wordStream.data
     const fib = parseFib(data)
 
     if (fib && fib.fcMin > 0 && fib.fcMac > 0) {
-      return this.extractTextWithFormatFromFib(data, fib)
+      return { paragraphs: this.extractTextWithFormatFromFib(data, fib), tocEntries: [] }
+    }
+
+    // Prefer CLX-driven extraction: it correctly handles per-piece encoding
+    // and is the spec-compliant path for Word 97+ documents.
+    if (fib && fib.lcbClx > 0) {
+      const clxData = this.readClxData(fib, data, directory)
+      if (clxData) {
+        // Try story-split extraction first to keep header/footer/footnote
+        // text out of the main body.
+        let mainText = ''
+        let pieceMapMain: Array<{ start: number; end: number; chpxIndex?: number }> = []
+        let storyResult: StoryText | null = null
+
+        if (fib.rgCcp.ccpText > 0) {
+          const result = this.parseClxWithStories(clxData, data, fib.rgCcp)
+          if (result && result.stories.main.trim().length > 0) {
+            mainText = result.stories.main
+            pieceMapMain = result.pieceMap.main
+            storyResult = result.stories
+          }
+        }
+
+        if (!mainText) {
+          mainText = this.parseClx(clxData, data)
+          pieceMapMain = []
+        }
+
+        if (mainText.length > 0) {
+          // Parse formats AFTER we have the text (needed for hyperlink extraction)
+          const { chpxRuns, papxRuns, styles, fontNames, listEntries, lfoEntries, hyperlinks, tocEntries } =
+            this.parseFormatRuns(fib, directory, data, mainText)
+
+          const hasRealFormats = chpxRuns.length > 0 || papxRuns.length > 0 || styles.length > 0 || listEntries.length > 0
+
+          let paragraphs: any[]
+          if (hasRealFormats) {
+            paragraphs = this.createParagraphsWithRealFormats(
+              mainText, chpxRuns, papxRuns, styles, fontNames,
+              pieceMapMain, listEntries, lfoEntries,
+            )
+          } else {
+            paragraphs = this.createFormattedParagraphsFromText(mainText)
+          }
+
+          if (paragraphs.length > 0) {
+            return {
+              paragraphs,
+              stories: storyResult ? this.toDocumentStories(storyResult) : undefined,
+              chpxRuns,
+              papxRuns,
+              styles,
+              hyperlinks,
+              tocEntries,
+            }
+          }
+        }
+      }
     }
 
     const suggestedComplex = fib ? fib.fComplex : false
@@ -354,7 +1164,7 @@ export class DocParser {
     const binaryDetect = this.detectEncodingFromBinary(data)
     if (binaryDetect !== null) {
       const raw = this.extractParagraphsWithFormat(data, { fcMin: 0, fComplex: binaryDetect })
-      return this.filterParagraphsWithGenericLogic(raw)
+      return { paragraphs: this.filterParagraphsWithGenericLogic(raw), tocEntries: undefined }
     }
 
     const raw8 = this.extractParagraphsWithFormat(data, { fcMin: 0, fComplex: true })
@@ -362,7 +1172,164 @@ export class DocParser {
     const score8 = this.scoreRawParagraphs(raw8)
     const score16 = this.scoreRawParagraphs(raw16)
     const useComplex = suggestedComplex ? score8 >= score16 * 0.4 : score16 < score8 * 0.4
-    return this.filterParagraphsWithGenericLogic(useComplex ? raw8 : raw16)
+    return { paragraphs: this.filterParagraphsWithGenericLogic(useComplex ? raw8 : raw16), tocEntries: undefined }
+  }
+
+  /**
+   * Convert internal StoryText to the public DocumentStories shape.
+   * Drops empty fields so the UI can simply check `stories?.footnotes`.
+   */
+  private toDocumentStories(stories: StoryText): DocumentStories {
+    const out: DocumentStories = {}
+    if (stories.headers.trim()) out.headers = stories.headers.trim()
+    if (stories.footnotes.trim()) out.footnotes = stories.footnotes.trim()
+    if (stories.endnotes.trim()) out.endnotes = stories.endnotes.trim()
+    if (stories.comments.trim()) out.comments = stories.comments.trim()
+    if (stories.textboxes.trim()) out.textboxes = stories.textboxes.trim()
+    return out
+  }
+
+  /**
+   * Extract embedded images from the document.
+   *
+   * Word 97-2003 stores embedded pictures as binary blobs inside the `Data`
+   * stream. Each picture is referenced from the document text via a special
+   * character and a CHP `fcPic` pointer, but parsing that requires the CHP
+   * table which this project does not yet read.
+   *
+   * As a pragmatic fallback, we scan the `Data` stream (and the WordDocument
+   * stream as a secondary fallback) for well-known image magic numbers
+   * (PNG / JPEG / BMP / GIF) and slice out each image. Returns an array of
+   * data URLs ready for inline `<img>` rendering.
+   */
+  private extractImages(directory: DirectoryEntry[], wordDocData?: Uint8Array): string[] {
+    try {
+      const candidates: Uint8Array[] = []
+
+      // Primary: the `Data` stream is where Word stores embedded pictures.
+      const dataEntry = this.ole.findStreamByName(directory, 'Data')
+      if (dataEntry) {
+        const dataStream = this.ole.readStream(dataEntry)
+        if (dataStream.data && dataStream.data.length > 0) {
+          candidates.push(dataStream.data)
+        }
+      }
+
+      // Secondary fallback: some producers embed images directly in the
+      // WordDocument stream. We scan it too, then dedupe by byte content.
+      if (wordDocData && wordDocData.length > 0) {
+        candidates.push(wordDocData)
+      }
+
+      let images: Array<{ format: string; data: Uint8Array }> = []
+      for (const candidate of candidates) {
+        const found = extractImagesFromStream(candidate)
+        for (const img of found) {
+          if (images.length >= DocParser.MAX_IMAGES) break
+          images.push(img)
+        }
+        if (images.length >= DocParser.MAX_IMAGES) break
+      }
+
+      if (images.length === 0) return []
+
+      // Dedupe by size + first 16 bytes (cheap and effective for embedded
+      // images that may appear in both Data and WordDocument streams).
+      const seen = new Set<string>()
+      const unique: typeof images = []
+      for (const img of images) {
+        const head = Array.from(img.data.subarray(0, Math.min(16, img.data.length)))
+          .join(',')
+        const key = `${img.format}:${img.data.length}:${head}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        unique.push(img)
+      }
+
+      return imagesToDataUrls(unique as any)
+    } catch (err) {
+      logger.warn('图片提取失败:', err instanceof Error ? err.message : String(err))
+      return []
+    }
+  }
+
+  /**
+   * Extract document properties from the SummaryInformation stream.
+   *
+   * Word documents store metadata (title, author, keywords, etc.) in the
+   * SummaryInformation stream using the OLE Property Set format (MS-OLEPS).
+   *
+   * @param directory - Directory entries from the OLE container.
+   * @returns Document properties, or null if not found/parse failed.
+   */
+  private extractProperties(directory: DirectoryEntry[]): DocumentProperties | null {
+    try {
+      // SummaryInformation stream name can be:
+      // - "\005SummaryInformation" (most common, \005 is byte 5)
+      // - "SummaryInformation" (less common)
+      const summaryEntry = this.ole.findStreamByName(directory, '\x05SummaryInformation') ||
+                           this.ole.findStreamByName(directory, 'SummaryInformation')
+
+      let baseProps: DocumentProperties | null = null
+      if (summaryEntry) {
+        const summaryStream = this.ole.readStream(summaryEntry)
+        if (summaryStream.data && summaryStream.data.length > 0) {
+          baseProps = parseSummaryInformation(summaryStream.data)
+        }
+      }
+
+      // DocumentSummaryInformation stream contains extended properties
+      // (category, company, manager, etc.)
+      const docSummaryEntry = this.ole.findStreamByName(directory, '\x05DocumentSummaryInformation') ||
+                              this.ole.findStreamByName(directory, 'DocumentSummaryInformation')
+      if (docSummaryEntry) {
+        const docSummaryStream = this.ole.readStream(docSummaryEntry)
+        if (docSummaryStream.data && docSummaryStream.data.length > 0) {
+          const extProps = parseDocumentSummaryInformation(docSummaryStream.data)
+          if (extProps) {
+            baseProps = baseProps ? { ...baseProps, ...extProps } : extProps
+          }
+        }
+      }
+
+      return baseProps
+    } catch (err) {
+      logger.warn('属性提取失败:', err instanceof Error ? err.message : String(err))
+      return null
+    }
+  }
+
+  /**
+   * Extract DOP (Document Properties) from the table stream.
+   *
+   * Per MS-DOC §2.5.6, the DOP sits at offset `fcDop` in the table stream
+   * (0Table or 1Table selected by fWhichTblStm) with length `lcbDop`.
+   * Returns null if FIB has no DOP offset or the data is invalid.
+   */
+  private extractDop(fib: FibData, directory: DirectoryEntry[]): DopData | null {
+    if (fib.lcbDop <= 0 || fib.fcDop === 0) {
+      return null
+    }
+
+    try {
+      const tableData = this.readTableStream(fib, directory)
+      if (!tableData) {
+        logger.warn('DOP 提取：未找到表格流')
+        return null
+      }
+
+      const end = fib.fcDop + fib.lcbDop
+      if (end > tableData.length) {
+        logger.warn(`DOP 越界 (fcDop=${fib.fcDop}, lcbDop=${fib.lcbDop}, tableLen=${tableData.length})`)
+        return null
+      }
+
+      const dopBytes = tableData.subarray(fib.fcDop, end)
+      return parseDop(dopBytes)
+    } catch (err) {
+      logger.warn('DOP 提取失败:', err instanceof Error ? err.message : String(err))
+      return null
+    }
   }
 
   private extractTextWithFormatFromFib(data: Uint8Array, fib: FibData): any[] {
@@ -402,6 +1369,7 @@ export class DocParser {
           currentParagraph = ''; continue
         }
         if (byte === 0x0A || byte === 0x00) continue
+        if (byte === 0x07) { currentParagraph += '\u0007'; continue }
         if (byte >= 0x20) currentParagraph += String.fromCharCode(byte)
       }
     } else {
@@ -417,6 +1385,7 @@ export class DocParser {
           }
           currentParagraph = ''; i++; continue
         }
+        if (byte1 === 0x07 && byte2 === 0x00) { currentParagraph += '\u0007'; i++; continue }
         const result = DocParser.scanUtf16Char(data, i, maxBytes)
         if (!result) continue
         if (result.ch) currentParagraph += result.ch
@@ -693,23 +1662,102 @@ export class DocParser {
     const alignment = this.detectAlignment(text, index, totalParagraphs)
     if (alignment) format.alignment = alignment
 
-    // Detect list type
-    const trimmed = text.trim()
-    if (/^\d+[\.\)][\s\t]/.test(trimmed)) {
-      format.listType = 'ordered'
-      format.listStyle = 'decimal'
-    } else if (/^[a-zA-Z][\.\)][\s\t]/.test(trimmed) && trimmed.length >= 3) {
-      format.listType = 'ordered'
-      format.listStyle = 'lower-alpha'
-    } else if (/^[•\-\*][\s\t]/.test(trimmed) || /^[•\*]\s/.test(trimmed)) {
-      format.listType = 'unordered'
-      format.listStyle = 'disc'
-    } else if (/^[○●▪▸►→]\s/.test(trimmed)) {
-      format.listType = 'unordered'
-      format.listStyle = 'disc'
+    // Detect list type (with level inferred from leading whitespace).
+    const listInfo = this.detectListInfo(text)
+    if (listInfo) {
+      format.listType = listInfo.listType
+      format.listStyle = listInfo.listStyle
+      if (listInfo.listLevel > 0) format.listLevel = listInfo.listLevel
     }
 
     return format
+  }
+
+  /**
+   * Detect list marker at the start of a paragraph.
+   *
+   * Supported markers (ordered):
+   *   - Arabic numerals: `1.`, `2)`, `(1)`, `（1）`
+   *   - Multi-level Arabic: `1.1`, `1.2.3`
+   *   - Single Latin letter: `a.`, `B)`, `(a)`
+   *   - Roman numerals: `i.`, `ii.`, `iv.`, `I.`, `II.`
+   *   - CJK ideographic: `一、`, `二、`, `（一）`, `甲、`, `乙、`
+   *   - Circled numbers: `① ② ... ㊿`
+   *
+   * Supported markers (unordered):
+   *   - ASCII bullets: `-`, `*`, `+`
+   *   - CJK bullets: `• ○ ● ▪ ▸ ► → ◇ ◆`
+   *
+   * The list level is inferred from leading whitespace (per 2 spaces ≈ 1 level).
+   * Returns null if the paragraph does not look like a list item.
+   */
+  private detectListInfo(text: string): { listType: 'ordered' | 'unordered'; listStyle: string; listLevel: number } | null {
+    // Count leading whitespace (spaces / tabs / full-width spaces).
+    const leadingMatch = text.match(/^[\s\u3000\t]*/)
+    const leadingSpaces = leadingMatch ? leadingMatch[0].replace(/\t/g, '  ').replace(/\u3000/g, '  ').length : 0
+    const listLevel = Math.floor(leadingSpaces / 2)
+
+    const trimmed = text.trim()
+    if (trimmed.length < 2) return null
+
+    // 1. Multi-level Arabic: 1.1 / 1.2.3 (at least one dot-separated number followed by space or end)
+    if (/^\d+(?:\.\d+)+[\.\s\t]/.test(trimmed)) {
+      return { listType: 'ordered', listStyle: 'decimal', listLevel }
+    }
+
+    // 2. Arabic numeral with . or ) then space: 1. / 2) / 12.
+    if (/^\d+[\.\)][\s\t]/.test(trimmed)) {
+      return { listType: 'ordered', listStyle: 'decimal', listLevel }
+    }
+
+    // 3. Parenthesized Arabic: (1) / （2） / [1] — allow optional space after closing paren.
+    if (/^[\(\（\[]\d+[\)\）\]][\s\t]*/.test(trimmed)) {
+      return { listType: 'ordered', listStyle: 'decimal', listLevel }
+    }
+
+    // 4. Roman numerals: i. / ii. / iv. / I. / II. (checked BEFORE single Latin letter
+    //    so "i." / "v." / "x." are treated as Roman rather than lower-alpha).
+    if (/^(?:i{1,3}|iv|v|vi{0,3}|ix|x|I{1,3}|IV|V|VI{0,3}|IX|X)[\.\)][\s\t]/.test(trimmed)) {
+      const isUpper = /^[IVXLCDM]/.test(trimmed)
+      return { listType: 'ordered', listStyle: isUpper ? 'upper-roman' : 'lower-roman', listLevel }
+    }
+
+    // 5. Latin letter with . or ): a. / B) / (a)
+    if (/^[a-zA-Z][\.\)][\s\t]/.test(trimmed) && trimmed.length >= 3) {
+      return { listType: 'ordered', listStyle: 'lower-alpha', listLevel }
+    }
+    if (/^[\(\（][a-zA-Z][\)\）][\s\t]*/.test(trimmed)) {
+      return { listType: 'ordered', listStyle: 'lower-alpha', listLevel }
+    }
+
+    // 6. CJK ideographic numerals: 一、二、三、...、十、十一、... / 甲、乙、... / 壹、贰、...
+    //    Also accept （一）（二） parenthesized form (no trailing space required,
+    //    since Chinese numbered items often have no separator).
+    const cjkNumeralMatch = trimmed.match(/^([一二三四五六七八九十百千零〇]{1,4}|[甲乙丙丁戊己庚辛壬癸]|[壹贰叁肆伍陆柒捌玖拾佰仟]{1,4})[\、\.\)]/)
+    if (cjkNumeralMatch) {
+      return { listType: 'ordered', listStyle: 'cjk-ideographic', listLevel }
+    }
+    if (/^[\(\（]([一二三四五六七八九十]{1,4}|[甲乙丙丁戊己庚辛壬癸])[）\)][\s\t]*/.test(trimmed)) {
+      return { listType: 'ordered', listStyle: 'cjk-ideographic', listLevel }
+    }
+
+    // 7. Circled numbers: ① ② ... ㊿ (U+2460..U+2473, U+3251..U+325F, U+32B1..U+32BF)
+    if (/^[\u2460-\u2473\u3251-\u325F\u32B1-\u32BF][\s\t]/.test(trimmed)) {
+      return { listType: 'ordered', listStyle: 'cjk-ideographic', listLevel }
+    }
+
+    // 8. Unordered: ASCII and CJK bullets
+    if (/^[•\-\*][\s\t]/.test(trimmed) || /^[•\*]\s/.test(trimmed)) {
+      return { listType: 'unordered', listStyle: 'disc', listLevel }
+    }
+    if (/^[○●▪▸►→◇◆]\s/.test(trimmed)) {
+      return { listType: 'unordered', listStyle: 'disc', listLevel }
+    }
+    if (/^[▪▫◦‣⁃]\s/.test(trimmed)) {
+      return { listType: 'unordered', listStyle: 'square', listLevel }
+    }
+
+    return null
   }
 
   private detectAlignment(text: string, index: number, totalParagraphs: number): string | null {
@@ -876,7 +1924,7 @@ export class DocParser {
       text = replaced
     }
 
-    const cleaned = text.replace(/\s{2,}/g, ' ').replace(/，\s*，/g, '，').replace(/。\s*。/g, '。').replace(/：\s*：/g, '：').trim()
+    const cleaned = text.replace(/ {2,}/g, ' ').replace(/，\s*，/g, '，').replace(/。\s*。/g, '。').replace(/：\s*：/g, '：').trim()
 
     if (cleaned !== text) {
       const newCharFormat = { ...para.charFormat }
@@ -888,6 +1936,7 @@ export class DocParser {
 
   private hasSignificantContent(text: string): boolean {
     if (text.length < 2) return false
+    if (isTableRowText(text)) return true
     const chineseChars = (text.match(/[\u4e00-\u9fff]/g) || []).length
     const chineseRatio = chineseChars / text.length
     if (chineseChars >= 2 && chineseRatio > 0.3) return true
@@ -921,7 +1970,12 @@ export class DocParser {
 
   private createFormattedParagraphsFromText(text: string): any[] {
     const paragraphs: any[] = []
-    const textParagraphs = text.split(/\n\n/).filter(p => p.trim().length > 0)
+    // When the text contains Word table cell marks (0x07), split by single
+    // newlines so each table row stays its own paragraph. Otherwise split by
+    // double newlines (piece boundaries) to preserve the existing behavior.
+    const hasCellMarks = text.includes('\u0007')
+    const separator = hasCellMarks ? /\n/ : /\n\n/
+    const textParagraphs = text.split(separator).filter(p => p.trim().length > 0)
     for (let i = 0; i < textParagraphs.length; i++) {
       const paraText = textParagraphs[i]
       const cleaned = this.cleanParagraph(paraText.trim())

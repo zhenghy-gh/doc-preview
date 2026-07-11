@@ -6,9 +6,12 @@ export interface OleHeader {
   byteOrder: number
   sectorSizePower: number
   miniSectorSizePower: number
-  totalSectors: number
+  directorySectorsCount: number
   fatSectorsCount: number
   firstDirectorySector: number
+  miniStreamCutoffSize: number
+  firstMiniFatSector: number
+  miniFatSectorsCount: number
   difatSectorsCount: number
   firstDifatSector: number
   difat: number[]
@@ -42,6 +45,7 @@ export class OleParser {
   private view: DataView
   private _header: OleHeader | null = null
   private _fat: number[] | null = null
+  private _miniFat: number[] | null = null
 
   constructor(buffer: ArrayBuffer) {
     this.buffer = buffer
@@ -52,6 +56,7 @@ export class OleParser {
   resetCache() {
     this._header = null
     this._fat = null
+    this._miniFat = null
   }
 
   // ---- Safe readers ----
@@ -153,11 +158,14 @@ export class OleParser {
       byteOrder: this.safeReadUint16(28),
       sectorSizePower: this.safeReadUint16(30),
       miniSectorSizePower: this.safeReadUint16(32),
-      totalSectors: this.safeReadUint32(44),
+      directorySectorsCount: this.safeReadUint32(40),
       fatSectorsCount: this.safeReadUint32(44),
       firstDirectorySector: this.safeReadUint32(48),
-      difatSectorsCount: this.safeReadUint32(40),
-      firstDifatSector: this.safeReadUint32(36),
+      miniStreamCutoffSize: this.safeReadUint32(56, true, 4096),
+      firstMiniFatSector: this.safeReadUint32(60),
+      miniFatSectorsCount: this.safeReadUint32(64),
+      firstDifatSector: this.safeReadUint32(68),
+      difatSectorsCount: this.safeReadUint32(72),
       difat: this._getDifat(76, 109),
     }
 
@@ -299,11 +307,85 @@ export class OleParser {
     return null
   }
 
+  /**
+   * Find a stream entry by name (case-insensitive, exact match).
+   * Returns the first stream object (objectType === 2) whose name matches.
+   * Useful for looking up named streams like `0Table`, `1Table`, `Data`, etc.
+   */
+  findStreamByName(directory: DirectoryEntry[], name: string): DirectoryEntry | null {
+    if (!name) return null
+    const target = name.toLowerCase()
+    for (const entry of directory) {
+      if (entry.objectType === 2 && entry.name.toLowerCase() === target) {
+        return entry
+      }
+    }
+    return null
+  }
+
+  /**
+   * Locate the table stream (`0Table` or `1Table`) used by FIB's `fcClx` etc.
+   *
+   * Per MS-DOC, FIB's `fWhichTblStm` flag (bit 9 of fFlags) selects which table
+   * stream holds the CLX/Pcdt and other format tables:
+   *   - 0 → `0Table`
+   *   - 1 → `1Table`
+   *
+   * Falls back to whichever table stream exists if the requested one is missing,
+   * so callers can still extract text from slightly malformed files.
+   */
+  findTableStream(directory: DirectoryEntry[], which: 0 | 1): StreamData | null {
+    const primary = which === 1 ? '1Table' : '0Table'
+    const fallback = which === 1 ? '0Table' : '1Table'
+
+    const primaryEntry = this.findStreamByName(directory, primary)
+    if (primaryEntry) {
+      logger.info(`使用 ${primary} 流作为表格流`)
+      return this.readStream(primaryEntry)
+    }
+
+    const fallbackEntry = this.findStreamByName(directory, fallback)
+    if (fallbackEntry) {
+      logger.warn(`未找到 ${primary}，回退到 ${fallback} 流`)
+      return this.readStream(fallbackEntry)
+    }
+
+    logger.warn(`未找到任何表格流 (0Table/1Table)`)
+    return null
+  }
+
   readStream(entry: DirectoryEntry): StreamData {
     logger.log(`开始读取流: ${entry.name}, 起始扇区: ${entry.startSector}, 大小: ${entry.size}`)
 
     const header = this.parseHeader()
     const fat = this.getFatSectors(header)
+    const miniFat = this.getMiniFatSectors(header, fat)
+    const rootEntry = this.findRootEntry(header, fat)
+
+    if (this.shouldUseMiniStream(entry, header) && rootEntry) {
+      const rootStream = this.readRegularStream(rootEntry, header, fat)
+      if (rootStream.size > 0) {
+        const miniStream = this.readMiniStream(entry, rootStream.data, miniFat, header)
+        if (miniStream.size > 0) {
+          logger.info(`迷你流读取完成: ${miniStream.data.length} bytes`)
+          return miniStream
+        }
+      }
+    }
+
+    return this.readRegularStream(entry, header, fat)
+  }
+
+  private shouldUseMiniStream(entry: DirectoryEntry, header: OleHeader): boolean {
+    return entry.objectType === 2 && entry.size > 0 && entry.size < header.miniStreamCutoffSize
+  }
+
+  private findRootEntry(header: OleHeader, fat: number[]): DirectoryEntry | null {
+    const directory = this.getDirectorySectors(header, fat)
+    return directory.find(entry => entry.objectType === 5) || null
+  }
+
+  private readRegularStream(entry: DirectoryEntry, header: OleHeader, fat: number[]): StreamData {
     const sectorSize = this.getSectorSize(header)
     const data: number[] = []
 
@@ -337,6 +419,75 @@ export class OleParser {
     }
 
     logger.info(`流读取完成: ${data.length} bytes`)
+    return { data: new Uint8Array(data), size: data.length }
+  }
+
+  getMiniFatSectors(header: OleHeader, fat: number[]): number[] {
+    if (this._miniFat) return this._miniFat
+
+    const sectorSize = this.getSectorSize(header)
+    const entriesPerSector = sectorSize / 4
+    const totalSectors = Math.ceil(this.buffer.byteLength / sectorSize)
+    const miniFat = new Array(totalSectors).fill(FREESECT)
+
+    if (header.miniFatSectorsCount <= 0 || header.firstMiniFatSector < 0) {
+      this._miniFat = miniFat
+      return miniFat
+    }
+
+    let currentSector = header.firstMiniFatSector
+    let sectorIndex = 0
+    while (currentSector >= 0 && currentSector < fat.length && fat[currentSector] !== FREESECT && sectorIndex < 1000) {
+      sectorIndex++
+      const offset = this.sectorToOffset(currentSector, header)
+      if (offset + sectorSize > this.buffer.byteLength) {
+        logger.warn(`MiniFAT 扇区 ${currentSector} 越界`)
+        break
+      }
+
+      const baseSector = (sectorIndex - 1) * entriesPerSector
+      for (let i = 0; i < entriesPerSector; i++) {
+        const miniSector = baseSector + i
+        if (miniSector >= totalSectors) break
+        const entryOffset = offset + i * 4
+        if (entryOffset + 4 > this.buffer.byteLength) break
+        miniFat[miniSector] = this.safeReadInt32(entryOffset)
+      }
+
+      if (fat[currentSector] === ENDOFCHAIN) break
+      currentSector = fat[currentSector]
+    }
+
+    this._miniFat = miniFat
+    return miniFat
+  }
+
+  private readMiniStream(entry: DirectoryEntry, rootStreamData: Uint8Array, miniFat: number[], header: OleHeader): StreamData {
+    const miniSectorSize = Math.pow(2, header.miniSectorSizePower)
+    const data: number[] = []
+
+    let currentMiniSector = entry.startSector
+    let bytesRead = 0
+    let iterations = 0
+    const maxIterations = 1000
+
+    while (currentMiniSector >= 0 && currentMiniSector < miniFat.length && miniFat[currentMiniSector] !== FREESECT && bytesRead < entry.size && iterations < maxIterations) {
+      iterations++
+      const offset = currentMiniSector * miniSectorSize
+      if (offset < 0 || offset >= rootStreamData.length) {
+        logger.warn(`迷你扇区偏移越界: miniSector=${currentMiniSector}, offset=${offset}`)
+        break
+      }
+
+      const bytesToRead = Math.min(miniSectorSize, entry.size - bytesRead, rootStreamData.length - offset)
+      for (let i = 0; i < bytesToRead; i++) {
+        data.push(rootStreamData[offset + i])
+      }
+
+      bytesRead += bytesToRead
+      currentMiniSector = miniFat[currentMiniSector]
+    }
+
     return { data: new Uint8Array(data), size: data.length }
   }
 

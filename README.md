@@ -1,5 +1,13 @@
 # DOC Preview
 
+[![npm version](https://img.shields.io/npm/v/@zhenghy/doc-preview.svg)](https://www.npmjs.com/package/@zhenghy/doc-preview)
+[![npm downloads](https://img.shields.io/npm/dm/@zhenghy/doc-preview.svg)](https://www.npmjs.com/package/@zhenghy/doc-preview)
+[![npm downloads](https://img.shields.io/npm/dw/@zhenghy/doc-preview.svg)](https://www.npmjs.com/package/@zhenghy/doc-preview)
+[![npm bundle size](https://img.shields.io/bundlephobia/minzip/@zhenghy/doc-preview.svg)](https://bundlephobia.com/package/@zhenghy/doc-preview)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![TypeScript](https://img.shields.io/badge/TypeScript-strict-blue.svg)](https://www.typescriptlang.org/)
+[![Vue 3](https://img.shields.io/badge/Vue-3-42b883.svg)](https://vuejs.org/)
+
 > A pure-frontend Vue 3 component for previewing Microsoft Word `.doc` files
 > (OLE2 / CFB / Compound File Binary format) in the browser. No server, no
 > upload, no backend. Search, zoom, print, dark mode, Web Worker parsing.
@@ -11,6 +19,7 @@ them to a server. Renders the original formatting (font size, bold, alignment,
 list type) and supports search, zoom, print, and dark mode.
 
 [在线预览地址](https://zhenghy-gh.github.io/doc-preview/) - 点击此处即可在线体验，上传您的 .doc 文件即可预览
+[Compare with other doc-preview packages on npm](https://npmtrends.com/@zhenghy/doc-preview)
 
 ## 关键词 / Keywords
 
@@ -71,6 +80,19 @@ list type) and supports search, zoom, print, and dark mode.
 
 ```bash
 npm install @zhenghy/doc-preview
+# 或
+pnpm add @zhenghy/doc-preview
+yarn add @zhenghy/doc-preview
+```
+
+### CDN（unpkg）
+
+```html
+<link rel="stylesheet" href="https://unpkg.com/@zhenghy/doc-preview/dist/style.css" />
+<script type="module">
+  import { DocPreview } from 'https://unpkg.com/@zhenghy/doc-preview/dist/doc-preview.js'
+  // 全局可使用 window.DocPreview
+</script>
 ```
 
 ### Vue 项目中使用
@@ -274,6 +296,31 @@ if (result.success) {
 - ✅ ANSI 和 Unicode 编码的中文文档
 - ✅ 基本格式（字体、字号、对齐、加粗、下划线）
 
+## 替代方案对比 / Comparison
+
+If you're evaluating **doc-preview** libraries for your project, here's how
+this package compares:
+
+| Package | Format | Framework | Backend | Notes |
+|---------|--------|-----------|---------|-------|
+| **`@zhenghy/doc-preview`** | `.doc` (OLE2) | Vue 3 | None | **This package** — pure OLE2/CFB parser, no server, Vue 3 only |
+| `@doc-preview/core` | `.doc`/`.docx`/`.pdf` | Framework-neutral | Optional | Multi-format ecosystem |
+| `@doc-preview/react` | `.doc`/`.docx`/`.pdf` | React 18/19 | Optional | React wrapper around the ecosystem |
+| `@doc-preview/angular` | `.doc`/`.docx`/`.pdf` | Angular 19/20 | Optional | Angular standalone component |
+| `@doc-preview/js` | `.doc`/`.docx`/`.pdf` | Vanilla JS | Optional | Plain JS API |
+| `vue-doc-preview` | `.doc`/`.docx` | Vue 2/3 | Server-based | Pre-renders to HTML via remote service |
+
+**When to choose this package:**
+- You specifically need **legacy `.doc` (Word 97-2003) parsing** without a server
+- Your stack is **Vue 3** and you want a small drop-in component
+- Privacy matters: files must never leave the browser
+- You want full control: this is a self-contained parser you can fork and extend
+
+**When to choose alternatives:**
+- You need `.docx` (Open XML) support — use the `@doc-preview/*` ecosystem
+- You're not on Vue 3 — use the React / Angular / JS / vanilla variants from the ecosystem
+- You prefer a managed service — use `vue-doc-preview`
+
 ## 浏览器支持
 
 | 浏览器 | 最低版本 | Web Worker | 备注 |
@@ -295,6 +342,10 @@ if (result.success) {
   - 小型 (<100KB): <50ms
   - 中型 (1MB): ~200ms
   - 大型 (10MB): ~1.5s (Worker 中)
+
+## 功能清单
+
+完整的 .doc 文件功能支持状态请参阅 [FEATURES.md](FEATURES.md)，包含 14 大类共 99 项功能的实现状态统计。
 
 ## 限制
 
