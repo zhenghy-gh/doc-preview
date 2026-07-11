@@ -12,7 +12,8 @@
  * these are what the DocPreview UI renders. Less common SPRMs are skipped.
  */
 
-import type { CharacterFormat, ParagraphFormat, TableInfo, TableCellInfo, TableBorders, TableBorderStyle } from './docFormat'
+import type { CharacterFormat, ParagraphFormat, TableInfo, TableCellInfo, TableBorders, TableBorderStyle, TableJustification, RevisionType } from './docFormat'
+import { parseRmrk } from './revisionParser'
 
 // ---- SPRM operation codes ----
 
@@ -23,6 +24,7 @@ const SPRM_CF_OUTLINE = 0x0804   // Character border
 const SPRM_CF_SHADOW = 0x0805    // Character shadow
 const SPRM_CF_SMALL_CAPS = 0x0806  // Small caps
 const SPRM_CF_CAPS = 0x0807        // All caps
+const SPRM_CF_VANISH = 0x0808      // Hidden text (vanish)
 const SPRM_CF_STRIKE_BIDI = 0x080B // Double strikethrough
 const SPRM_CF_KUL = 0x0814
 const SPRM_CF_UNDERLINE = 0x0815
@@ -32,7 +34,15 @@ const SPRM_CV = 0x081B
 const SPRM_CH_HIGHLIGHT = 0x081C
 const SPRM_KERN = 0x081E          // Kern (字间距调整，半磅)
 const SPRM_DXA_SPACE = 0x081F     // DxaSpace (字符间距，缇)
+// ---- Revision mark SPRMs (track changes) ----
+const SPRM_CF_RMARK = 0x0809         // Toggle (1 byte): fRMark — 修订插入标记
+const SPRM_CF_RMARK_DEL = 0x080A     // Toggle (1 byte): fRMarkDel — 修订删除标记
+const SPRM_C_RMARK = 0x0830          // 6-byte RMRK: ibstRMark(2) + DTTM(4) — 插入修订元数据
+const SPRM_C_RMARK_DEL = 0x0834      // 6-byte RMRK: ibstRMark(2) + DTTM(4) — 删除修订元数据
 const SPRM_CF_FONT = 0x4A30  // Font index (reference to font table)
+// ---- Picture / shape SPRMs ----
+const SPRM_CF_SPEC = 0x083A     // Toggle (1 byte): fSpec — special character (picture anchor, etc.)
+const SPRM_C_PIC_LOCATION = 0x6805 // 4-byte fcPic: offset into Data stream of PICF structure
 
 const SPRM_P_JC = 0x2401
 const SPRM_P_DXA_LEFT = 0x2402    // Left indent (twips, signed)
@@ -56,9 +66,16 @@ const SPRM_P_ILFO = 0x460F  // List Format Override index
 // Table SPRMs (TAP — Table Properties)
 // Per MS-DOC §2.6.8 / §2.4.4: these attach to the paragraph that begins a table row.
 const SPRM_P_F_IN_TABLE = 0x240C    // Toggle (1 byte): paragraph is inside a table
-const SPRM_P_TABLE_DEPTH = 0x4410   // 1 byte: nested table depth (1 = top-level)
+// sprmPTableDepth: spec lists as 1-byte operand. Two codes are seen in the wild:
+//   0x2410 — spec-compliant (spra=1, 1-byte unsigned)
+//   0x4410 — legacy/POI encoding (spra=2, but operand is actually 1 byte)
+// We accept both and force 1-byte operand for 0x4410 in getSprmOperandSize.
+const SPRM_P_TABLE_DEPTH_SPEC = 0x2410
+const SPRM_P_TABLE_DEPTH_LEGACY = 0x4410
 const SPRM_T_DEF_TABLE = 0xD608     // Variable length: rgdxaCenter[] + rgtc[]
 const SPRM_T_TABLE_BORDERS = 0xD612 // Variable length: 6 Brc (4 bytes each)
+const SPRM_T_JTABLE = 0xD632       // 1 byte: table justification (0=left, 1=center, 2=right)
+const SPRM_T_DXA_TABLE_INDENT = 0xD609 // 2 bytes: table indent from left margin (twips)
 
 /**
  * Shd color index to CSS color mapping.
@@ -124,6 +141,26 @@ function getSprmOperandSize(sprm: number, data: Uint8Array, operandOffset: numbe
     return 1 + data[operandOffset]
   }
 
+  // Special handling for legacy sprmPTableDepth (0x4410):
+  // spra bits encode 2 (2-byte), but the actual operand is 1 byte.
+  // We force 1-byte here so the parser doesn't over-read and misalign
+  // subsequent SPRMs in the grpprl.
+  if (sprm === SPRM_P_TABLE_DEPTH_LEGACY) {
+    return 1
+  }
+
+  // sprmCRMark (0x0830) / sprmCRMarkDel (0x0834) carry a 6-byte RMRK structure
+  // (ibstRMark + DTTM), but their spra bits encode 0 (Toggle, 1 byte).
+  if (sprm === SPRM_C_RMARK || sprm === SPRM_C_RMARK_DEL) {
+    return 6
+  }
+
+  // sprmTJTable (0xD632) and sprmTDxaTableIndent (0xD609) have spra=6
+  // (variable length), but the payload is a fixed 1-byte / 2-byte value
+  // preceded by a cb byte. Standard variable-length handling (1 + cb)
+  // works correctly because cb already encodes the payload size.
+  // No special case needed — fall through to the spra=6 branch below.
+
   const spra = (sprm >> 13) & 0x7
   switch (spra) {
     case 0: return 1  // ToggleOperand
@@ -150,6 +187,20 @@ export interface ChpxRun {
   format: Partial<CharacterFormat>
   /** Font index (reference to font table), if sprmCFFont was present. */
   fontIndex?: number
+  /**
+   * 修订标记（来自 sprmCFRMark / sprmCFRMarkDel / sprmCRMark / sprmCRMarkDel）。
+   * 无修订时为 undefined。type 为 'insert'/'delete'/'format'，
+   * authorIndex/timestamp 来自 RMRK 结构（可能缺失）。
+   */
+  revision?: {
+    type: RevisionType
+    authorIndex?: number
+    timestamp?: number
+  }
+  /** 特殊字符标志（fSpec），表示该 run 的字符是特殊字符（图片锚点等）。 */
+  isSpecial?: boolean
+  /** 图片在 Data 流中的 PICF 偏移（fcPic），由 sprmCPicLocation 提供。 */
+  fcPic?: number
 }
 
 /**
@@ -230,8 +281,11 @@ export function parseChpxRuns(data: Uint8Array, fc: number, lcb: number): ChpxRu
     }
 
     const cbOffset = readUint16(data, pcbOffset)
-    const { format, fontIndex } = parseChpxGrpprlWithFont(data, pcbOffset + 2, cbOffset - 2)
-    runs.push({ cpStart, cpEnd, format, fontIndex })
+    const { format, fontIndex, revision, isSpecial, fcPic } = parseChpxGrpprlWithFont(data, pcbOffset + 2, cbOffset - 2)
+    const run: ChpxRun = { cpStart, cpEnd, format, fontIndex, revision }
+    if (isSpecial) run.isSpecial = true
+    if (fcPic !== undefined) run.fcPic = fcPic
+    runs.push(run)
     pcbOffset += cbOffset || 2
   }
 
@@ -242,9 +296,12 @@ export function parseChpxRuns(data: Uint8Array, fc: number, lcb: number): ChpxRu
  * Parse a grpprl (array of Prl) from a CHPX and return format + font index.
  * Only properties relevant to DocPreview rendering are extracted.
  */
-function parseChpxGrpprlWithFont(data: Uint8Array, offset: number, size: number): { format: Partial<CharacterFormat>; fontIndex?: number } {
+function parseChpxGrpprlWithFont(data: Uint8Array, offset: number, size: number): { format: Partial<CharacterFormat>; fontIndex?: number; revision?: { type: RevisionType; authorIndex?: number; timestamp?: number }; isSpecial?: boolean; fcPic?: number } {
   const fmt: Partial<CharacterFormat> = {}
   let fontIndex: number | undefined = undefined
+  let revision: { type: RevisionType; authorIndex?: number; timestamp?: number } | undefined = undefined
+  let isSpecial = false
+  let fcPic: number | undefined = undefined
   let pos = 0
 
   while (pos + 2 <= size) {
@@ -275,6 +332,9 @@ function parseChpxGrpprlWithFont(data: Uint8Array, offset: number, size: number)
         break
       case SPRM_CF_CAPS:
         fmt.allCaps = data[operandOffset] === 1
+        break
+      case SPRM_CF_VANISH:
+        fmt.hidden = data[operandOffset] === 1
         break
       case SPRM_CF_STRIKE_BIDI:
         // Double strikethrough — also set strikethrough flag
@@ -335,12 +395,64 @@ function parseChpxGrpprlWithFont(data: Uint8Array, offset: number, size: number)
         fontIndex = readUint16(data, operandOffset)
         break
       }
+      case SPRM_CF_RMARK: {
+        // sprmCFRMark (0x0809) — Toggle: 标记字符为"修订插入"
+        if (data[operandOffset] === 1) {
+          if (!revision) revision = { type: 'insert' }
+          else if (revision.type === 'format') revision.type = 'insert'
+        }
+        break
+      }
+      case SPRM_CF_RMARK_DEL: {
+        // sprmCFRMarkDel (0x080A) — Toggle: 标记字符为"修订删除"
+        if (data[operandOffset] === 1) {
+          if (!revision) revision = { type: 'delete' }
+          else revision.type = 'delete'
+        }
+        break
+      }
+      case SPRM_C_RMARK: {
+        // sprmCRMark (0x0830) — 6-byte RMRK: 插入修订的作者索引 + 时间戳
+        const rmrk = parseRmrk(data, operandOffset)
+        if (rmrk) {
+          if (!revision) revision = { type: 'insert' }
+          revision.authorIndex = rmrk.authorIndex
+          revision.timestamp = rmrk.timestamp
+        }
+        break
+      }
+      case SPRM_C_RMARK_DEL: {
+        // sprmCRMarkDel (0x0834) — 6-byte RMRK: 删除修订的作者索引 + 时间戳
+        const rmrk = parseRmrk(data, operandOffset)
+        if (rmrk) {
+          if (!revision) revision = { type: 'delete' }
+          else revision.type = 'delete'
+          revision.authorIndex = rmrk.authorIndex
+          revision.timestamp = rmrk.timestamp
+        }
+        break
+      }
+      case SPRM_CF_SPEC: {
+        // sprmCFSpec (0x083A) — Toggle: 标记字符为特殊字符（图片锚点等）
+        if (data[operandOffset] === 1) {
+          isSpecial = true
+        }
+        break
+      }
+      case SPRM_C_PIC_LOCATION: {
+        // sprmCPicLocation (0x6805) — 4-byte fcPic: Data 流中 PICF 结构的偏移
+        fcPic = readUint32(data, operandOffset) & 0x3FFFFFFF
+        break
+      }
     }
 
     pos += 2 + operandSize
   }
 
-  return { format: fmt, fontIndex }
+  const result: { format: Partial<CharacterFormat>; fontIndex?: number; revision?: { type: RevisionType; authorIndex?: number; timestamp?: number }; isSpecial?: boolean; fcPic?: number } = { format: fmt, fontIndex, revision }
+  if (isSpecial) result.isSpecial = true
+  if (fcPic !== undefined) result.fcPic = fcPic
+  return result
 }
 
 function highlightColor(code: number): string {
@@ -658,8 +770,12 @@ function parsePapxGrpprl(data: Uint8Array, offset: number, size: number): { form
         }
         break
       }
-      case SPRM_P_TABLE_DEPTH: {
-        // sprmPTableDepth (0x4410) — 1 byte: nested table depth (1 = top-level).
+      case SPRM_P_TABLE_DEPTH_SPEC:
+      case SPRM_P_TABLE_DEPTH_LEGACY: {
+        // sprmPTableDepth — 1 byte: nested table depth (1 = top-level).
+        // 0x2410 is the spec encoding (spra=1); 0x4410 is a legacy/POI variant
+        // whose spra bits encode 2 but the operand is still 1 byte.
+        // getSprmOperandSize forces 1-byte for 0x4410 to keep alignment correct.
         const depth = data[operandOffset]
         if (depth > 0) {
           if (!table) table = { inTable: true, depth }
@@ -701,6 +817,38 @@ function parsePapxGrpprl(data: Uint8Array, offset: number, size: number): { form
         }
         break
       }
+      case SPRM_T_JTABLE: {
+        // sprmTJTable (0xD632) — variable length (spra=6):
+        //   byte 0: cb (=1)
+        //   byte 1: justification (0=left, 1=center, 2=right)
+        const payloadStart = operandOffset + 1
+        if (payloadStart < data.length) {
+          const val = data[payloadStart]
+          let justification: TableJustification | undefined
+          if (val === 0) justification = 'left'
+          else if (val === 1) justification = 'center'
+          else if (val === 2) justification = 'right'
+          if (justification) {
+            if (!table) table = { inTable: true }
+            table.justification = justification
+          }
+        }
+        break
+      }
+      case SPRM_T_DXA_TABLE_INDENT: {
+        // sprmTDxaTableIndent (0xD609) — variable length (spra=6):
+        //   byte 0: cb (=2)
+        //   bytes 1-2: dxaIndent (twips, signed)
+        const payloadStart = operandOffset + 1
+        if (payloadStart + 2 <= data.length) {
+          const indent = readUint16(data, payloadStart)
+          if (indent !== 0) {
+            if (!table) table = { inTable: true }
+            table.indentTwips = indent
+          }
+        }
+        break
+      }
     }
 
     pos += 2 + operandSize
@@ -710,49 +858,116 @@ function parsePapxGrpprl(data: Uint8Array, offset: number, size: number): { form
 }
 
 /**
- * Parse sprmTDefTable operand and extract per-cell vertical-merge info.
+ * Parse sprmTDefTable operand and extract per-cell info.
  *
  * Layout (MS-DOC §2.6.8 sprmTDefTable):
  *   byte 0       : itcMac (number of columns, max 63)
  *   bytes 1..    : rgdxaCenter[itcMac+1] (column boundaries, 2 bytes each)
  *   bytes 后     : rgtc[itcMac] (cell descriptors, 20 bytes each)
  *
- * TC.fVertMerge is in bits 0-2 of the first DWORD of each TC:
- *   0 = none, 1 = continue (merged cell below), 2 = restart (merge start)
+ * TC structure (20 bytes):
+ *   bytes 0-3 : TCGrpf (bit field)
+ *     bits 0-2: fVertMerge (0=none, 1=continue, 2=restart)
+ *     bits 3-5: fHorzMerge (0=none, 1=continue, 2=restart)
+ *   bytes 4-7 : BrcTop (4 bytes)
+ *   bytes 8-11: BrcLeft (4 bytes)
+ *   bytes 12-15: BrcBottom (4 bytes)
+ *   bytes 16-19: BrcRight (4 bytes)
+ *
+ * Brc structure (4 bytes):
+ *   bits 0-7: dptLineWidth (1/8 pt)
+ *   bits 8-11: brcType
+ *   bits 12-15: ico (color index)
  */
 function parseTDefTable(data: Uint8Array, operandOffset: number, operandSize: number): TableCellInfo[] {
-  // operandSize includes the cb byte at operandOffset; payload starts at operandOffset+1.
   if (operandSize < 1) return []
   const payloadStart = operandOffset + 1
   if (payloadStart >= data.length) return []
   const itcMac = data[payloadStart]
   if (itcMac === 0 || itcMac > 63) return []
 
-  // rgdxaCenter: (itcMac+1) * 2 bytes, starting at payloadStart + 1.
   const rgdxaEnd = payloadStart + 1 + (itcMac + 1) * 2
   if (rgdxaEnd > operandOffset + operandSize + 1) return []
 
-  // rgtc: itcMac * 20 bytes, starting right after rgdxaCenter.
-  // Each TC is 20 bytes; fVertMerge is bits 0-2 of the first byte.
-  // Note: some implementations use 18-byte TC; we detect by checking available bytes.
   const rgtcStart = rgdxaEnd
   const availableBytes = (operandOffset + operandSize + 1) - rgtcStart
-  // Prefer 20-byte TC (standard); fall back to 18-byte if 20*itcMac doesn't fit.
   const tcSize = availableBytes >= itcMac * 20 ? 20 : (availableBytes >= itcMac * 18 ? 18 : 0)
   if (tcSize === 0) return []
+
+  const columnWidths: number[] = []
+  for (let i = 0; i < itcMac; i++) {
+    const xaOffset = payloadStart + 1 + i * 2
+    const xaNextOffset = payloadStart + 1 + (i + 1) * 2
+    if (xaNextOffset + 2 <= data.length) {
+      const xa = readUint16(data, xaOffset)
+      const xaNext = readUint16(data, xaNextOffset)
+      columnWidths.push(xaNext - xa)
+    } else {
+      columnWidths.push(0)
+    }
+  }
 
   const cells: TableCellInfo[] = []
   for (let i = 0; i < itcMac; i++) {
     const tcOffset = rgtcStart + i * tcSize
     if (tcOffset >= data.length) break
-    const firstByte = data[tcOffset]
-    const fVertMerge = firstByte & 0x07
+
+    const tcGrpf = readUint32(data, tcOffset)
+    const fVertMerge = tcGrpf & 0x07
+    const fHorzMerge = (tcGrpf >> 3) & 0x07
+
     let verticalMerge: 'none' | 'restart' | 'continue' = 'none'
     if (fVertMerge === 1) verticalMerge = 'continue'
     else if (fVertMerge === 2) verticalMerge = 'restart'
-    cells.push({ column: i, verticalMerge })
+
+    let horizontalMerge: 'none' | 'restart' | 'continue' = 'none'
+    if (fHorzMerge === 1) horizontalMerge = 'continue'
+    else if (fHorzMerge === 2) horizontalMerge = 'restart'
+
+    const cellInfo: TableCellInfo = {
+      column: i,
+      verticalMerge,
+    }
+
+    if (horizontalMerge !== 'none') {
+      cellInfo.horizontalMerge = horizontalMerge
+    }
+
+    if (tcSize >= 20) {
+      const brcTop = readUint32(data, tcOffset + 4)
+      const brcLeft = readUint32(data, tcOffset + 8)
+      const brcBottom = readUint32(data, tcOffset + 12)
+      const brcRight = readUint32(data, tcOffset + 16)
+
+      const borders: TableCellInfo['borders'] = {}
+      const top = brcToBorderStyle(brcTop)
+      const left = brcToBorderStyle(brcLeft)
+      const bottom = brcToBorderStyle(brcBottom)
+      const right = brcToBorderStyle(brcRight)
+      if (top) borders.top = top
+      if (left) borders.left = left
+      if (bottom) borders.bottom = bottom
+      if (right) borders.right = right
+      if (Object.keys(borders).length > 0) {
+        cellInfo.borders = borders
+      }
+    }
+
+    cells.push(cellInfo)
   }
   return cells
+}
+
+function brcToBorderStyle(brcDword: number): TableBorderStyle | null {
+  if (brcDword === 0) return null
+  const lineWidth = brcDword & 0xFF
+  const borderType = (brcDword >> 8) & 0x0F
+  const colorIndex = (brcDword >> 12) & 0x0F
+  const style: TableBorderStyle = {}
+  if (lineWidth > 0) style.lineWidth = lineWidth
+  if (borderType > 0) style.borderType = borderType
+  if (colorIndex > 0) style.colorIndex = colorIndex
+  return Object.keys(style).length > 0 ? style : null
 }
 
 /**

@@ -3,7 +3,10 @@ import { ref, computed, watch, onMounted, onUnmounted, onErrorCaptured, nextTick
 import { parseDocFileWithFormat, parseDocFileFromBuffer } from '../utils/docParser'
 import { parseWithWorker } from '../utils/parseWithWorker'
 import { renderTableHtml, splitTableCells } from '../utils/tableText'
-import type { CharacterFormat, ParagraphFormat, CharStyleSegment, TableInfo } from '../utils/docFormat'
+import type { CharacterFormat, ParagraphFormat, CharStyleSegment, TableInfo, RevisionMark, RevisionType, BookmarkRange, SectionInfo, PageFieldRange, CrossReferenceRange, ShapeInfo, EquationInfo, ChartInfo, WordArtInfo } from '../utils/docFormat'
+import type { DocumentFields } from '../utils/fieldParser'
+import { applyRevisionsToText } from '../utils/revisionRender'
+import type { RevisionMode } from '../utils/revisionRender'
 
 const WORKER_THRESHOLD = 1024 * 1024 // 1MB — files larger than this use Web Worker
 const isWorkerSupported = typeof Worker !== 'undefined'
@@ -11,9 +14,18 @@ const isUsingWorker = ref(false)
 
 // ---- Types ----
 
+interface PictureInfo {
+  format: string
+  dataUrl: string
+  widthPx?: number
+  heightPx?: number
+  floating?: boolean
+  cp?: number
+}
+
 interface ParserOutput {
   success: boolean
-  document?: { paragraphs: FormattedParagraphOutput[]; stories?: DocumentStories; images?: string[]; hyperlinks?: HyperlinkRange[]; toc?: TocEntry[]; properties?: DocumentProperties; docFlags?: DocumentFlags }
+  document?: { paragraphs: FormattedParagraphOutput[]; stories?: DocumentStories; images?: string[]; pictures?: PictureInfo[]; hyperlinks?: HyperlinkRange[]; toc?: TocEntry[]; properties?: DocumentProperties; docFlags?: DocumentFlags; revisions?: RevisionMark[]; documentFields?: DocumentFields; bookmarks?: BookmarkRange[]; sections?: SectionInfo[]; pageFields?: PageFieldRange[]; crossReferences?: CrossReferenceRange[]; shapes?: ShapeInfo[]; equations?: EquationInfo[]; charts?: ChartInfo[]; wordArts?: WordArtInfo[] }
   text?: string
   error?: string
 }
@@ -69,6 +81,8 @@ interface DocumentProperties {
 
 interface DocumentStories {
   headers?: string
+  headerParts?: Partial<Record<string, string>>
+  headerPartsWithImages?: Partial<Record<string, { text: string; images?: Array<{ format: string; dataUrl: string; widthPx?: number; heightPx?: number; floating?: boolean }> }>>
   footnotes?: string
   endnotes?: string
   comments?: string
@@ -76,9 +90,10 @@ interface DocumentStories {
 }
 
 interface StorySection {
-  key: keyof DocumentStories
+  key: keyof DocumentStories | string
   label: string
   text: string
+  images?: Array<{ dataUrl: string; widthPx?: number; heightPx?: number; format?: string }>
 }
 
 interface FormattedParagraphOutput {
@@ -130,6 +145,13 @@ const loadingTime = ref(0)
 const loadingTimer = ref<ReturnType<typeof setInterval> | null>(null)
 const fileSize = ref('')
 
+// 缓存最近的解析结果，用于切换隐藏文字/修订显示等需要重新渲染的场景
+const lastParseResult = ref<{
+  paragraphs: ParaWithList[]
+  hyperlinks?: HyperlinkRange[]
+  revisions?: RevisionMark[]
+} | null>(null)
+
 // --- Outline / TOC ---
 const outline = ref<OutlineItem[]>([])
 const showOutline = ref(false)
@@ -140,6 +162,66 @@ const zoomLevel = ref(100)
 const MIN_ZOOM = 50
 const MAX_ZOOM = 200
 const ZOOM_STEP = 10
+
+// --- Pagination ---
+const currentPage = ref(1)
+const totalPages = ref(1)
+const pageHeight = ref(842)
+const PAGE_HEIGHT_A4 = 842
+
+function updatePageHeight() {
+  if (sections.value.length > 0) {
+    const firstSection = sections.value[0]
+    if (firstSection.pageHeightPt) {
+      pageHeight.value = firstSection.pageHeightPt
+      return
+    }
+  }
+  pageHeight.value = PAGE_HEIGHT_A4
+}
+
+function goToPage(page: number) {
+  if (page < 1 || page > totalPages.value) return
+  currentPage.value = page
+  scrollToPage(page)
+}
+
+function goToPrevPage() {
+  if (currentPage.value > 1) {
+    goToPage(currentPage.value - 1)
+  }
+}
+
+function goToNextPage() {
+  if (currentPage.value < totalPages.value) {
+    goToPage(currentPage.value + 1)
+  }
+}
+
+function scrollToPage(page: number) {
+  const container = previewRef.value?.querySelector('.document-content')
+  if (!container) return
+  const pageElements = container.querySelectorAll('.page-content')
+  const target = pageElements[page - 1]
+  if (target) {
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+}
+
+function updateTotalPages() {
+  nextTick(() => {
+    const container = previewRef.value?.querySelector('.document-content')
+    if (!container) {
+      totalPages.value = 1
+      return
+    }
+    const pageElements = container.querySelectorAll('.page-content')
+    totalPages.value = pageElements.length || 1
+    if (currentPage.value > totalPages.value) {
+      currentPage.value = totalPages.value
+    }
+  })
+}
 
 // --- Search ---
 const showSearch = ref(false)
@@ -159,7 +241,7 @@ const isRichFormat = ref(false)
 // --- Stories (headers / footnotes / endnotes / comments / textboxes) ---
 const stories = ref<DocumentStories | null>(null)
 const showStories = ref(false)
-const STORY_LABELS: Record<keyof DocumentStories, string> = {
+const STORY_LABELS: Record<string, string> = {
   headers: '页眉/页脚',
   footnotes: '脚注',
   endnotes: '尾注',
@@ -169,6 +251,7 @@ const STORY_LABELS: Record<keyof DocumentStories, string> = {
 
 // --- Embedded images extracted from the Data stream ---
 const images = ref<string[]>([])
+const pictures = ref<PictureInfo[]>([])
 const showImages = ref(false)
 
 // --- Hyperlinks extracted from PlcfFld ---
@@ -177,6 +260,205 @@ const hyperlinks = ref<HyperlinkRange[]>([])
 // --- Table of Contents ---
 const toc = ref<TocEntry[]>([])
 const showToc = ref(false)
+
+// --- Revision marks (track changes: insert / delete) ---
+const revisions = ref<RevisionMark[]>([])
+const showRevisions = ref(false)
+/**
+ * 修订显示模式：
+ * - 'marks'    : 显示修订标记（<ins>/<del>，默认）
+ * - 'accepted' : 接受全部修订（insert 保留文本，delete 移除文本）
+ * - 'rejected' : 拒绝全部修订（insert 移除文本，delete 保留文本）
+ */
+const revisionMode = ref<RevisionMode>('marks')
+
+// --- Bookmarks ---
+const bookmarks = ref<BookmarkRange[]>([])
+const showBookmarks = ref(false)
+
+// --- Sections (page layout) ---
+const sections = ref<SectionInfo[]>([])
+const showSections = ref(false)
+
+// --- Page fields (PAGE / NUMPAGES / SECTION / SECTIONPAGES) ---
+const pageFields = ref<PageFieldRange[]>([])
+const showPageFields = ref(false)
+
+const PAGE_FIELD_TYPE_LABEL: Record<string, string> = {
+  page: '当前页码 (PAGE)',
+  numPages: '总页数 (NUMPAGES)',
+  section: '当前节 (SECTION)',
+  sectionPages: '节内页数 (SECTIONPAGES)',
+}
+
+// --- Cross-references (REF / NOTEREF) ---
+const crossReferences = ref<CrossReferenceRange[]>([])
+const showCrossReferences = ref(false)
+
+const CROSS_REF_TYPE_LABEL: Record<string, string> = {
+  ref: '引用 (REF)',
+  noteref: '脚注引用 (NOTEREF)',
+}
+
+const CROSS_REF_SWITCH_LABEL: Record<string, string> = {
+  '\\h': '超链接',
+  '\\n': '段落编号',
+  '\\r': '段落编号(无分隔符)',
+  '\\w': '完整段落编号',
+  '\\p': '相对位置(上方/下方)',
+  '\\f': '插入引用类型',
+  '\\d': '分隔符',
+}
+
+// --- Shapes (Office Art Drawing Container) ---
+const shapes = ref<ShapeInfo[]>([])
+const showShapes = ref(false)
+
+// --- Equations (Equation Editor OLE objects) ---
+const equations = ref<EquationInfo[]>([])
+const showEquations = ref(false)
+
+// --- Charts (MSGraph/Excel/SmartArt OLE objects) ---
+const charts = ref<ChartInfo[]>([])
+const showCharts = ref(false)
+
+// --- WordArt (Office Art Drawing WordArt objects) ---
+const wordArts = ref<WordArtInfo[]>([])
+const showWordArts = ref(false)
+
+const SHAPE_TYPE_LABEL: Record<string, string> = {
+  rectangle: '矩形',
+  ellipse: '椭圆',
+  line: '线条',
+  freeform: '自由形状',
+  textbox: '文本框',
+  picture: '图片',
+  group: '组合',
+  unknown: '未知',
+}
+
+const SHAPE_ANCHOR_LABEL: Record<string, string> = {
+  char: '字符',
+  paragraph: '段落',
+  page: '页面',
+  margin: '边距',
+  unknown: '未知',
+}
+
+const BREAK_TYPE_LABEL: Record<string, string> = {
+  nextPage: '下一页',
+  oddPage: '奇数页',
+  evenPage: '偶数页',
+  continuous: '连续',
+}
+
+const CHART_TYPE_LABEL: Record<string, string> = {
+  msgraph: 'MSGraph',
+  excel: 'Excel',
+  smartart: 'SmartArt',
+  oleobject: 'OLE 对象',
+  chart: '图表',
+  unknown: '未知',
+}
+
+const CHART_SUBTYPE_LABEL: Record<string, string> = {
+  column: '柱状图',
+  bar: '条形图',
+  line: '折线图',
+  pie: '饼图',
+  area: '面积图',
+  scatter: '散点图',
+  doughnut: '环形图',
+  radar: '雷达图',
+  surface: '曲面图',
+  bubble: '气泡图',
+  stock: '股价图',
+  cone: '圆锥图',
+  cylinder: '圆柱图',
+  pyramid: '棱锥图',
+  orgchart: '组织结构图',
+  process: '流程',
+  cycle: '循环',
+  hierarchy: '层次结构',
+  matrix: '矩阵',
+  relationship: '关系',
+  list: '列表',
+  picture: '图片',
+  chart: '图表',
+  unknown: '未知',
+}
+
+function getChartTypeLabel(type: string): string {
+  return CHART_TYPE_LABEL[type] || '未知'
+}
+
+function getChartSubtypeLabel(subtype: string): string {
+  return CHART_SUBTYPE_LABEL[subtype] || '未知'
+}
+
+const WORDART_EFFECT_LABEL: Record<string, string> = {
+  gradient: '渐变',
+  shadow: '阴影',
+  emboss: '浮雕',
+  bevel: '斜角',
+  outline: '轮廓',
+  fill: '填充',
+  '3d': '3D',
+  rotate: '旋转',
+  flip: '翻转',
+  stretch: '拉伸',
+  unknown: '未知',
+}
+
+function getWordArtEffectLabel(effect: string): string {
+  return WORDART_EFFECT_LABEL[effect] || '未知'
+}
+
+function formatSizePt(pt: number | undefined): string {
+  if (pt === undefined || pt <= 0) return ''
+  // 磅 → 厘米：1 磅 = 0.0353 cm
+  const cm = (pt * 0.0353).toFixed(2)
+  return `${pt.toFixed(1)}磅 (${cm}cm)`
+}
+
+// --- Hidden text ---
+const showHiddenText = ref(false)
+
+function formatRevisionTime(ts?: number): string {
+  if (!ts) return ''
+  const d = new Date(ts)
+  if (Number.isNaN(d.getTime())) return ''
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+const revisionItems = computed<Array<{ type: RevisionType; label: string; author: string; time: string; count: number }>>(() => {
+  if (!revisions.value.length) return []
+  // Group by (type + author + timestamp) to collapse consecutive marks from the same author.
+  const groups = new Map<string, { type: RevisionType; author: string; time: string; count: number }>()
+  for (const r of revisions.value) {
+    const author = r.author || (r.authorIndex !== undefined ? `作者#${r.authorIndex}` : '未知作者')
+    const time = formatRevisionTime(r.timestamp)
+    const key = `${r.type}|${author}|${time}`
+    const existing = groups.get(key)
+    if (existing) {
+      existing.count++
+    } else {
+      groups.set(key, {
+        type: r.type,
+        author,
+        time,
+        count: 1,
+      })
+    }
+  }
+  const typeLabel: Record<RevisionType, string> = {
+    insert: '插入',
+    delete: '删除',
+    format: '格式修订',
+  }
+  return Array.from(groups.values()).map(g => ({ ...g, label: typeLabel[g.type] }))
+})
 
 // --- Web Font ---
 const webFontLoaded = ref(false)
@@ -271,6 +553,9 @@ function injectWebFontOverrides() {
 const docProperties = ref<DocumentProperties | null>(null)
 const showProperties = ref(false)
 
+// --- Document fields (from PlcfFld) ---
+const docFields = ref<DocumentFields | null>(null)
+
 // --- Document flags (from DOP) ---
 const docFlags = ref<DocumentFlags | null>(null)
 const showDocFlags = ref(false)
@@ -302,11 +587,62 @@ const docFlagItems = computed<Array<{ label: string; description: string }>>(() 
   return items
 })
 
+const HEADER_PART_LABELS: Record<string, string> = {
+  titleHeader: '首页页眉',
+  titleFooter: '首页页脚',
+  oddHeader: '奇数页页眉',
+  oddFooter: '奇数页页脚',
+  evenHeader: '偶数页页眉',
+  evenFooter: '偶数页页脚',
+}
+
 const storySections = computed<StorySection[]>(() => {
   if (!stories.value) return []
   const out: StorySection[] = []
-  for (const key of Object.keys(STORY_LABELS) as Array<keyof DocumentStories>) {
-    const text = stories.value[key]
+
+  // 如果有 headerPartsWithImages，优先使用（包含图片信息）
+  if (stories.value.headerPartsWithImages) {
+    const parts = stories.value.headerPartsWithImages
+    const partKeys = Object.keys(parts) as Array<string>
+    for (const key of partKeys) {
+      const content = parts[key]
+      if (content && (content.text.trim() || content.images && content.images.length > 0)) {
+        out.push({
+          key: `headerParts_${key}` as any,
+          label: HEADER_PART_LABELS[key] || key,
+          text: content.text.trim(),
+          images: content.images?.map((img: { dataUrl: string; widthPx?: number; heightPx?: number; format: string }) => ({
+            dataUrl: img.dataUrl,
+            widthPx: img.widthPx,
+            heightPx: img.heightPx,
+            format: img.format,
+          })),
+        })
+      }
+    }
+  } else if (stories.value.headerParts) {
+    // 如果只有 headerParts（无图片），按子范围类型展示页眉页脚
+    const parts = stories.value.headerParts
+    const partKeys = Object.keys(parts) as Array<string>
+    for (const key of partKeys) {
+      const text = parts[key]
+      if (text && text.trim()) {
+        out.push({
+          key: `headerParts_${key}` as any,
+          label: HEADER_PART_LABELS[key] || key,
+          text: text.trim(),
+        })
+      }
+    }
+  } else if (stories.value.headers && stories.value.headers.trim()) {
+    // 没有 headerParts 时回退到合并的 headers 文本
+    out.push({ key: 'headers', label: '页眉/页脚', text: stories.value.headers.trim() })
+  }
+
+  // 其他 story（footnotes/endnotes/comments/textboxes）
+  const otherKeys: Array<keyof DocumentStories> = ['footnotes', 'endnotes', 'comments', 'textboxes']
+  for (const key of otherKeys) {
+    const text = stories.value[key] as string | undefined
     if (text && text.trim()) {
       out.push({ key, label: STORY_LABELS[key], text: text.trim() })
     }
@@ -506,11 +842,37 @@ const renderResult = (result: ParserOutput) => {
     toc.value = result.document.toc || []
     docProperties.value = result.document.properties || null
     docFlags.value = result.document.docFlags || null
-    htmlContent.value = formatFormattedTextToHtml(result.document.paragraphs, hyperlinks.value)
+    docFields.value = result.document.documentFields || null
+    revisions.value = result.document.revisions || []
+    showRevisions.value = false
+    revisionMode.value = 'marks'
+    bookmarks.value = result.document.bookmarks || []
+    showBookmarks.value = false
+    sections.value = result.document.sections || []
+    showSections.value = false
+    pageFields.value = result.document.pageFields || []
+    showPageFields.value = false
+    crossReferences.value = result.document.crossReferences || []
+    shapes.value = result.document.shapes || []
+    equations.value = result.document.equations || []
+    charts.value = result.document.charts || []
+    wordArts.value = result.document.wordArts || []
+    showCrossReferences.value = false
+    // 缓存解析结果用于后续重新渲染（如切换隐藏文字显示）
+    lastParseResult.value = {
+      paragraphs: result.document.paragraphs as ParaWithList[],
+      hyperlinks: result.document.hyperlinks,
+      revisions: result.document.revisions,
+    }
+    htmlContent.value = formatFormattedTextToHtml(result.document.paragraphs, hyperlinks.value, revisions.value)
     stories.value = result.document.stories || null
     showStories.value = false
     images.value = result.document.images || []
+    pictures.value = result.document.pictures || []
     showImages.value = false
+    currentPage.value = 1
+    updatePageHeight()
+    updateTotalPages()
     loadWebFonts()
   } else if (result.text) {
     isRichFormat.value = false
@@ -519,10 +881,21 @@ const renderResult = (result: ParserOutput) => {
     hyperlinks.value = []
     docProperties.value = null
     docFlags.value = null
+    revisions.value = []
+    revisionMode.value = 'marks'
+    bookmarks.value = []
+    sections.value = []
+    pageFields.value = []
+    crossReferences.value = []
+    shapes.value = []
+    equations.value = []
+    charts.value = []
+    wordArts.value = []
     htmlContent.value = formatTextWithInferredFormat(result.text)
     stories.value = null
     showStories.value = false
     images.value = []
+    pictures.value = []
     showImages.value = false
     loadWebFonts()
   } else {
@@ -726,66 +1099,87 @@ function renderParagraphHtml(
   paraCpStart: number,
   paraCpEnd: number,
   hyperlinks?: HyperlinkRange[],
+  revisions?: RevisionMark[],
 ): string {
   const textAlign = getTextAlignment(paraFormat, charFormat)
   const isCentered = textAlign === 'center'
   const isRightAligned = textAlign === 'right'
   const hasCharStyles = charFormat.styles && charFormat.styles.length > 0
 
-  // Apply hyperlinks to the paragraph text
-  let textWithLinks = text
-  if (hyperlinks && hyperlinks.length > 0) {
-    // Find hyperlinks that overlap with this paragraph
+  // Apply revision marks (insert / delete) on plain text, producing <ins>/<del>
+  // HTML with author + time tooltip. Sort descending by cpStart so earlier
+  // insertions don't shift later offsets.
+  //
+  // revisionMode controls how each revision is rendered:
+  //   'marks'    — <ins>/<del> tags with tooltip (default)
+  //   'accepted' — insert: keep text; delete: drop text
+  //   'rejected' — insert: drop text; delete: keep text
+  const revisionResult = applyRevisionsToText(
+    text, paraCpStart, paraCpEnd, revisions || [], revisionMode.value
+  )
+  let workingText = revisionResult.text
+  let hasRevisionHtml = revisionResult.hasRevisionHtml
+
+  // Apply hyperlinks. Skip when revision HTML is present to avoid breaking
+  // <ins>/<del> tags via substring slicing (revisions and hyperlinks rarely
+  // overlap; when they do, revisions win).
+  let textWithLinks = workingText
+  let hasHyperlinkHtml = false
+  if (hyperlinks && hyperlinks.length > 0 && !hasRevisionHtml) {
     const paraLinks = hyperlinks.filter(link =>
       link.cpEnd > paraCpStart && link.cpStart < paraCpEnd
     )
-
     if (paraLinks.length > 0) {
-      // For each hyperlink, wrap the corresponding text in <a> tags
-      // Sort by cpStart descending to avoid offset shifts
       paraLinks.sort((a, b) => b.cpStart - a.cpStart)
-
       for (const link of paraLinks) {
-        // Calculate text offset within this paragraph
         const linkStartInPara = Math.max(0, link.cpStart - paraCpStart)
         const linkEndInPara = Math.min(text.length, link.cpEnd - paraCpStart)
-
         if (linkStartInPara < linkEndInPara && link.url) {
           const before = textWithLinks.substring(0, linkStartInPara)
           const linkText = textWithLinks.substring(linkStartInPara, linkEndInPara)
           const after = textWithLinks.substring(linkEndInPara)
-          // Use result text if available, otherwise use the link text
           const displayText = link.result || linkText
           textWithLinks = `${before}<a href="${escapeHtml(link.url)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent);text-decoration:underline;">${escapeHtml(displayText)}</a>${after}`
+          hasHyperlinkHtml = true
         }
       }
     }
   }
 
+  const hasHtml = hasRevisionHtml || hasHyperlinkHtml
+
+  // 软换行 (\v = Shift+Enter) 转换为 <br>（在所有基于偏移的处理完成后）
+  const hasSoftBreak = text.includes('\v')
+  const applySoftBreaks = (html: string): string => {
+    if (!hasSoftBreak) return html
+    // 注意：软换行在原始文本中是 \v，在 HTML 输出中也需要替换
+    // 但由于 escapeHtml 不会转义 \v 为特殊字符，直接替换即可
+    return html.replace(/\v/g, '<br>')
+  }
+
   if (hasCharStyles) {
-    return formatTextWithCharacterStyles(textWithLinks, charFormat.styles!, {
+    return applySoftBreaks(formatTextWithCharacterStyles(textWithLinks, charFormat.styles!, {
       isCentered,
       isRightAligned,
       charFormat: { ...charFormat },
       paraFormat: { ...paraFormat },
-    }, true) // hasHtml = true to skip escapeHtml
+    }, hasHtml))
   }
 
-  // If hyperlinks were applied, skip escapeHtml since the text contains <a> tags
-  if (textWithLinks !== text) {
-    return formatTextWithDefaultStyles(textWithLinks, charFormat, paraFormat, {
+  if (hasHtml) {
+    return applySoftBreaks(formatTextWithDefaultStyles(textWithLinks, charFormat, paraFormat, {
       isCentered,
       isRightAligned,
-    }, true)
+    }, true))
   }
 
-  return formatTextWithDefaultStyles(text, charFormat, paraFormat, {
+  return applySoftBreaks(formatTextWithDefaultStyles(text, charFormat, paraFormat, {
     isCentered,
     isRightAligned,
-  })
+  }))
 }
 
-const formatFormattedTextToHtml = (paragraphs: ParaWithList[], hyperlinks?: HyperlinkRange[]): string => {
+const formatFormattedTextToHtml = (paragraphs: ParaWithList[], hyperlinks?: HyperlinkRange[], revisions?: RevisionMark[]): string => {
   if (!paragraphs || paragraphs.length === 0) return '<p>文档内容为空</p>'
 
   // Build a map of hyperlinks by paragraph CP range
@@ -801,6 +1195,35 @@ const formatFormattedTextToHtml = (paragraphs: ParaWithList[], hyperlinks?: Hype
   }
 
   const result: string[] = []
+  const pageContent: string[] = []
+  let currentPageHeight = 0
+  const pageHeightPx = pageHeight.value * 1.333
+
+  const finalizePage = () => {
+    if (pageContent.length > 0) {
+      result.push(`<div class="page-content">${pageContent.join('\n')}</div>`)
+      pageContent.length = 0
+      currentPageHeight = 0
+    }
+  }
+
+  const addToPage = (html: string, estimatedHeight: number) => {
+    if (currentPageHeight > 0 && currentPageHeight + estimatedHeight > pageHeightPx) {
+      finalizePage()
+    }
+    pageContent.push(html)
+    currentPageHeight += estimatedHeight
+  }
+
+  const estimateParaHeight = (text: string, charFormat: CharacterFormat): number => {
+    const fontSize = charFormat.fontSize || 12
+    const baseLineHeight = fontSize * 1.5
+    const charCount = text.length
+    const charsPerLine = 45
+    const lines = Math.max(1, Math.ceil(charCount / charsPerLine))
+    return lines * baseLineHeight + 4
+  }
+
   let i = 0
 
   while (i < paragraphs.length) {
@@ -813,19 +1236,19 @@ const formatFormattedTextToHtml = (paragraphs: ParaWithList[], hyperlinks?: Hype
     const tableBlock = collectTableBlock(paragraphs, i)
 
     if (tableBlock) {
-      result.push(renderTableHtml(tableBlock.rows, tableBlock.rowsTableInfo))
+      const html = renderTableHtml(tableBlock.rows, tableBlock.rowsTableInfo)
+      const estimatedHeight = 100
+      addToPage(html, estimatedHeight)
       i = tableBlock.nextIndex
       continue
     }
 
     if (listType === 'ordered' || listType === 'unordered') {
-      // Collect consecutive list items with the same listType. Items with
-      // different listLevel get nested as sub-lists inside the parent <li>.
       const listStyle = (paraFormat as any).listStyle || (listType === 'ordered' ? 'decimal' : 'disc')
       const startLevel = (paraFormat as any).listLevel ?? 0
 
-      // Collect all consecutive items with the same listType (any level).
       const items: Array<{ text: string; level: number; charFormat: CharacterFormat; paraFormat: ParagraphFormat }> = []
+      let totalEstimatedHeight = 0
       while (i < paragraphs.length) {
         const item = paragraphs[i]
         const itemFormat = item.paraFormat as ParagraphFormat & { listType?: string }
@@ -838,21 +1261,28 @@ const formatFormattedTextToHtml = (paragraphs: ParaWithList[], hyperlinks?: Hype
           charFormat: item.charFormat || ({} as CharacterFormat),
           paraFormat: itemFormat,
         })
+        totalEstimatedHeight += estimateParaHeight(itemText, item.charFormat || {} as CharacterFormat)
         i++
       }
 
-      // Build nested <ul>/<ol> from the flat item list.
       const listTag = listType === 'ordered' ? 'ol' : 'ul'
-      result.push(renderNestedList(listTag, listStyle, items, startLevel))
+      const html = renderNestedList(listTag, listStyle, items, startLevel)
+      addToPage(html, totalEstimatedHeight)
     } else {
-      // Regular paragraph
       const charFormat = para.charFormat || {} as CharacterFormat
       const paraCpStart = (para as any)._cpStart || 0
       const paraCpEnd = paraCpStart + (text?.length || 0)
-      result.push(renderParagraphHtml(text, charFormat, paraFormat, paraCpStart, paraCpEnd, hyperlinks))
+      const html = renderParagraphHtml(text, charFormat, paraFormat, paraCpStart, paraCpEnd, hyperlinks, revisions)
+      const estimatedHeight = estimateParaHeight(text, charFormat)
+      if (paraFormat.pageBreakBefore) {
+        finalizePage()
+      }
+      addToPage(html, estimatedHeight)
       i++
     }
   }
+
+  finalizePage()
 
   return result.join('\n')
 }
@@ -904,6 +1334,13 @@ const formatTextWithCharacterStyles = (
     if (style.style.letterSpacing !== undefined && style.style.letterSpacing !== 0) {
       css.push(`letter-spacing: ${style.style.letterSpacing}pt`)
     }
+    if (style.style.hidden) {
+      if (showHiddenText.value) {
+        css.push('border-bottom: 1px dotted #888; color: #888;')
+      } else {
+        css.push('display: none;')
+      }
+    }
 
     htmlContent += `<span style="${css.join('; ')}">${hasHtml ? segment : escapeHtml(segment)}</span>`
     lastEnd = style.end
@@ -933,10 +1370,20 @@ const formatTextWithCharacterStyles = (
   }
 
   const headingLevel = (paraFormat as any)?.headingLevel
+  const hasTabs = text.includes('\t')
+  const finalContent = hasTabs && (!paraFormat.tabs || paraFormat.tabs.length === 0)
+    ? `<span style="white-space: pre; tab-size: 3;">${htmlContent}</span>`
+    : htmlContent
+
+  const hasPageBreak = paraFormat.pageBreakBefore
+  const pageBreakHtml = hasPageBreak
+    ? '<div style="page-break-before: always; break-before: page; border-top: 2px dashed var(--border); margin: 24px 0 16px 0; position: relative;"><span style="position: absolute; top: -12px; left: 50%; transform: translateX(-50%); background: var(--bg); padding: 0 8px; font-size: 12px; color: var(--muted);">— 分页 —</span></div>'
+    : ''
+
   if (headingLevel && headingLevel >= 1 && headingLevel <= 6) {
-    return `<h${headingLevel} style="${pCss.join('; ')}">${htmlContent}</h${headingLevel}>`
+    return `${pageBreakHtml}<h${headingLevel} style="${pCss.join('; ')}">${finalContent}</h${headingLevel}>`
   }
-  return `<p style="${pCss.join('; ')}">${htmlContent}</p>`
+  return `${pageBreakHtml}<p style="${pCss.join('; ')}">${finalContent}</p>`
 }
 
 const formatTextWithDefaultStyles = (
@@ -966,6 +1413,13 @@ const formatTextWithDefaultStyles = (
   if (charFormat.letterSpacing !== undefined && charFormat.letterSpacing !== 0) {
     css.push(`letter-spacing: ${charFormat.letterSpacing}pt`)
   }
+  if (charFormat.hidden) {
+    if (showHiddenText.value) {
+      css.push('border-bottom: 1px dotted #888; color: #888;')
+    } else {
+      css.push('display: none;')
+    }
+  }
 
   css.push(`text-align: ${isCentered ? 'center' : isRightAligned ? 'right' : 'justify'}`)
 
@@ -985,11 +1439,22 @@ const formatTextWithDefaultStyles = (
     css.push('padding: 4px')
   }
 
+  const hasPageBreak = paraFormat.pageBreakBefore
+
   const headingLevel = (paraFormat as any)?.headingLevel
+  const hasTabs = text.includes('\t')
+  const finalText = hasTabs
+    ? applyTabStops(text, paraFormat.tabs, charFormat.fontSize || 12, charFormat.fontName || '宋体', hasHtml)
+    : (hasHtml ? text : escapeHtml(text))
+
+  const pageBreakHtml = hasPageBreak
+    ? '<div style="page-break-before: always; break-before: page; border-top: 2px dashed var(--border); margin: 24px 0 16px 0; position: relative;"><span style="position: absolute; top: -12px; left: 50%; transform: translateX(-50%); background: var(--bg); padding: 0 8px; font-size: 12px; color: var(--muted);">— 分页 —</span></div>'
+    : ''
+
   if (headingLevel && headingLevel >= 1 && headingLevel <= 6) {
-    return `<h${headingLevel} style="${css.join('; ')}">${hasHtml ? text : escapeHtml(text)}</h${headingLevel}>`
+    return `${pageBreakHtml}<h${headingLevel} style="${css.join('; ')}">${finalText}</h${headingLevel}>`
   }
-  return `<p style="${css.join('; ')}">${hasHtml ? text : escapeHtml(text)}</p>`
+  return `${pageBreakHtml}<p style="${css.join('; ')}">${finalText}</p>`
 }
 
 const formatTextWithInferredFormat = (text: string): string => {
@@ -1040,6 +1505,95 @@ const escapeHtml = (text: string): string => {
   return _escapeDiv.innerHTML
 }
 
+/**
+ * 将制表符 (\t) 替换为基于制表位位置的空白间隔。
+ *
+ * 使用 Canvas 测量文本宽度，精确计算每个制表位需要跳转的距离。
+ * 如果没有自定义制表位，使用默认 tab-size。
+ *
+ * @param text - 原始文本（可能包含 \t 字符）
+ * @param tabs - 制表位位置数组（磅值）
+ * @param fontSize - 字体大小（磅值）
+ * @param fontFamily - 字体族
+ * @returns 处理后的 HTML 字符串（\t 被替换为 span 空白间隔）
+ */
+function applyTabStops(
+  text: string,
+  tabs: number[] | undefined,
+  fontSizePt: number,
+  fontFamily: string,
+  hasHtml: boolean = false,
+): string {
+  if (!text.includes('\t')) return hasHtml ? text : escapeHtml(text)
+
+  const DEFAULT_TAB_INTERVAL_PT = 36 // 默认每 36pt (0.5 inch) 一个制表位
+
+  if (!tabs || tabs.length === 0) {
+    // 无自定义制表位：使用默认 tab-size 渲染
+    const escaped = hasHtml ? text : escapeHtml(text)
+    return `<span style="white-space: pre; tab-size: ${DEFAULT_TAB_INTERVAL_PT / fontSizePt};">${escaped}</span>`
+  }
+
+  // 有自定义制表位：精确计算每个 tab 的跳转宽度
+  const sortedTabs = [...tabs].sort((a, b) => a - b)
+
+  // 使用 Canvas 测量字符宽度（近似值）
+  let canvas: HTMLCanvasElement | null = null
+  let ctx: CanvasRenderingContext2D | null = null
+  if (typeof document !== 'undefined') {
+    canvas = document.createElement('canvas')
+    ctx = canvas.getContext('2d')
+    if (ctx) {
+      ctx.font = `${fontSizePt}pt ${fontFamily}`
+    }
+  }
+
+  const measureWidth = (s: string): number => {
+    if (ctx) return ctx.measureText(s).width * (72 / 96) // px -> pt
+    return s.length * fontSizePt * 0.55 // 回退估算
+  }
+
+  const parts: string[] = []
+  const segments = text.split('\t')
+  let currentPosPt = 0
+
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i]
+    const segHtml = hasHtml ? seg : escapeHtml(seg)
+    parts.push(segHtml)
+
+    if (i < segments.length - 1) {
+      const segWidth = measureWidth(seg)
+      currentPosPt += segWidth
+
+      // 找到下一个制表位位置
+      let nextTab: number | undefined
+      for (const tab of sortedTabs) {
+        if (tab > currentPosPt + 0.5) {
+          nextTab = tab
+          break
+        }
+      }
+
+      // 如果超出自定义制表位范围，使用默认间隔
+      if (nextTab === undefined) {
+        const lastTab = sortedTabs.length > 0 ? sortedTabs[sortedTabs.length - 1] : 0
+        const intervals = Math.ceil((currentPosPt - lastTab) / DEFAULT_TAB_INTERVAL_PT)
+        nextTab = lastTab + intervals * DEFAULT_TAB_INTERVAL_PT
+        if (nextTab <= currentPosPt + 0.5) {
+          nextTab += DEFAULT_TAB_INTERVAL_PT
+        }
+      }
+
+      const gapPt = Math.max(2, nextTab - currentPosPt)
+      parts.push(`<span style="display: inline-block; width: ${gapPt}pt;"></span>`)
+      currentPosPt = nextTab
+    }
+  }
+
+  return parts.join('')
+}
+
 // ---- Zoom ----
 
 function zoomIn() {
@@ -1074,6 +1628,38 @@ function toggleSearch() {
       htmlContent.value = originalHtml.value
       originalHtml.value = ''
     }
+  }
+}
+
+function toggleHiddenText() {
+  showHiddenText.value = !showHiddenText.value
+  // 重新渲染 HTML 以应用隐藏文字样式变化
+  if (lastParseResult.value) {
+    htmlContent.value = formatFormattedTextToHtml(
+      lastParseResult.value.paragraphs,
+      lastParseResult.value.hyperlinks,
+      lastParseResult.value.revisions
+    )
+  }
+}
+
+/**
+ * 切换修订显示模式并重新渲染文档。
+ *
+ * - 'marks'    : 显示修订标记（<ins>/<del>）
+ * - 'accepted' : 接受全部修订 — insert 保留为普通文本，delete 文本被移除
+ * - 'rejected' : 拒绝全部修订 — insert 文本被移除，delete 保留为普通文本
+ *
+ * format 修订（格式修订）不涉及文本增删，三种模式下均保持原文本不变。
+ */
+function setRevisionMode(mode: RevisionMode) {
+  revisionMode.value = mode
+  if (lastParseResult.value) {
+    htmlContent.value = formatFormattedTextToHtml(
+      lastParseResult.value.paragraphs,
+      lastParseResult.value.hyperlinks,
+      lastParseResult.value.revisions
+    )
   }
 }
 
@@ -1366,12 +1952,44 @@ defineExpose({ reload, getPlainText, focusContent })
             title="文档大纲"
             aria-label="文档大纲"
           >📑</button>
+
+          <!-- Hidden text toggle -->
+          <button
+            class="toolbar-btn"
+            :class="{ active: showHiddenText }"
+            @click="toggleHiddenText"
+            :title="showHiddenText ? '隐藏文字：显示中' : '隐藏文字：已隐藏'"
+            aria-label="切换隐藏文字显示"
+          >👁️</button>
         </div>
 
         <div class="toolbar-right">
           <span class="doc-stats" v-if="wordCount > 0">
             {{ wordCount }} 词 · {{ paragraphCount }} 段 · {{ charCount }} 字
           </span>
+
+          <span class="toolbar-sep" role="separator"></span>
+
+          <!-- Pagination controls -->
+          <div class="pagination-controls">
+            <button
+              class="pagination-btn"
+              @click="goToPrevPage"
+              :disabled="currentPage <= 1"
+              title="上一页"
+              aria-label="上一页"
+            >◀</button>
+            <span class="pagination-info">
+              {{ currentPage }} / {{ totalPages }}
+            </span>
+            <button
+              class="pagination-btn"
+              @click="goToNextPage"
+              :disabled="currentPage >= totalPages"
+              title="下一页"
+              aria-label="下一页"
+            >▶</button>
+          </div>
         </div>
       </div>
 
@@ -1442,6 +2060,25 @@ defineExpose({ reload, getPlainText, focusContent })
           >
             <div class="story-section-title">{{ section.label }}</div>
             <div class="story-section-text" v-html="formatStoryText(section.text)"></div>
+            <div v-if="section.images && section.images.length > 0" class="story-section-images">
+              <div
+                v-for="(img, idx) in section.images"
+                :key="idx"
+                class="story-image-item"
+              >
+                <img
+                  :src="img.dataUrl"
+                  :alt="`图片 ${idx + 1}`"
+                  :style="{
+                    maxWidth: '100%',
+                    height: 'auto',
+                    maxHeight: '200px',
+                  }"
+                  class="story-image"
+                />
+                <span class="story-image-caption">{{ img.format?.toUpperCase() || '图片' }}</span>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -1535,6 +2172,71 @@ defineExpose({ reload, getPlainText, focusContent })
         </div>
       </div>
 
+      <!-- Document fields (from PlcfFld - AUTHOR/TITLE/DATE etc.) -->
+      <div v-if="docFields" class="properties-panel">
+        <button
+          class="stories-toggle"
+          @click="showProperties = !showProperties"
+          :aria-expanded="showProperties"
+        >
+          <span class="stories-toggle-icon">{{ showProperties ? '▾' : '▸' }}</span>
+          <span>文档域</span>
+          <span class="stories-toggle-summary">
+            {{ docFields.title || docFields.author || '查看详情' }}
+          </span>
+        </button>
+        <div v-if="showProperties" class="properties-content">
+          <div v-if="docFields.title" class="property-item">
+            <span class="property-label">标题:</span>
+            <span class="property-value">{{ docFields.title }}</span>
+          </div>
+          <div v-if="docFields.author" class="property-item">
+            <span class="property-label">作者:</span>
+            <span class="property-value">{{ docFields.author }}</span>
+          </div>
+          <div v-if="docFields.subject" class="property-item">
+            <span class="property-label">主题:</span>
+            <span class="property-value">{{ docFields.subject }}</span>
+          </div>
+          <div v-if="docFields.keywords" class="property-item">
+            <span class="property-label">关键词:</span>
+            <span class="property-value">{{ docFields.keywords }}</span>
+          </div>
+          <div v-if="docFields.comments" class="property-item">
+            <span class="property-label">备注:</span>
+            <span class="property-value">{{ docFields.comments }}</span>
+          </div>
+          <div v-if="docFields.lastSavedBy" class="property-item">
+            <span class="property-label">最后保存者:</span>
+            <span class="property-value">{{ docFields.lastSavedBy }}</span>
+          </div>
+          <div v-if="docFields.createDate" class="property-item">
+            <span class="property-label">创建日期:</span>
+            <span class="property-value">{{ docFields.createDate }}</span>
+          </div>
+          <div v-if="docFields.lastSavedDate" class="property-item">
+            <span class="property-label">最后保存日期:</span>
+            <span class="property-value">{{ docFields.lastSavedDate }}</span>
+          </div>
+          <div v-if="docFields.printDate" class="property-item">
+            <span class="property-label">打印日期:</span>
+            <span class="property-value">{{ docFields.printDate }}</span>
+          </div>
+          <div v-if="docFields.date" class="property-item">
+            <span class="property-label">日期:</span>
+            <span class="property-value">{{ docFields.date }}</span>
+          </div>
+          <div v-if="docFields.time" class="property-item">
+            <span class="property-label">时间:</span>
+            <span class="property-value">{{ docFields.time }}</span>
+          </div>
+          <div v-if="docFields.revisionNumber" class="property-item">
+            <span class="property-label">修订号:</span>
+            <span class="property-value">{{ docFields.revisionNumber }}</span>
+          </div>
+        </div>
+      </div>
+
       <!-- Document flags from DOP (facing pages / title page / track changes etc.) -->
       <div v-if="docFlagItems.length > 0" class="doc-flags-panel">
         <button
@@ -1583,25 +2285,419 @@ defineExpose({ reload, getPlainText, focusContent })
         </div>
       </div>
 
+      <!-- Revision marks (track changes: insert / delete) -->
+      <div v-if="revisions.length > 0" class="revisions-panel">
+        <button
+          class="stories-toggle"
+          @click="showRevisions = !showRevisions"
+          :aria-expanded="showRevisions"
+        >
+          <span class="stories-toggle-icon">{{ showRevisions ? '▾' : '▸' }}</span>
+          <span>修订记录（{{ revisions.length }}）</span>
+          <span class="stories-toggle-summary">
+            {{ revisionItems.length }} 批次
+          </span>
+        </button>
+        <div v-if="showRevisions" class="revisions-content">
+          <div class="revision-mode-toolbar" role="group" aria-label="修订显示模式">
+            <button
+              class="revision-mode-btn"
+              :class="{ active: revisionMode === 'marks' }"
+              :aria-pressed="revisionMode === 'marks'"
+              @click="setRevisionMode('marks')"
+              title="显示 <ins>/<del> 修订标记"
+            >显示标记</button>
+            <button
+              class="revision-mode-btn"
+              :class="{ active: revisionMode === 'accepted' }"
+              :aria-pressed="revisionMode === 'accepted'"
+              @click="setRevisionMode('accepted')"
+              title="接受全部修订：保留插入文本，移除删除文本"
+            >接受全部</button>
+            <button
+              class="revision-mode-btn"
+              :class="{ active: revisionMode === 'rejected' }"
+              :aria-pressed="revisionMode === 'rejected'"
+              @click="setRevisionMode('rejected')"
+              title="拒绝全部修订：移除插入文本，保留删除文本"
+            >拒绝全部</button>
+          </div>
+          <div
+            v-for="(item, idx) in revisionItems"
+            :key="idx"
+            class="revision-item"
+            :class="'revision-type-' + item.type"
+          >
+            <span class="revision-badge">{{ item.label }}</span>
+            <span class="revision-author">{{ item.author }}</span>
+            <span v-if="item.time" class="revision-time">{{ item.time }}</span>
+            <span class="revision-count">{{ item.count }} 处</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Bookmarks (named ranges from PlcfBkf/PlcfBkl/SttbfBkmk) -->
+      <div v-if="bookmarks.length > 0" class="bookmarks-panel">
+        <button
+          class="stories-toggle"
+          @click="showBookmarks = !showBookmarks"
+          :aria-expanded="showBookmarks"
+        >
+          <span class="stories-toggle-icon">{{ showBookmarks ? '▾' : '▸' }}</span>
+          <span>书签（{{ bookmarks.length }}）</span>
+          <span class="stories-toggle-summary">命名范围</span>
+        </button>
+        <div v-if="showBookmarks" class="bookmarks-content">
+          <div
+            v-for="(bm, idx) in bookmarks"
+            :key="idx"
+            class="bookmark-item"
+          >
+            <span class="bookmark-name">{{ bm.name }}</span>
+            <span class="bookmark-range">CP: {{ bm.cpStart }} – {{ bm.cpEnd }}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Sections (page layout from PlcfSed/SEPX) -->
+      <div v-if="sections.length > 0" class="sections-panel">
+        <button
+          class="stories-toggle"
+          @click="showSections = !showSections"
+          :aria-expanded="showSections"
+        >
+          <span class="stories-toggle-icon">{{ showSections ? '▾' : '▸' }}</span>
+          <span>分节与页面布局（{{ sections.length }}）</span>
+          <span class="stories-toggle-summary">纸张 / 边距 / 方向 / 分栏</span>
+        </button>
+        <div v-if="showSections" class="sections-content">
+          <div
+            v-for="(sec, idx) in sections"
+            :key="idx"
+            class="section-item"
+          >
+            <div class="section-header">
+              <span class="section-index">节 {{ sec.index + 1 }}</span>
+              <span v-if="sec.breakType" class="section-break">
+                {{ BREAK_TYPE_LABEL[sec.breakType] || sec.breakType }}
+              </span>
+              <span v-if="sec.orientation" class="section-orientation">
+                {{ sec.orientation === 'landscape' ? '横向' : '纵向' }}
+              </span>
+            </div>
+            <div class="section-grid">
+              <div v-if="sec.pageWidthPt && sec.pageHeightPt" class="section-field">
+                <span class="section-field-label">页面尺寸</span>
+                <span class="section-field-value">
+                  {{ formatSizePt(sec.pageWidthPt) }} × {{ formatSizePt(sec.pageHeightPt) }}
+                </span>
+              </div>
+              <div v-if="sec.marginLeftPt" class="section-field">
+                <span class="section-field-label">左边距</span>
+                <span class="section-field-value">{{ formatSizePt(sec.marginLeftPt) }}</span>
+              </div>
+              <div v-if="sec.marginRightPt" class="section-field">
+                <span class="section-field-label">右边距</span>
+                <span class="section-field-value">{{ formatSizePt(sec.marginRightPt) }}</span>
+              </div>
+              <div v-if="sec.marginTopPt" class="section-field">
+                <span class="section-field-label">上边距</span>
+                <span class="section-field-value">{{ formatSizePt(sec.marginTopPt) }}</span>
+              </div>
+              <div v-if="sec.marginBottomPt" class="section-field">
+                <span class="section-field-label">下边距</span>
+                <span class="section-field-value">{{ formatSizePt(sec.marginBottomPt) }}</span>
+              </div>
+              <div v-if="sec.gutterPt" class="section-field">
+                <span class="section-field-label">装订线</span>
+                <span class="section-field-value">{{ formatSizePt(sec.gutterPt) }}</span>
+              </div>
+              <div v-if="sec.columnCount && sec.columnCount > 1" class="section-field">
+                <span class="section-field-label">分栏</span>
+                <span class="section-field-value">
+                  {{ sec.columnCount }} 栏
+                  <span v-if="sec.columnSpacingPt">（间距 {{ formatSizePt(sec.columnSpacingPt) }}）</span>
+                </span>
+              </div>
+              <div v-if="sec.pageStart !== undefined" class="section-field">
+                <span class="section-field-label">起始页码</span>
+                <span class="section-field-value">{{ sec.pageStart }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Page fields (PAGE / NUMPAGES / SECTION / SECTIONPAGES) -->
+      <div v-if="pageFields.length > 0" class="page-fields-panel">
+        <button
+          class="stories-toggle"
+          @click="showPageFields = !showPageFields"
+          :aria-expanded="showPageFields"
+        >
+          <span class="stories-toggle-icon">{{ showPageFields ? '▾' : '▸' }}</span>
+          <span>页码域（{{ pageFields.length }}）</span>
+          <span class="stories-toggle-summary">PAGE / NUMPAGES</span>
+        </button>
+        <div v-if="showPageFields" class="page-fields-content">
+          <div
+            v-for="(pf, idx) in pageFields"
+            :key="idx"
+            class="page-field-item"
+          >
+            <div class="page-field-header">
+              <span class="page-field-type">
+                {{ PAGE_FIELD_TYPE_LABEL[pf.type] || pf.type }}
+              </span>
+              <span v-if="pf.result" class="page-field-result">值：{{ pf.result }}</span>
+            </div>
+            <div class="page-field-instruction">指令：{{ pf.instruction }}</div>
+            <div class="page-field-cp">CP: {{ pf.cpStart }} – {{ pf.cpEnd }}</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Cross-references (REF / NOTEREF) -->
+      <div v-if="crossReferences.length > 0" class="cross-refs-panel">
+        <button
+          class="stories-toggle"
+          @click="showCrossReferences = !showCrossReferences"
+          :aria-expanded="showCrossReferences"
+        >
+          <span class="stories-toggle-icon">{{ showCrossReferences ? '▾' : '▸' }}</span>
+          <span>交叉引用（{{ crossReferences.length }}）</span>
+          <span class="stories-toggle-summary">REF / NOTEREF</span>
+        </button>
+        <div v-if="showCrossReferences" class="cross-refs-content">
+          <div
+            v-for="(cr, idx) in crossReferences"
+            :key="idx"
+            class="cross-ref-item"
+          >
+            <div class="cross-ref-header">
+              <span class="cross-ref-type">
+                {{ CROSS_REF_TYPE_LABEL[cr.type] || cr.type }}
+              </span>
+              <span v-if="cr.result" class="cross-ref-result">显示：{{ cr.result }}</span>
+            </div>
+            <div class="cross-ref-target">
+              目标书签：<code>{{ cr.targetBookmarkName }}</code>
+            </div>
+            <div class="cross-ref-instruction">指令：{{ cr.instruction }}</div>
+            <div v-if="cr.switches.length > 0" class="cross-ref-switches">
+              开关：
+              <span
+                v-for="sw in cr.switches"
+                :key="sw"
+                class="cross-ref-switch"
+                :title="CROSS_REF_SWITCH_LABEL[sw]"
+              >{{ sw }}{{ CROSS_REF_SWITCH_LABEL[sw] ? ` (${CROSS_REF_SWITCH_LABEL[sw]})` : '' }}</span>
+            </div>
+            <div class="cross-ref-cp">CP: {{ cr.cpStart }} – {{ cr.cpEnd }}</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Shapes (Office Art Drawing Container - floating images with anchors) -->
+      <div v-if="shapes.length > 0" class="shapes-panel">
+        <button
+          class="stories-toggle"
+          @click="showShapes = !showShapes"
+          :aria-expanded="showShapes"
+        >
+          <span class="stories-toggle-icon">{{ showShapes ? '▾' : '▸' }}</span>
+          <span>形状与图片锚点（{{ shapes.length }}）</span>
+          <span class="stories-toggle-summary">浮动图片定位</span>
+        </button>
+        <div v-if="showShapes" class="shapes-content">
+          <div
+            v-for="(shape, idx) in shapes"
+            :key="idx"
+            class="shape-item"
+          >
+            <div class="shape-header">
+              <span class="shape-type">{{ SHAPE_TYPE_LABEL[shape.type] || shape.type }}</span>
+              <span v-if="shape.floating" class="shape-floating">浮动</span>
+              <span v-if="shape.hasPicture" class="shape-picture">含图片</span>
+            </div>
+            <div class="shape-spid">形状 ID: {{ shape.spid }}</div>
+            <div v-if="shape.x !== undefined && shape.y !== undefined" class="shape-position">
+              位置: ({{ shape.x }}, {{ shape.y }}) twips
+            </div>
+            <div v-if="shape.width !== undefined && shape.height !== undefined" class="shape-size">
+              尺寸: {{ shape.width }} × {{ shape.height }} twips
+            </div>
+            <div class="shape-anchor">
+              锚点类型: {{ SHAPE_ANCHOR_LABEL[shape.anchorType] || shape.anchorType }}
+              <span v-if="shape.anchorCp !== undefined"> (CP: {{ shape.anchorCp }})</span>
+            </div>
+            <div v-if="shape.fcPic !== undefined" class="shape-fcpic">
+              图片偏移 (fcPic): {{ shape.fcPic }}
+            </div>
+            <div v-if="shape.name" class="shape-name">名称: {{ shape.name }}</div>
+            <div v-if="shape.groupId !== undefined" class="shape-group">
+              组合 ID: {{ shape.groupId }}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Equations (Equation Editor OLE objects) -->
+      <div v-if="equations.length > 0" class="equations-panel">
+        <button
+          class="stories-toggle"
+          @click="showEquations = !showEquations"
+          :aria-expanded="showEquations"
+        >
+          <span class="stories-toggle-icon">{{ showEquations ? '▾' : '▸' }}</span>
+          <span>公式（{{ equations.length }}）</span>
+          <span class="stories-toggle-summary">Equation Editor 公式</span>
+        </button>
+        <div v-if="showEquations" class="equations-content">
+          <div
+            v-for="(eq, idx) in equations"
+            :key="idx"
+            class="equation-item"
+          >
+            <div class="equation-header">
+              <span class="equation-id">公式 {{ eq.id }}</span>
+              <span v-if="eq.hasPicture" class="equation-has-picture">含图片</span>
+            </div>
+            <div v-if="eq.latex" class="equation-latex">
+              <span class="equation-label">LaTeX:</span>
+              <span class="equation-code">{{ eq.latex }}</span>
+            </div>
+            <div v-if="eq.eqnText" class="equation-eqntext">
+              <span class="equation-label">原始:</span>
+              <span class="equation-code">{{ eq.eqnText }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Charts (MSGraph/Excel/SmartArt OLE objects) -->
+      <div v-if="charts.length > 0" class="charts-panel">
+        <button
+          class="stories-toggle"
+          @click="showCharts = !showCharts"
+          :aria-expanded="showCharts"
+        >
+          <span class="stories-toggle-icon">{{ showCharts ? '▾' : '▸' }}</span>
+          <span>图表（{{ charts.length }}）</span>
+          <span class="stories-toggle-summary">MSGraph/Excel/SmartArt 对象</span>
+        </button>
+        <div v-if="showCharts" class="charts-content">
+          <div
+            v-for="(chart, idx) in charts"
+            :key="idx"
+            class="chart-item"
+          >
+            <div class="chart-header">
+              <span class="chart-id">图表 {{ chart.id }}</span>
+              <span class="chart-type">{{ getChartTypeLabel(chart.type) }}</span>
+              <span v-if="chart.hasPicture" class="chart-has-picture">含图片</span>
+              <span v-if="chart.hasData" class="chart-has-data">含数据</span>
+            </div>
+            <div class="chart-name">
+              <span class="chart-label">名称:</span>
+              <span class="chart-value">{{ chart.name }}</span>
+            </div>
+            <div v-if="chart.subtype && chart.subtype !== 'unknown'" class="chart-subtype">
+              <span class="chart-label">子类型:</span>
+              <span class="chart-value">{{ getChartSubtypeLabel(chart.subtype) }}</span>
+            </div>
+            <div v-if="chart.dataSize" class="chart-datasize">
+              <span class="chart-label">数据大小:</span>
+              <span class="chart-value">{{ formatFileSize(chart.dataSize) }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- WordArt (Office Art Drawing WordArt objects) -->
+      <div v-if="wordArts.length > 0" class="wordart-panel">
+        <button
+          class="stories-toggle"
+          @click="showWordArts = !showWordArts"
+          :aria-expanded="showWordArts"
+        >
+          <span class="stories-toggle-icon">{{ showWordArts ? '▾' : '▸' }}</span>
+          <span>艺术字（{{ wordArts.length }}）</span>
+          <span class="stories-toggle-summary">Office Art WordArt 对象</span>
+        </button>
+        <div v-if="showWordArts" class="wordart-content">
+          <div
+            v-for="(wa, idx) in wordArts"
+            :key="idx"
+            class="wordart-item"
+          >
+            <div class="wordart-header">
+              <span class="wordart-id">艺术字 {{ wa.id }}</span>
+              <span v-for="(effect, eIdx) in wa.effects" :key="eIdx" class="wordart-effect">
+                {{ getWordArtEffectLabel(effect) }}
+              </span>
+            </div>
+            <div v-if="wa.text" class="wordart-text">
+              <span class="wordart-label">文本:</span>
+              <span class="wordart-value">{{ wa.text }}</span>
+            </div>
+            <div class="wordart-name">
+              <span class="wordart-label">名称:</span>
+              <span class="wordart-value">{{ wa.name }}</span>
+            </div>
+            <div v-if="wa.colors && wa.colors.length > 0" class="wordart-colors">
+              <span class="wordart-label">颜色:</span>
+              <div class="wordart-color-list">
+                <span
+                  v-for="(color, cIdx) in wa.colors"
+                  :key="cIdx"
+                  class="wordart-color"
+                  :style="{ backgroundColor: color }"
+                  :title="color"
+                ></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- Embedded images extracted from the Data stream -->
-      <div v-if="images.length > 0" class="images-panel">
+      <div v-if="pictures.length > 0 || images.length > 0" class="images-panel">
         <button
           class="stories-toggle"
           @click="showImages = !showImages"
           :aria-expanded="showImages"
         >
           <span class="stories-toggle-icon">{{ showImages ? '▾' : '▸' }}</span>
-          <span>文档图片（{{ images.length }}）</span>
+          <span>文档图片（{{ pictures.length > 0 ? pictures.length : images.length }}）</span>
           <span class="stories-toggle-summary">点击展开查看嵌入图片</span>
         </button>
         <div v-if="showImages" class="images-content">
-          <div
-            v-for="(src, idx) in images"
-            :key="idx"
-            class="image-item"
-          >
-            <img :src="src" :alt="`图片 ${idx + 1}`" loading="lazy" />
-          </div>
+          <template v-if="pictures.length > 0">
+            <div
+              v-for="(pic, idx) in pictures"
+              :key="idx"
+              class="image-item"
+            >
+              <img :src="pic.dataUrl" :alt="`图片 ${idx + 1}`" loading="lazy" />
+              <div class="image-meta">
+                <span class="image-format">{{ pic.format.toUpperCase() }}</span>
+                <template v-if="pic.widthPx && pic.heightPx">
+                  <span class="image-size">{{ pic.widthPx }} × {{ pic.heightPx }}</span>
+                </template>
+                <span v-if="pic.floating" class="image-floating">浮动</span>
+              </div>
+            </div>
+          </template>
+          <template v-else>
+            <div
+              v-for="(src, idx) in images"
+              :key="idx"
+              class="image-item"
+            >
+              <img :src="src" :alt="`图片 ${idx + 1}`" loading="lazy" />
+            </div>
+          </template>
         </div>
       </div>
     </div>
@@ -1793,6 +2889,57 @@ defineExpose({ reload, getPlainText, focusContent })
   font-size: 0.78rem;
   color: var(--text-muted);
   white-space: nowrap;
+}
+
+/* ==================== Pagination ==================== */
+.pagination-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pagination-btn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s;
+}
+
+.pagination-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.pagination-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.pagination-info {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  min-width: 60px;
+  text-align: center;
+}
+
+.page-content {
+  break-after: page;
+  margin-bottom: 24px;
+}
+
+@media print {
+  .page-content {
+    break-after: page;
+    margin-bottom: 0;
+  }
 }
 
 /* ==================== Search bar ==================== */
@@ -2236,6 +3383,253 @@ defineExpose({ reload, getPlainText, focusContent })
   margin-left: 12px;
 }
 
+/* ==================== Revision marks ==================== */
+.revisions-panel {
+  max-width: 800px;
+  margin: 0 auto 32px auto;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.revisions-content {
+  padding: 12px 16px;
+  display: grid;
+  gap: 8px;
+}
+
+.revision-mode-toolbar {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  margin-bottom: 4px;
+}
+
+.revision-mode-btn {
+  padding: 4px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.revision-mode-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.revision-mode-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.revision-item {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 6px 10px;
+  background: var(--bg-primary);
+  border-left: 3px solid var(--border-color);
+  border-radius: 4px;
+  font-size: 0.85rem;
+}
+
+.revision-item.revision-type-insert {
+  border-left-color: #27ae60;
+}
+
+.revision-item.revision-type-delete {
+  border-left-color: #e74c3c;
+}
+
+.revision-item.revision-type-format {
+  border-left-color: #f39c12;
+}
+
+.revision-badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.revision-type-insert .revision-badge {
+  background: rgba(39, 174, 96, 0.12);
+  color: #27ae60;
+}
+
+.revision-type-delete .revision-badge {
+  background: rgba(231, 76, 60, 0.12);
+  color: #e74c3c;
+}
+
+.revision-type-format .revision-badge {
+  background: rgba(243, 156, 18, 0.12);
+  color: #f39c12;
+}
+
+.revision-author {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.revision-time {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.revision-count {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+/* ==================== Bookmarks ==================== */
+.bookmarks-panel {
+  max-width: 800px;
+  margin: 0 auto 32px auto;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.bookmarks-content {
+  padding: 12px 16px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 8px;
+}
+
+.bookmark-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 10px;
+  background: var(--bg-primary);
+  border-left: 3px solid #3498db;
+  border-radius: 4px;
+  font-size: 0.85rem;
+}
+
+.bookmark-name {
+  color: var(--text-primary);
+  font-weight: 500;
+  word-break: break-all;
+}
+
+.bookmark-range {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ==================== Sections (page layout) ==================== */
+.sections-panel {
+  max-width: 800px;
+  margin: 0 auto 32px auto;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.sections-content {
+  padding: 12px 16px;
+  display: grid;
+  gap: 12px;
+}
+
+.section-item {
+  padding: 10px 12px;
+  background: var(--bg-primary);
+  border-left: 3px solid #9b59b6;
+  border-radius: 4px;
+}
+
+.section-header {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.section-index {
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 0.9rem;
+}
+
+.section-break,
+.section-orientation {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 0.75rem;
+  background: rgba(155, 89, 182, 0.12);
+  color: #9b59b6;
+}
+
+.section-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 6px 16px;
+}
+
+.section-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.section-field-label {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.section-field-value {
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Inline revision marks inside the rendered document */
+.document-content ins.rev-insert,
+.document-content del.rev-delete {
+  text-decoration-thickness: 1px;
+  cursor: help;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.document-content ins.rev-insert {
+  text-decoration: underline;
+  color: #27ae60;
+  background: rgba(39, 174, 96, 0.08);
+}
+
+.document-content del.rev-delete {
+  text-decoration: line-through;
+  color: #e74c3c;
+  background: rgba(231, 76, 60, 0.08);
+  opacity: 0.85;
+}
+
 .stories-content {
   padding: 4px 16px 14px 16px;
   display: flex;
@@ -2273,6 +3667,473 @@ defineExpose({ reload, getPlainText, focusContent })
   margin-bottom: 0;
 }
 
+.story-section-images {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.story-image-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.story-image {
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.story-image-caption {
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+}
+
+/* ==================== Page fields (PAGE / NUMPAGES) ==================== */
+.page-fields-panel {
+  max-width: 800px;
+  margin: 0 auto 32px auto;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.page-fields-content {
+  padding: 12px 16px;
+  display: grid;
+  gap: 10px;
+}
+
+.page-field-item {
+  padding: 8px 12px;
+  background: var(--bg-primary);
+  border-left: 3px solid #16a085;
+  border-radius: 4px;
+  font-size: 0.85rem;
+}
+
+.page-field-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.page-field-type {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.page-field-result {
+  color: #16a085;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.page-field-instruction {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  word-break: break-all;
+}
+
+.page-field-cp {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  margin-top: 2px;
+}
+
+/* ==================== Cross-references (REF / NOTEREF) ==================== */
+.cross-refs-panel {
+  max-width: 800px;
+  margin: 0 auto 32px auto;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.cross-refs-content {
+  padding: 12px 16px;
+  display: grid;
+  gap: 10px;
+}
+
+.cross-ref-item {
+  padding: 8px 12px;
+  background: var(--bg-primary);
+  border-left: 3px solid #8e44ad;
+  border-radius: 4px;
+  font-size: 0.85rem;
+}
+
+.cross-ref-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.cross-ref-type {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.cross-ref-result {
+  color: #8e44ad;
+  font-weight: 600;
+}
+
+.cross-ref-target {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  margin-top: 2px;
+}
+
+.cross-ref-target code {
+  background: var(--bg-tertiary);
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-family: 'SF Mono', Consolas, Monaco, monospace;
+  color: #8e44ad;
+}
+
+.cross-ref-instruction {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  word-break: break-all;
+  margin-top: 2px;
+}
+
+.cross-ref-switches {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  margin-top: 4px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.cross-ref-switch {
+  display: inline-block;
+  padding: 1px 6px;
+  background: var(--bg-tertiary);
+  border-radius: 3px;
+  font-family: 'SF Mono', Consolas, Monaco, monospace;
+  color: #8e44ad;
+  font-size: 0.74rem;
+}
+
+.cross-ref-cp {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  margin-top: 2px;
+}
+
+/* ==================== Shapes (Office Art) ==================== */
+.shapes-panel {
+  max-width: 800px;
+  margin: 0 auto 32px auto;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.shapes-content {
+  padding: 12px 16px;
+  display: grid;
+  gap: 10px;
+}
+
+.shape-item {
+  padding: 8px 12px;
+  background: var(--bg-primary);
+  border-left: 3px solid #3498db;
+  border-radius: 4px;
+  font-size: 0.85rem;
+}
+
+.shape-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.shape-type {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.shape-floating {
+  background: #f1c40f;
+  color: #333;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.shape-picture {
+  background: #27ae60;
+  color: white;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.shape-spid,
+.shape-position,
+.shape-size,
+.shape-anchor,
+.shape-fcpic,
+.shape-name,
+.shape-group {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  margin-top: 2px;
+}
+
+/* ==================== Equations ==================== */
+
+.equations-panel {
+  max-width: 800px;
+  margin: 0 auto 32px auto;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.equations-content {
+  padding: 12px 16px;
+  display: grid;
+  gap: 10px;
+}
+
+.equation-item {
+  padding: 8px 12px;
+  background: var(--bg-primary);
+  border-left: 3px solid #9b59b6;
+  border-radius: 4px;
+  font-size: 0.85rem;
+}
+
+.equation-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.equation-id {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.equation-has-picture {
+  background: #27ae60;
+  color: white;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.equation-label {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.equation-code {
+  display: block;
+  background: var(--bg-tertiary);
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-family: 'SF Mono', Consolas, Monaco, monospace;
+  font-size: 0.8rem;
+  word-break: break-all;
+  margin-top: 4px;
+  color: var(--text-primary);
+}
+
+.equation-latex .equation-code {
+  color: #9b59b6;
+}
+
+.equation-eqntext .equation-code {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+/* ==================== Charts (MSGraph/Excel/SmartArt) ==================== */
+.charts-panel {
+  max-width: 800px;
+  margin: 0 auto 32px auto;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.charts-content {
+  padding: 12px 16px;
+  display: grid;
+  gap: 10px;
+}
+
+.chart-item {
+  padding: 8px 12px;
+  background: var(--bg-primary);
+  border-left: 3px solid #1abc9c;
+  border-radius: 4px;
+  font-size: 0.85rem;
+}
+
+.chart-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.chart-id {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.chart-type {
+  background: #1abc9c;
+  color: white;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.chart-has-picture {
+  background: #27ae60;
+  color: white;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.chart-has-data {
+  background: #3498db;
+  color: white;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.chart-label {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.chart-value {
+  display: block;
+  background: var(--bg-tertiary);
+  padding: 4px 8px;
+  border-radius: 3px;
+  font-size: 0.78rem;
+  word-break: break-all;
+  margin-top: 2px;
+  color: var(--text-primary);
+}
+
+/* ==================== WordArt (Office Art) ==================== */
+.wordart-panel {
+  max-width: 800px;
+  margin: 0 auto 32px auto;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.wordart-content {
+  padding: 12px 16px;
+  display: grid;
+  gap: 10px;
+}
+
+.wordart-item {
+  padding: 8px 12px;
+  background: var(--bg-primary);
+  border-left: 3px solid #e74c3c;
+  border-radius: 4px;
+  font-size: 0.85rem;
+}
+
+.wordart-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.wordart-id {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.wordart-effect {
+  background: #e74c3c;
+  color: white;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.wordart-label {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.wordart-value {
+  display: block;
+  background: var(--bg-tertiary);
+  padding: 4px 8px;
+  border-radius: 3px;
+  font-size: 0.78rem;
+  word-break: break-all;
+  margin-top: 2px;
+  color: var(--text-primary);
+}
+
+.wordart-color-list {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.wordart-color {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  cursor: pointer;
+}
+
 /* ==================== Embedded images ==================== */
 .images-panel {
   margin: 16px auto;
@@ -2304,6 +4165,29 @@ defineExpose({ reload, getPlainText, focusContent })
   height: auto;
   max-height: 320px;
   border-radius: 3px;
+}
+
+.image-meta {
+  margin-top: 6px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--text-secondary, #666);
+}
+
+.image-format,
+.image-size,
+.image-floating {
+  background: var(--bg-secondary, #f5f5f5);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.image-floating {
+  background: #e8f4fd;
+  color: #1976d2;
 }
 
 /* ==================== Print styles ==================== */

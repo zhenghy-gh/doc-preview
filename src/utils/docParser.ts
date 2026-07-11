@@ -8,6 +8,8 @@ import { parseFib } from './fibParser'
 import type { FibData, RgCcp } from './fibParser'
 import { isTableRowText } from './tableText'
 import { extractImagesFromStream, imagesToDataUrls } from './imageExtractor'
+import { extractPicturesFromDataStream, parsePicfAt } from './pictureParser'
+import type { ParsedPicture } from './pictureParser'
 import { parseChpxRuns, parsePapxRuns, mergeCharFormatForParagraph } from './formatParser'
 import type { ChpxRun, PapxRun } from './formatParser'
 import { parseStylesheet, getHeadingLevel } from './styleParser'
@@ -15,13 +17,26 @@ import type { StyleDefinition } from './styleParser'
 import { parseFontTable } from './fontParser'
 import { parseListTable, getListFormat, getListFormatFromLfo, parsePlcfLfo } from './listParser'
 import type { ListEntry, LfoEntry } from './listParser'
-import { parsePlcfFld, extractHyperlinks, extractAllFields, TocEntry } from './fieldParser'
-import type { FieldRange } from './fieldParser'
+import { parsePlcfFld, extractHyperlinks, extractAllFields, extractDocumentFields, extractPageFields, extractCrossReferences, TocEntry } from './fieldParser'
+import type { FieldRange, DocumentFields, PageFieldInfo, CrossReferenceInfo } from './fieldParser'
 import { parseSummaryInformation, parseDocumentSummaryInformation, hasProperties } from './propertyParser'
 import type { DocumentProperties } from './propertyParser'
 import { parseDop } from './dopParser'
 import type { DopData } from './dopParser'
-import type { DocumentStories, CharacterFormat, DocumentFlags } from './docFormat'
+import type { DocumentStories, CharacterFormat, DocumentFlags, RevisionMark, BookmarkRange, SectionInfo, PageFieldRange, CrossReferenceRange } from './docFormat'
+import { parseSttbfRMark } from './revisionParser'
+import { extractBookmarks } from './bookmarkParser'
+import { extractSections } from './sectionParser'
+import { extractShapesFromDataStream, extractShapesFromWordDocumentStream } from './shapeParser'
+import type { ShapeInfo } from './shapeParser'
+import { extractEquationsFromDirectory, extractEquationsFromWordDocumentStream } from './equationParser'
+import type { EquationInfo } from './equationParser'
+import { extractChartsFromDirectory, extractChartsFromWordDocumentStream } from './chartParser'
+import type { ChartInfo } from './chartParser'
+import { extractWordArtFromDirectory, extractWordArtFromDrawingData } from './wordArtParser'
+import type { WordArtInfo } from './wordArtParser'
+import { parsePlcfHdd, splitHeaderText, splitHeaderTextHeuristic, splitHeaderTextWithImages } from './headerFooterParser'
+import type { HeaderFooterPartType, HeaderFooterPartContent } from './docFormat'
 
 // ---- DocParser ----
 
@@ -203,6 +218,30 @@ export class DocParser {
       if (extracted.tocEntries && extracted.tocEntries.length > 0) {
         document.toc = extracted.tocEntries
       }
+      if (extracted.revisions && extracted.revisions.length > 0) {
+        document.revisions = extracted.revisions
+      }
+      if (extracted.documentFields && Object.keys(extracted.documentFields).length > 0) {
+        document.documentFields = extracted.documentFields
+      }
+      if (extracted.bookmarks && extracted.bookmarks.length > 0) {
+        document.bookmarks = extracted.bookmarks
+      }
+      if (extracted.sections && extracted.sections.length > 0) {
+        document.sections = extracted.sections
+      }
+      if (extracted.pageFields && extracted.pageFields.length > 0) {
+        document.pageFields = extracted.pageFields as PageFieldRange[]
+      }
+      if (extracted.crossReferences && extracted.crossReferences.length > 0) {
+        document.crossReferences = extracted.crossReferences as CrossReferenceRange[]
+      }
+      if (extracted.shapes && extracted.shapes.length > 0) {
+        document.shapes = extracted.shapes
+      }
+      if (extracted.equations && extracted.equations.length > 0) {
+        document.equations = extracted.equations
+      }
 
       // Extract document properties from SummaryInformation stream
       const props = this.extractProperties(directory)
@@ -234,6 +273,11 @@ export class DocParser {
       // falling back to the WordDocument stream. Attached as data URLs.
       const images = this.extractImages(directory, wordDocumentStream.data)
       if (images.length > 0) document.images = images
+
+      // Extract structured pictures (PICF-based with dimensions) via CHPX fcPic
+      const chpxRunsForPics = extracted.chpxRuns || []
+      const pictures = this.extractPictures(directory, chpxRunsForPics)
+      if (pictures.length > 0) document.pictures = pictures
 
       return { success: true, document, text: plainText }
     } catch (error) {
@@ -763,7 +807,12 @@ export class DocParser {
         const byte = data[i]
         if (byte === 0x0D) text += '\n'
         else if (byte === 0x09) text += '\t'
+        else if (byte === 0x0C) text += '\f' // 分页符 (Form Feed)
+        else if (byte === 0x0B) text += '\v' // 软换行 (Shift+Enter / Vertical Tab)
         else if (byte === 0x07) text += '\u0007' // Word table cell mark
+        else if (byte === 0xA0) text += '\u00A0' // 不间断空格 (NBSP)
+        else if (byte === 0xAD) text += '\u00AD' // 可选连字符 (Soft Hyphen)
+        else if (byte === 0x1E) text += '\u2011' // 不间断连字符 (Non-breaking Hyphen)
         else if (byte === 0x0A || byte === 0x00) continue
         else if (byte >= 0x20) text += String.fromCharCode(byte)
       }
@@ -772,7 +821,12 @@ export class DocParser {
         const charCode = (data[i] | (data[i + 1] << 8)) & 0xFFFF
         if (charCode === 0x000d) text += '\n'
         else if (charCode === 0x0009) text += '\t'
+        else if (charCode === 0x000c) text += '\f' // 分页符 (Form Feed)
+        else if (charCode === 0x000b) text += '\v' // 软换行 (Shift+Enter / Vertical Tab)
         else if (charCode === 0x0007) text += '\u0007' // Word table cell mark
+        else if (charCode === 0x00a0) text += '\u00A0' // 不间断空格 (NBSP)
+        else if (charCode === 0x00ad) text += '\u00AD' // 可选连字符 (Soft Hyphen)
+        else if (charCode === 0x001e) text += '\u2011' // 不间断连字符 (Non-breaking Hyphen)
         else if (charCode === 0x000a || charCode === 0x0000) continue
         else if ((charCode >= 0x0020 && charCode <= 0x007E) || (charCode >= 0x4E00 && charCode <= 0x9FFF) || (charCode >= 0x3000 && charCode <= 0x303F) || (charCode >= 0xFF00 && charCode <= 0xFFEF) || (charCode === 0x2018 || charCode === 0x2019 || charCode === 0x201C || charCode === 0x201D)) {
           text += String.fromCharCode(charCode)
@@ -796,7 +850,7 @@ export class DocParser {
     directory: DirectoryEntry[],
     wordDocData?: Uint8Array,
     text?: string,
-  ): { chpxRuns: ChpxRun[]; papxRuns: PapxRun[]; styles: StyleDefinition[]; fontNames: string[]; listEntries: ListEntry[]; lfoEntries: LfoEntry[]; hyperlinks: FieldRange[]; tocEntries: TocEntry[] } {
+  ): { chpxRuns: ChpxRun[]; papxRuns: PapxRun[]; styles: StyleDefinition[]; fontNames: string[]; listEntries: ListEntry[]; lfoEntries: LfoEntry[]; hyperlinks: FieldRange[]; tocEntries: TocEntry[]; authors: string[]; revisions: RevisionMark[]; documentFields: DocumentFields; bookmarks: BookmarkRange[]; sections: SectionInfo[]; pageFields: PageFieldInfo[]; crossReferences: CrossReferenceInfo[]; shapes: ShapeInfo[]; equations: EquationInfo[]; charts: ChartInfo[]; wordArts: WordArtInfo[] } {
     const chpxRuns: ChpxRun[] = []
     const papxRuns: PapxRun[] = []
     let styles: StyleDefinition[] = []
@@ -805,11 +859,20 @@ export class DocParser {
     const lfoEntries: LfoEntry[] = []
     const hyperlinks: FieldRange[] = []
     const tocEntries: TocEntry[] = []
+    let authors: string[] = []
+    const revisions: RevisionMark[] = []
+    const documentFields: DocumentFields = {}
+    let bookmarks: BookmarkRange[] = []
+    let sections: SectionInfo[] = []
+    let pageFields: PageFieldInfo[] = []
+    let crossReferences: CrossReferenceInfo[] = []
+    let shapes: ShapeInfo[] = []
+    const equations: EquationInfo[] = []
 
-    if (!fib) return { chpxRuns, papxRuns, styles, fontNames, listEntries, lfoEntries, hyperlinks, tocEntries }
+    if (!fib) return { chpxRuns, papxRuns, styles, fontNames, listEntries, lfoEntries, hyperlinks, tocEntries, authors, revisions, documentFields, bookmarks, sections, pageFields, crossReferences, shapes, equations, charts: [], wordArts: [] }
 
     const tableData = this.readTableStream(fib, directory)
-    if (!tableData || tableData.length === 0) return { chpxRuns, papxRuns, styles, fontNames, listEntries, lfoEntries, hyperlinks, tocEntries }
+    if (!tableData || tableData.length === 0) return { chpxRuns, papxRuns, styles, fontNames, listEntries, lfoEntries, hyperlinks, tocEntries, authors, revisions, documentFields, bookmarks, sections, pageFields, crossReferences, shapes, equations, charts: [], wordArts: [] }
 
     try {
       if (fib.lcbPlcfBteChpx > 0 &&
@@ -822,6 +885,42 @@ export class DocParser {
       }
     } catch (e) {
       logger.warn(`CHPX 解析失败: ${e}`)
+    }
+
+    // Parse revision author table (SttbfRMark) and collect revision marks from CHPX runs.
+    try {
+      if (fib.fcSttbfRMark !== undefined && fib.lcbSttbfRMark !== undefined && fib.lcbSttbfRMark > 0 &&
+          fib.fcSttbfRMark + fib.lcbSttbfRMark <= tableData.length) {
+        authors = parseSttbfRMark(tableData, fib.fcSttbfRMark, fib.lcbSttbfRMark)
+        if (authors.length > 0) {
+          logger.info(`解析到 ${authors.length} 个修订作者`)
+        }
+      }
+    } catch (e) {
+      logger.warn(`SttbfRMark 解析失败: ${e}`)
+    }
+
+    for (const run of chpxRuns) {
+      if (run.revision) {
+        const mark: RevisionMark = {
+          cpStart: run.cpStart,
+          cpEnd: run.cpEnd,
+          type: run.revision.type,
+        }
+        if (run.revision.authorIndex !== undefined) {
+          mark.authorIndex = run.revision.authorIndex
+          if (authors.length > 0 && run.revision.authorIndex < authors.length) {
+            mark.author = authors[run.revision.authorIndex]
+          }
+        }
+        if (run.revision.timestamp !== undefined) {
+          mark.timestamp = run.revision.timestamp
+        }
+        revisions.push(mark)
+      }
+    }
+    if (revisions.length > 0) {
+      logger.info(`解析到 ${revisions.length} 个修订标记`)
     }
 
     try {
@@ -905,13 +1004,195 @@ export class DocParser {
           if (tocEntries.length > 0) {
             logger.info(`解析到 ${tocEntries.length} 个目录条目`)
           }
+
+          const fields = extractDocumentFields(fldEntries, text, wordDocData)
+          const fieldCount = Object.keys(fields).length
+          if (fieldCount > 0) {
+            Object.assign(documentFields, fields)
+            logger.info(`解析到 ${fieldCount} 个文档域（AUTHOR/TITLE/DATE 等）`)
+          }
         }
       }
     } catch (e) {
       logger.warn(`域表解析失败: ${e}`)
     }
 
-    return { chpxRuns, papxRuns, styles, fontNames, listEntries, lfoEntries, hyperlinks, tocEntries }
+    // Parse bookmarks (PlcfBkf + PlcfBkl + SttbfBkmk)
+    try {
+      if (fib.fcPlcfBkf !== undefined && fib.lcbPlcfBkf !== undefined &&
+          fib.fcPlcfBkl !== undefined && fib.lcbPlcfBkl !== undefined &&
+          fib.fcSttbfBkmk !== undefined && fib.lcbSttbfBkmk !== undefined) {
+        const parsed = extractBookmarks(
+          tableData,
+          fib.fcPlcfBkf, fib.lcbPlcfBkf,
+          fib.fcPlcfBkl, fib.lcbPlcfBkl,
+          fib.fcSttbfBkmk, fib.lcbSttbfBkmk,
+        )
+        if (parsed.length > 0) {
+          bookmarks = parsed
+          logger.info(`解析到 ${bookmarks.length} 个书签`)
+        }
+      }
+    } catch (e) {
+      logger.warn(`书签解析失败: ${e}`)
+    }
+
+    // Parse sections (PlcfSed + SEPX) — requires WordDocument stream for SEPX
+    try {
+      if (fib.fcPlcfSed !== undefined && fib.lcbPlcfSed !== undefined &&
+          fib.lcbPlcfSed > 0 && wordDocData) {
+        const parsed = extractSections(
+          tableData,
+          wordDocData,
+          fib.fcPlcfSed, fib.lcbPlcfSed,
+        )
+        if (parsed.length > 0) {
+          sections = parsed
+        }
+      }
+    } catch (e) {
+      logger.warn(`分节解析失败: ${e}`)
+    }
+
+    // Parse page fields (PAGE / NUMPAGES / SECTION / SECTIONPAGES)
+    // Reuses the PlcfFld parsing above; extractPageFields matches by instruction text.
+    try {
+      if (fib.lcbPlcfFldMom > 0 &&
+          fib.fcPlcfFldMom + fib.lcbPlcfFldMom <= tableData.length &&
+          wordDocData && text) {
+        const fldEntries = parsePlcfFld(tableData, fib.fcPlcfFldMom, fib.lcbPlcfFldMom)
+        if (fldEntries.length > 0) {
+          const parsed = extractPageFields(fldEntries, text, wordDocData)
+          if (parsed.length > 0) {
+            pageFields = parsed
+            logger.info(`解析到 ${pageFields.length} 个页码域（PAGE/NUMPAGES/SECTION）`)
+          }
+        }
+      }
+    } catch (e) {
+      logger.warn(`页码域解析失败: ${e}`)
+    }
+
+    // Parse cross-references (REF / NOTEREF)
+    // Reuses the PlcfFld parsing above; extractCrossReferences matches by instruction text.
+    try {
+      if (fib.lcbPlcfFldMom > 0 &&
+          fib.fcPlcfFldMom + fib.lcbPlcfFldMom <= tableData.length &&
+          wordDocData && text) {
+        const fldEntries = parsePlcfFld(tableData, fib.fcPlcfFldMom, fib.lcbPlcfFldMom)
+        if (fldEntries.length > 0) {
+          const parsed = extractCrossReferences(fldEntries, text, wordDocData)
+          if (parsed.length > 0) {
+            crossReferences = parsed
+            logger.info(`解析到 ${crossReferences.length} 个交叉引用（REF/NOTEREF）`)
+          }
+        }
+      }
+    } catch (e) {
+      logger.warn(`交叉引用解析失败: ${e}`)
+    }
+
+    // Parse shapes (Office Art Drawing Container)
+    // Floating images have shape anchors that describe their position/size
+    try {
+      const dataEntry = this.ole.findStreamByName(directory, 'Data')
+      if (dataEntry) {
+        const dataStream = this.ole.readStream(dataEntry)
+        if (dataStream.data && dataStream.data.length > 0) {
+          const dataShapes = extractShapesFromDataStream(dataStream.data)
+          if (dataShapes.length > 0) {
+            shapes.push(...dataShapes)
+          }
+        }
+      }
+      if (wordDocData && wordDocData.length > 0) {
+        const docShapes = extractShapesFromWordDocumentStream(wordDocData)
+        for (const shape of docShapes) {
+          if (!shapes.some(s => s.spid === shape.spid)) {
+            shapes.push(shape)
+          }
+        }
+      }
+      if (shapes.length > 0) {
+        logger.info(`解析到 ${shapes.length} 个形状（Office Art Drawing Container）`)
+      }
+    } catch (e) {
+      logger.warn(`形状解析失败: ${e}`)
+    }
+
+    // Parse equations (Equation Editor OLE objects)
+    // Equations are stored as OLE objects with names like "Equation.1", "Equation.2"
+    try {
+      const dirEquations = extractEquationsFromDirectory(directory, (entry) => this.ole.readStream(entry))
+      if (dirEquations.length > 0) {
+        equations.push(...dirEquations)
+        logger.info(`解析到 ${dirEquations.length} 个公式（OLE 对象）`)
+      }
+
+      if (wordDocData && wordDocData.length > 0) {
+        const docEquations = extractEquationsFromWordDocumentStream(wordDocData)
+        for (const eq of docEquations) {
+          if (!equations.some(e => e.eqnText === eq.eqnText)) {
+            equations.push(eq)
+          }
+        }
+        if (docEquations.length > 0) {
+          logger.info(`从 WordDocument 流解析到 ${docEquations.length} 个公式`)
+        }
+      }
+    } catch (e) {
+      logger.warn(`公式解析失败: ${e}`)
+    }
+
+    // 图表解析
+    const charts: ChartInfo[] = []
+    try {
+      const dirCharts = extractChartsFromDirectory(directory, (entry) => this.ole.readStream(entry))
+      if (dirCharts.length > 0) {
+        charts.push(...dirCharts)
+        logger.info(`解析到 ${dirCharts.length} 个图表（OLE 对象）`)
+      }
+
+      if (wordDocData && wordDocData.length > 0) {
+        const docCharts = extractChartsFromWordDocumentStream(wordDocData)
+        for (const chart of docCharts) {
+          if (!charts.some(c => c.name === chart.name)) {
+            charts.push(chart)
+          }
+        }
+        if (docCharts.length > 0) {
+          logger.info(`从 WordDocument 流解析到 ${docCharts.length} 个图表`)
+        }
+      }
+    } catch (e) {
+      logger.warn(`图表解析失败: ${e}`)
+    }
+
+    // WordArt 解析
+    const wordArts: WordArtInfo[] = []
+    try {
+      const dirWordArts = extractWordArtFromDirectory(directory, (entry) => this.ole.readStream(entry))
+      if (dirWordArts.length > 0) {
+        wordArts.push(...dirWordArts)
+        logger.info(`解析到 ${dirWordArts.length} 个 WordArt（OLE 对象）`)
+      }
+
+      if (wordDocData && wordDocData.length > 0) {
+        const docWordArts = extractWordArtFromDrawingData(wordDocData)
+        for (const wa of docWordArts) {
+          if (!wordArts.some(w => w.name === wa.name && w.text === wa.text)) {
+            wordArts.push(wa)
+          }
+        }
+        if (docWordArts.length > 0) {
+          logger.info(`从 WordDocument 流解析到 ${docWordArts.length} 个 WordArt`)
+        }
+      }
+    } catch (e) {
+      logger.warn(`WordArt 解析失败: ${e}`)
+    }
+
+    return { chpxRuns, papxRuns, styles, fontNames, listEntries, lfoEntries, hyperlinks, tocEntries, authors, revisions, documentFields, bookmarks, sections, pageFields, crossReferences, shapes, equations, charts, wordArts }
   }
 
   /**
@@ -946,10 +1227,33 @@ export class DocParser {
     const result: any[] = []
     for (let i = 0; i < allParagraphs.length; i++) {
       const para = allParagraphs[i]
-      const cleaned = this.cleanParagraph(para.text.trim())
+      const rawText = para.text
+      // 检测分页符：段落开头的 \f 表示段前分页
+      let pageBreakBefore = false
+      let textToClean = rawText
+      if (rawText.startsWith('\f')) {
+        pageBreakBefore = true
+        textToClean = rawText.slice(1)
+      }
+      // 段落中间的 \f 也视为分页符（放在下一段前）
+      if (textToClean.includes('\f')) {
+        // 将文本按 \f 分割，第一个部分作为当前段落
+        const firstPart = textToClean.split('\f')[0]
+        const remaining = textToClean.slice(firstPart.length + 1)
+        if (firstPart.trim().length > 0) {
+          textToClean = firstPart
+        } else {
+          pageBreakBefore = true
+          textToClean = remaining
+        }
+      }
+      const cleaned = this.cleanParagraph(textToClean.trim())
       if (!this.shouldSkipParagraph(cleaned) && cleaned.length > 0) {
         const paraFormat = this.detectParagraphFormat(cleaned, i, allParagraphs.length)
         const charFormat = this.guessCharFormat(cleaned, i)
+        if (pageBreakBefore) {
+          paraFormat.pageBreakBefore = true
+        }
         const newPara: any = {
           text: cleaned,
           paraFormat,
@@ -1093,12 +1397,12 @@ export class DocParser {
   private extractFormattedText(
     wordStream: StreamData,
     directory: DirectoryEntry[],
-  ): { paragraphs: any[]; stories?: DocumentStories; chpxRuns?: ChpxRun[]; papxRuns?: PapxRun[]; styles?: StyleDefinition[]; hyperlinks?: FieldRange[]; tocEntries?: TocEntry[] } {
+  ): { paragraphs: any[]; stories?: DocumentStories; chpxRuns?: ChpxRun[]; papxRuns?: PapxRun[]; styles?: StyleDefinition[]; hyperlinks?: FieldRange[]; tocEntries?: TocEntry[]; revisions?: RevisionMark[]; documentFields?: DocumentFields; bookmarks?: BookmarkRange[]; sections?: SectionInfo[]; pageFields?: PageFieldInfo[]; crossReferences?: CrossReferenceInfo[]; shapes?: ShapeInfo[]; equations?: EquationInfo[]; charts?: ChartInfo[]; wordArts?: WordArtInfo[] } {
     const data = wordStream.data
     const fib = parseFib(data)
 
     if (fib && fib.fcMin > 0 && fib.fcMac > 0) {
-      return { paragraphs: this.extractTextWithFormatFromFib(data, fib), tocEntries: [] }
+      return { paragraphs: this.extractTextWithFormatFromFib(data, fib), tocEntries: [], documentFields: {}, equations: [] }
     }
 
     // Prefer CLX-driven extraction: it correctly handles per-piece encoding
@@ -1128,8 +1432,16 @@ export class DocParser {
 
         if (mainText.length > 0) {
           // Parse formats AFTER we have the text (needed for hyperlink extraction)
-          const { chpxRuns, papxRuns, styles, fontNames, listEntries, lfoEntries, hyperlinks, tocEntries } =
+          const { chpxRuns, papxRuns, styles, fontNames, listEntries, lfoEntries, hyperlinks, tocEntries, revisions, documentFields, bookmarks, sections, pageFields, crossReferences, shapes, equations, charts, wordArts } =
             this.parseFormatRuns(fib, directory, data, mainText)
+
+          // Replace page field placeholders in mainText before paragraph splitting.
+          // mainText currently contains instruction+result concatenations like "PAGE1"
+          // (0x13/0x14/0x15 were skipped during extraction). We replace each field's
+          // instruction+result span with just the result so paragraphs show "1" not "PAGE1".
+          if (pageFields.length > 0) {
+            mainText = this.replacePageFieldsInText(mainText, pageFields)
+          }
 
           const hasRealFormats = chpxRuns.length > 0 || papxRuns.length > 0 || styles.length > 0 || listEntries.length > 0
 
@@ -1144,14 +1456,26 @@ export class DocParser {
           }
 
           if (paragraphs.length > 0) {
+            // 提取 DOP 用于页眉页脚拆分
+            const dop = this.extractDop(fib, directory)
             return {
               paragraphs,
-              stories: storyResult ? this.toDocumentStories(storyResult) : undefined,
+              stories: storyResult ? this.toDocumentStories(storyResult, fib, dop, directory, chpxRuns) : undefined,
               chpxRuns,
               papxRuns,
               styles,
               hyperlinks,
               tocEntries,
+              revisions,
+              documentFields,
+              bookmarks,
+              sections,
+              pageFields,
+              crossReferences,
+              shapes,
+              equations,
+              charts,
+              wordArts,
             }
           }
         }
@@ -1178,15 +1502,116 @@ export class DocParser {
   /**
    * Convert internal StoryText to the public DocumentStories shape.
    * Drops empty fields so the UI can simply check `stories?.footnotes`.
+   *
+   * 当 DOP 标志位启用首页不同/奇偶页不同时，尝试通过 PlcfHdd 将 headers
+   * story 拆分为首页/奇数页/偶数页页眉页脚。PlcfHdd 不可用时回退到
+   * 启发式段落拆分。
    */
-  private toDocumentStories(stories: StoryText): DocumentStories {
+  private toDocumentStories(
+    stories: StoryText,
+    fib?: FibData,
+    dop?: DopData | null,
+    directory?: DirectoryEntry[],
+    chpxRuns: ChpxRun[] = []
+  ): DocumentStories {
     const out: DocumentStories = {}
     if (stories.headers.trim()) out.headers = stories.headers.trim()
     if (stories.footnotes.trim()) out.footnotes = stories.footnotes.trim()
     if (stories.endnotes.trim()) out.endnotes = stories.endnotes.trim()
     if (stories.comments.trim()) out.comments = stories.comments.trim()
     if (stories.textboxes.trim()) out.textboxes = stories.textboxes.trim()
+
+    // 尝试拆分页眉页脚（仅当 DOP 标志位启用时）
+    if (out.headers && dop && (dop.titlePage || dop.facingPages)) {
+      const headerParts = this.splitHeaderParts(stories.headers, fib, dop, directory, chpxRuns)
+      if (headerParts) {
+        out.headerParts = headerParts.textParts
+        if (headerParts.startsWithImages) {
+          out.headerPartsWithImages = headerParts.startsWithImages
+        }
+      }
+    }
+
     return out
+  }
+
+  /**
+   * 拆分页眉页脚 story 文本为首页/奇数页/偶数页页眉页脚。
+   *
+   * 优先使用 PlcfHdd 精确拆分；PlcfHdd 不可用时回退到启发式段落拆分。
+   * 如果提供了 chpxRuns，同时提取页眉页脚区域中的图片。
+   */
+  private splitHeaderParts(
+    headersText: string,
+    fib?: FibData,
+    dop?: DopData | null,
+    directory?: DirectoryEntry[],
+    chpxRuns: ChpxRun[] = []
+  ): { textParts: Partial<Record<HeaderFooterPartType, string>>; startsWithImages?: Partial<Record<HeaderFooterPartType, HeaderFooterPartContent>> } | null {
+    if (!headersText || !dop) return null
+
+    // 提取页眉页脚区域中的图片（通过 chpxRuns 中的 fcPic）
+    const headerPictures: ParsedPicture[] = []
+    if (chpxRuns.length > 0 && directory) {
+      const dataEntry = this.ole.findStreamByName(directory, 'Data')
+      if (dataEntry) {
+        const dataStream = this.ole.readStream(dataEntry)
+        if (dataStream.data && dataStream.data.length > 0) {
+          const seenFcPics = new Set<number>()
+          for (const run of chpxRuns) {
+            if (run.fcPic !== undefined && !seenFcPics.has(run.fcPic)) {
+              seenFcPics.add(run.fcPic)
+              const pic = parsePicfAt(dataStream.data, run.fcPic)
+              if (pic) {
+                headerPictures.push(pic)
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // 策略 1：通过 PlcfHdd 精确拆分
+    if (fib && fib.lcbPlcfHdd && fib.lcbPlcfHdd > 0 && fib.fcPlcfHdd && directory) {
+      try {
+        const tableData = this.readTableStream(fib, directory)
+        if (tableData) {
+          const end = fib.fcPlcfHdd + fib.lcbPlcfHdd
+          if (end <= tableData.length) {
+            const plcfHddData = tableData.subarray(fib.fcPlcfHdd, end)
+            const split = parsePlcfHdd(plcfHddData, dop.titlePage, dop.facingPages)
+            if (split) {
+              const textParts = splitHeaderText(headersText, split)
+              if (textParts) {
+                logger.log(`页眉页脚通过 PlcfHdd 拆分成功: ${Object.keys(textParts).length} 部分`)
+                
+                // 如果有图片，尝试按子范围拆分图片
+                let startsWithImages: Partial<Record<HeaderFooterPartType, HeaderFooterPartContent>> | undefined
+                if (headerPictures.length > 0) {
+                  const withImages = splitHeaderTextWithImages(headersText, split, headerPictures)
+                  if (withImages && Object.keys(withImages).length > 0) {
+                    startsWithImages = withImages
+                    logger.log(`页眉页脚图片拆分成功: ${Object.keys(withImages).length} 部分包含图片`)
+                  }
+                }
+                
+                return { textParts, startsWithImages }
+              }
+            }
+          }
+        }
+      } catch (e) {
+        logger.warn(`PlcfHdd 拆分失败，回退到启发式: ${e}`)
+      }
+    }
+
+    // 策略 2：启发式段落拆分（不支持图片拆分）
+    const textParts = splitHeaderTextHeuristic(headersText, dop.titlePage, dop.facingPages)
+    if (textParts) {
+      return { textParts }
+    }
+
+    return null
   }
 
   /**
@@ -1249,6 +1674,111 @@ export class DocParser {
       return imagesToDataUrls(unique as any)
     } catch (err) {
       logger.warn('图片提取失败:', err instanceof Error ? err.message : String(err))
+      return []
+    }
+  }
+
+  /**
+   * Extract embedded pictures with structured info (format, dimensions, etc.)
+   *
+   * Uses PICF envelope detection when possible, falling back to magic-number
+   * scanning. Returns structured picture objects instead of plain data URLs.
+   */
+  private extractPictures(
+    directory: DirectoryEntry[],
+    chpxRuns: ChpxRun[] = [],
+  ): Array<{
+    format: string
+    dataUrl: string
+    widthPx?: number
+    heightPx?: number
+    floating?: boolean
+    cp?: number
+  }> {
+    try {
+      const dataEntry = this.ole.findStreamByName(directory, 'Data')
+      if (!dataEntry) return []
+
+      const dataStream = this.ole.readStream(dataEntry)
+      if (!dataStream.data || dataStream.data.length < 64) return []
+
+      const pictures: ParsedPicture[] = []
+      const seenFcPics = new Set<number>()
+
+      for (const run of chpxRuns) {
+        if (run.fcPic === undefined) continue
+        if (seenFcPics.has(run.fcPic)) continue
+        seenFcPics.add(run.fcPic)
+        const pic = parsePicfAt(dataStream.data, run.fcPic)
+        if (pic) {
+          pic.dataOffset = run.fcPic
+          pictures.push(pic)
+        }
+      }
+
+      if (pictures.length === 0) {
+        const scanned = extractPicturesFromDataStream(dataStream.data)
+        pictures.push(...scanned.slice(0, DocParser.MAX_IMAGES))
+      }
+
+      if (pictures.length === 0) return []
+
+      const result: Array<{
+        format: string
+        dataUrl: string
+        widthPx?: number
+        heightPx?: number
+        floating?: boolean
+        cp?: number
+      }> = []
+
+      for (const pic of pictures) {
+        if (pic.format === 'unknown') continue
+        if (result.length >= DocParser.MAX_IMAGES) break
+
+        let binary = ''
+        const bytes = pic.data
+        const chunkSize = 0x8000
+        for (let i = 0; i < bytes.length; i += chunkSize) {
+          const slice = bytes.subarray(i, Math.min(i + chunkSize, bytes.length))
+          binary += String.fromCharCode.apply(
+            null,
+            Array.from(slice) as unknown as number[],
+          )
+        }
+        const mime =
+          pic.format === 'png'
+            ? 'image/png'
+            : pic.format === 'jpeg'
+              ? 'image/jpeg'
+              : pic.format === 'gif'
+                ? 'image/gif'
+                : pic.format === 'bmp'
+                  ? 'image/bmp'
+                  : 'application/octet-stream'
+        const dataUrl = `data:${mime};base64,${btoa(binary)}`
+
+        const item: {
+          format: string
+          dataUrl: string
+          widthPx?: number
+          heightPx?: number
+          floating?: boolean
+          cp?: number
+        } = {
+          format: pic.format,
+          dataUrl,
+        }
+        if (pic.widthPx !== undefined) item.widthPx = pic.widthPx
+        if (pic.heightPx !== undefined) item.heightPx = pic.heightPx
+        if (pic.floating !== undefined) item.floating = pic.floating
+
+        result.push(item)
+      }
+
+      return result
+    } catch (err) {
+      logger.warn('结构化图片提取失败:', err instanceof Error ? err.message : String(err))
       return []
     }
   }
@@ -1893,6 +2423,37 @@ export class DocParser {
     if (totalWeird > text.length * 0.4) return { ...para, text: '' }
 
     return para
+  }
+
+  /**
+   * 替换 mainText 中的页码域占位文本。
+   *
+   * 由于 extractTextFromRange 跳过了 0x13/0x14/0x15 域字符，mainText 中页码域的
+   * instruction 和 result 连在一起（如 "PAGE1"、"NUMPAGES5"）。本方法将每个域的
+   * instruction+result 连接串替换为纯 result，使段落显示为页码而非域代码。
+   *
+   * 策略：
+   * 1. 对每个页码域，构建搜索串 = instruction.trim() + result
+   * 2. 在 mainText 中搜索该串，替换为 result
+   * 3. 由于 instruction 通常包含开关（如 "PAGE \* MERGEFORMAT"），搜索串足够独特
+   * 4. 仅替换第一个匹配，避免误伤正文
+   *
+   * 若搜索串未找到匹配（mainText 偏移与 cp 不一致等情况），该域保留原状，
+   * 由 cleanWordFieldCodes 的启发式清理兜底。
+   */
+  private replacePageFieldsInText(text: string, pageFields: PageFieldInfo[]): string {
+    let result = text
+    for (const field of pageFields) {
+      const instruction = field.instruction.trim()
+      const searchStr = instruction + field.result
+      if (searchStr.length === 0) continue
+      // 仅替换第一个匹配，避免误伤
+      const idx = result.indexOf(searchStr)
+      if (idx >= 0) {
+        result = result.slice(0, idx) + field.result + result.slice(idx + searchStr.length)
+      }
+    }
+    return result
   }
 
   private isValidChar(charCode: number): boolean {

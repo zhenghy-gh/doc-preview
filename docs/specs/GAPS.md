@@ -131,11 +131,11 @@
 |------|------|----------|------|--------|------|
 | 表格行检测 | ✅ | MS-DOC §2.6 | tableText.ts / docParser.ts | — | 同时支持 0x07 单元格终结符与 tab 分隔 |
 | 单元格内容提取 | ✅ | MS-DOC §2.6 | tableText.ts | — | `splitTableCells` 优先按 0x07 切分 |
-| 表格结构重建 | ⚠️ | MS-DOC §2.6 | DocPreview.vue | 中 | 连续行拼接为 `<table>`，但不解析 TAP |
-| 合并单元格 | ❌ | MS-DOC §2.6 | 新模块 | 中 | 需解析 TAP 的 rgtc / TC.fVertMerge |
-| 表格边框 | ❌ | MS-DOC §2.6 | 新模块 | 低 | 需解析 TAP 的 brcTop/Left/Bottom/Right/InsideH/InsideV |
+| 表格结构重建 | ✅ | MS-DOC §2.6 | DocPreview.vue / tableText.ts | — | 连续行拼接为 `<table>`，已解析 TAP 表属性 |
+| 合并单元格 | ✅ | MS-DOC §2.6 | formatParser.ts / tableText.ts | — | sprmTDefTable 的 rgtc / TC.fVertMerge，rowspan 渲染 |
+| 表格边框 | ✅ | MS-DOC §2.6 | formatParser.ts / tableText.ts | — | sprmTTableBorders 的 brcTop/Left/Bottom/Right/InsideH/InsideV → CSS border |
 
-> **当前状态**：基于 0x07 单元格终结符识别真实 Word 表格行，连续行拼接为 HTML `<table>`；不解析 TAP 表属性，故不支持单元格合并与边框还原。
+> **当前状态**：基于 0x07 单元格终结符识别真实 Word 表格行，连续行拼接为 HTML `<table>`；已实现 TAP（Table Properties）SPRM 解析：sprmPFInTable / sprmPTableDepth 标记表格段落与嵌套深度，sprmTDefTable 解析 rgtc 提取 fVertMerge 实现 rowspan 垂直合并，sprmTTableBorders 解析 6 个 Brc 还原表格边框（top/left/bottom/right/insideH/insideV）并映射到 CSS border。
 
 ---
 
@@ -159,12 +159,13 @@
 | 功能 | 状态 | 规范章节 | 模块 | 优先级 | 备注 |
 |------|------|----------|------|--------|------|
 | Data 流读取 | ✅ | MS-DOC | oleParser.ts | 中 | 通过 `findStreamByName('Data')` 读取 |
-| 嵌入式图片提取 | ⚠️ 启发式 | MS-DOC §2.9 | imageExtractor.ts | 高 | 扫描 Data 流魔数（PNG/JPEG/BMP/GIF），未解析 PICF |
-| 浮动图片 | ❌ | MS-DOC §2.9 | 新模块 | 中 | |
-| 图片格式识别 | ⚠️ | MS-DOC §2.9 | imageExtractor.ts | 中 | 支持 PNG/JPEG/BMP/GIF；WMF/EMF 跳过（误报率高） |
-| 图片渲染 | ✅ | N/A | DocPreview.vue | 高 | UI 折叠面板展示 data URL 图片 |
+| 嵌入式图片提取 | ✅ PICF | MS-DOC §2.9 | pictureParser.ts | 高 | PICF 结构解析 + CHPX fcPic 定位；保留魔数扫描回退 |
+| 浮动图片 | ⚠️ 部分 | MS-DOC §2.9 | pictureParser.ts | 中 | 可通过 PICF 提取图片；形状锚点定位待完善 |
+| 图片格式识别 | ✅ | MS-DOC §2.9 | pictureParser.ts | 中 | 支持 PNG/JPEG/BMP/GIF；WMF/EMF 跳过（误报率高） |
+| 图片渲染 | ✅ | N/A | DocPreview.vue | 高 | 折叠面板展示，含格式/尺寸/浮动状态元数据 |
 | 形状 (Shape) | ❌ | MS-DOC §2.9 | 新模块 | 低 | |
 | 文本框内容 | ✅ | MS-DOC | docParser.ts | 中 | ccpTxbx + ccpHdrTxbx 已分流到 stories.textboxes |
+| SPRM sprmCFSpec/sprmCPicLocation | ✅ | MS-DOC §2.6.1 | formatParser.ts | 中 | fSpec 特殊字符标志 + fcPic Data 流偏移 |
 
 ---
 
@@ -185,7 +186,7 @@
 | 列表 (List) | ✅ 规范解析 | MS-DOC §2.8 | listParser.ts + formatParser.ts + docParser.ts | 中 | 已实现 LST/LVLF 解析、sprmPIlvl/ilst/ilfo 提取、getListFormat 格式映射；启发式降为备用方案 |
 | 超链接 | ✅ | MS-DOC §2.8 | fieldParser.ts + docParser.ts + DocPreview.vue | 中 | 已实现 PlcfFld 解析、HYPERLINK 提取、渲染可点击 `<a>` 标签 |
 | 批注 (Comments) | ✅ | MS-DOC | docParser.ts | — | ccpAtn 已分流到 stories.comments |
-| 修订 (Track Changes) | ✅ 基础 | MS-DOC §2.8.55 | dopParser.ts | 低 | 已解析 DOP 的 fRMW 标志（修订模式开关），UI 展示；不解析具体修订内容 |
+| 修订 (Track Changes) | ✅ 内容解析 | MS-DOC §2.8.55 / §2.4.3 | revisionParser.ts / formatParser.ts / dopParser.ts | 中 | 已解析 DOP fRMW 开关 + SttbfRMark 作者表（FIB 索引 90/91）+ RMRK 结构（ibstRMark + DTTM）；通过 sprmCFRMark/sprmCFRMarkDel/sprmCRMark/sprmCRMarkDel 提取插入/删除修订范围、作者、时间 |
 | 脚注 / 尾注 | ✅ | MS-DOC | docParser.ts | — | 见 §8（ccpFtn / ccpEdn） |
 | 目录 (TOC) | ✅ | MS-DOC §2.8 | fieldParser.ts + docParser.ts + DocPreview.vue | 中 | 已实现 PlcfFld 解析、TOC 域提取、层级渲染 |
 | 宏 (VBA) | ❌ | 不支持 | N/A | — | 安全考虑，不计划支持 |
@@ -209,7 +210,7 @@
 
 ### 阶段二：内容完整性
 
-6. ✅ 表格支持（基础）— 0x07 单元格终结符识别真实 Word 表格行，连续行渲染为 HTML `<table>`；暂不支持合并单元格与边框
+6. ✅ 表格支持 — 0x07 单元格终结符识别真实 Word 表格行 + 连续行渲染为 HTML `<table>`；TAP 增强已完成：sprmTDefTable 解析合并单元格（rowspan）、sprmTTableBorders 还原表格边框
 7. ✅ 图片支持（启发式）— 扫描 Data 流魔数提取 PNG/JPEG/BMP/GIF，UI 折叠面板展示
 8. 📋 超链接支持 — 可点击的 URL
 9. 📋 文档属性 — 显示标题/作者等元信息
@@ -223,8 +224,8 @@
 
 ### 阶段四：锦上添花
 
-14. 批注显示
-15. 修订模式显示
+14. ✅ 批注显示 — ccpAtn 已分流到 stories.comments，UI 折叠面板展示
+15. ✅ 修订模式显示 — DOP fRMW 开关 + SttbfRMark 作者表 + RMRK（作者/时间/类型）已解析，UI 渲染插入下划线/删除删除线 + 作者 tooltip
 16. 形状/文本框
 17. 更多域支持
 

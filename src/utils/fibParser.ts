@@ -63,6 +63,30 @@ export interface FibData {
   fcDop: number
   /** Length of DOP. */
   lcbDop: number
+  /** Offset of SttbfRMark (revision author table) in table stream. Optional — only set when cbRgFcLcb is large enough. */
+  fcSttbfRMark?: number
+  /** Length of SttbfRMark. */
+  lcbSttbfRMark?: number
+  /** Offset of PlcfBkf (bookmark starts) in table stream. Optional. */
+  fcPlcfBkf?: number
+  /** Length of PlcfBkf. */
+  lcbPlcfBkf?: number
+  /** Offset of PlcfBkl (bookmark ends) in table stream. Optional. */
+  fcPlcfBkl?: number
+  /** Length of PlcfBkl. */
+  lcbPlcfBkl?: number
+  /** Offset of SttbfBkmk (bookmark name table) in table stream. Optional. */
+  fcSttbfBkmk?: number
+  /** Length of SttbfBkmk. */
+  lcbSttbfBkmk?: number
+  /** Offset of PlcfSed (section descriptor table) in table stream. Optional. */
+  fcPlcfSed?: number
+  /** Length of PlcfSed. */
+  lcbPlcfSed?: number
+  /** Offset of PlcfHdd (header/footer position table) in table stream. Optional. */
+  fcPlcfHdd?: number
+  /** Length of PlcfHdd. */
+  lcbPlcfHdd?: number
 }
 
 /** Empty rgCcp used for early-return fallbacks. */
@@ -231,6 +255,8 @@ export function parseFib(data: Uint8Array): FibData | null {
     let lcbPlcfFldMom = 0
     let fcDop = 0
     let lcbDop = 0
+    let fcSttbfRMark = 0
+    let lcbSttbfRMark = 0
     if (cbRgFcLcb >= 16) {
       fcPlcfBteChpx = readDwordAt(data, blobStart + 28 * 4) & 0x3FFFFFFF
       lcbPlcfBteChpx = readDwordAt(data, blobStart + 29 * 4)
@@ -268,6 +294,49 @@ export function parseFib(data: Uint8Array): FibData | null {
         fcDop = readDwordAt(data, blobStart + 62 * 4) & 0x3FFFFFFF
         lcbDop = readDwordAt(data, blobStart + 63 * 4)
       }
+      // fcSttbfRMark/lcbSttbfRMark: revision author table (STTB) in table stream.
+      // Per MS-DOC §2.5.5 FibRgFcLcb97, sits at 4-byte index 90/91
+      // (byte offset 360/364). Read when cbRgFcLcb >= 92.
+      if (cbRgFcLcb >= 92) {
+        fcSttbfRMark = readDwordAt(data, blobStart + 90 * 4) & 0x3FFFFFFF
+        lcbSttbfRMark = readDwordAt(data, blobStart + 91 * 4)
+      }
+    }
+
+    // Bookmark tables (MS-DOC §2.5.5 FibRgFcLcb97):
+    // - PlcfBkf (bookmark starts): 4-byte index 76/77, read when cbRgFcLcb >= 78
+    // - PlcfBkl (bookmark ends): 4-byte index 78/79, read when cbRgFcLcb >= 80
+    // - SttbfBkmk (bookmark names): 4-byte index 80/81, read when cbRgFcLcb >= 82
+    let fcPlcfBkf = 0, lcbPlcfBkf = 0
+    let fcPlcfBkl = 0, lcbPlcfBkl = 0
+    let fcSttbfBkmk = 0, lcbSttbfBkmk = 0
+    if (cbRgFcLcb >= 78) {
+      fcPlcfBkf = readDwordAt(data, blobStart + 76 * 4) & 0x3FFFFFFF
+      lcbPlcfBkf = readDwordAt(data, blobStart + 77 * 4)
+    }
+    if (cbRgFcLcb >= 80) {
+      fcPlcfBkl = readDwordAt(data, blobStart + 78 * 4) & 0x3FFFFFFF
+      lcbPlcfBkl = readDwordAt(data, blobStart + 79 * 4)
+    }
+    if (cbRgFcLcb >= 82) {
+      fcSttbfBkmk = readDwordAt(data, blobStart + 80 * 4) & 0x3FFFFFFF
+      lcbSttbfBkmk = readDwordAt(data, blobStart + 81 * 4)
+    }
+    // PlcfSed (section descriptor table): 4-byte index 86/87
+    // (byte offset 344/348). Read when cbRgFcLcb >= 88.
+    let fcPlcfSed = 0, lcbPlcfSed = 0
+    if (cbRgFcLcb >= 88) {
+      fcPlcfSed = readDwordAt(data, blobStart + 86 * 4) & 0x3FFFFFFF
+      lcbPlcfSed = readDwordAt(data, blobStart + 87 * 4)
+    }
+    // PlcfHdd (header/footer position table): 4-byte index 72/73
+    // (byte offset 288/292). Read when cbRgFcLcb >= 74.
+    // Per MS-DOC §2.5.5 FibRgFcLcb97, PlcfHdd defines CP boundaries that
+    // split the ccpHdd story into per-section header/footer sub-ranges.
+    let fcPlcfHdd = 0, lcbPlcfHdd = 0
+    if (cbRgFcLcb >= 74) {
+      fcPlcfHdd = readDwordAt(data, blobStart + 72 * 4) & 0x3FFFFFFF
+      lcbPlcfHdd = readDwordAt(data, blobStart + 73 * 4)
     }
 
     logger.log(
@@ -287,7 +356,8 @@ export function parseFib(data: Uint8Array): FibData | null {
       `fcLst=0x${fcLst.toString(16)} lcbLst=${lcbLst} ` +
       `fcPlcfLfo=0x${fcPlcfLfo.toString(16)} lcbPlcfLfo=${lcbPlcfLfo} ` +
       `fcPlcfFldMom=0x${fcPlcfFldMom.toString(16)} lcbPlcfFldMom=${lcbPlcfFldMom} ` +
-      `fcDop=0x${fcDop.toString(16)} lcbDop=${lcbDop}`
+      `fcDop=0x${fcDop.toString(16)} lcbDop=${lcbDop} ` +
+      `fcSttbfRMark=0x${fcSttbfRMark.toString(16)} lcbSttbfRMark=${lcbSttbfRMark}`
     )
 
     return {
@@ -297,6 +367,10 @@ export function parseFib(data: Uint8Array): FibData | null {
       fcLst, lcbLst, fcPlcfLfo, lcbPlcfLfo,
       fcPlcfFldMom, lcbPlcfFldMom,
       fcDop, lcbDop,
+      fcSttbfRMark, lcbSttbfRMark,
+      fcPlcfBkf, lcbPlcfBkf, fcPlcfBkl, lcbPlcfBkl, fcSttbfBkmk, lcbSttbfBkmk,
+      fcPlcfSed, lcbPlcfSed,
+      fcPlcfHdd, lcbPlcfHdd,
     }
   } catch (error) {
     logger.error(`FIB解析错误: ${error}`)

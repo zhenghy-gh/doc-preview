@@ -1,4 +1,4 @@
-import type { TableInfo } from './docFormat'
+import type { TableInfo, TableCellInfo } from './docFormat'
 
 /**
  * Cell delimiter used by Word 97-2003 binary format (.doc) inside table
@@ -25,14 +25,11 @@ const CELL_MARK = '\u0007'
 export function splitTableCells(text: string): string[] | null {
   if (!text) return null
 
-  // Mode 1: Word table cell marks (0x07).
   if (text.includes(CELL_MARK)) {
     const cells = text
       .replace(/\u00a0/g, ' ')
       .split(CELL_MARK)
       .map(cell => cell.trim())
-    // A trailing empty cell from the final row mark is expected; drop it
-    // only when it's the last element and empty.
     if (cells.length > 0 && cells[cells.length - 1] === '') {
       cells.pop()
     }
@@ -41,7 +38,6 @@ export function splitTableCells(text: string): string[] | null {
     return cells
   }
 
-  // Mode 2: tab-separated (legacy fallback).
   if (!text.includes('\t')) return null
   const cells = text
     .replace(/\u00a0/g, ' ')
@@ -56,15 +52,8 @@ export function isTableRowText(text: string): boolean {
   return splitTableCells(text) !== null
 }
 
-/**
- * Detect a Word table row by the presence of the cell mark (0x07).
- * This is more reliable than tab detection because Word inserts 0x07
- * unambiguously for real table cells.
- */
 export function isWordTableRow(text: string): boolean {
   if (!text) return false
-  // A real Word table row has at least one cell mark; require at least
-  // one non-empty cell so stray BELs don't trigger false positives.
   const cells = text.split(CELL_MARK).map(c => c.trim())
   return cells.filter(c => c.length > 0).length >= 1 && text.includes(CELL_MARK)
 }
@@ -73,15 +62,15 @@ export function renderTableHtml(rows: string[][], rowsTableInfo?: TableInfo[]): 
   if (!rows || rows.length === 0) return ''
 
   const columnCount = rows.reduce((max, row) => Math.max(max, row.length), 0)
-  const hasMergeInfo = rowsTableInfo && rowsTableInfo.length > 0 &&
+  const hasCellInfo = rowsTableInfo && rowsTableInfo.length > 0 &&
     rowsTableInfo.some(t => t && t.cells && t.cells.length > 0)
 
-  // Use the first row's borders (table-level) for the <table> element styling.
   const tableBorders = rowsTableInfo?.find(t => t && t.borders)?.borders
-  const tableStyle = buildTableBorderStyle(tableBorders)
+  const tableJustification = rowsTableInfo?.find(t => t && t.justification)?.justification
+  const tableIndent = rowsTableInfo?.find(t => t && t.indentTwips !== undefined)?.indentTwips
+  const tableStyle = buildTableBorderStyle(tableBorders, tableJustification, tableIndent)
 
-  if (!hasMergeInfo) {
-    // Original simple rendering path (no vertical merge info available).
+  if (!hasCellInfo) {
     const escapedRows = rows.map(row => {
       const cells = []
       for (let i = 0; i < columnCount; i++) {
@@ -92,11 +81,6 @@ export function renderTableHtml(rows: string[][], rowsTableInfo?: TableInfo[]): 
     return `<table${tableStyle ? ` style="${tableStyle}"` : ''}><tbody>${escapedRows.join('')}</tbody></table>`
   }
 
-  // Enhanced rendering path: account for verticalMerge to emit rowspan.
-  // Build a column-major scan: for each row, decide if a cell is:
-  //   - 'skip'    : merged into a cell above (continue)
-  //   - 'restart' : start of a merged range; compute rowspan by scanning down
-  //   - 'none'    : normal standalone cell
   const htmlRows: string[] = []
   for (let r = 0; r < rows.length; r++) {
     const row = rows[r]
@@ -104,16 +88,15 @@ export function renderTableHtml(rows: string[][], rowsTableInfo?: TableInfo[]): 
     const cellsHtml: string[] = []
     for (let c = 0; c < columnCount; c++) {
       const cellInfo = info?.cells?.[c]
-      const merge = cellInfo?.verticalMerge
+      const vMerge = cellInfo?.verticalMerge
+      const hMerge = cellInfo?.horizontalMerge
 
-      if (merge === 'continue') {
-        // This cell is covered by a rowspan from above; emit nothing.
+      if (vMerge === 'continue' || hMerge === 'continue') {
         continue
       }
 
       let rowspan = 1
-      if (merge === 'restart') {
-        // Count how many rows below have 'continue' for this column.
+      if (vMerge === 'restart') {
         for (let rr = r + 1; rr < rows.length; rr++) {
           const belowInfo = rowsTableInfo?.[rr]?.cells?.[c]
           if (belowInfo?.verticalMerge === 'continue') {
@@ -124,9 +107,24 @@ export function renderTableHtml(rows: string[][], rowsTableInfo?: TableInfo[]): 
         }
       }
 
+      let colspan = 1
+      if (hMerge === 'restart') {
+        for (let cc = c + 1; cc < columnCount; cc++) {
+          const rightInfo = info?.cells?.[cc]
+          if (rightInfo?.horizontalMerge === 'continue') {
+            colspan++
+          } else {
+            break
+          }
+        }
+      }
+
       const text = row[c] || ''
       const rowspanAttr = rowspan > 1 ? ` rowspan="${rowspan}"` : ''
-      cellsHtml.push(`<td${rowspanAttr}>${escapeHtml(text)}</td>`)
+      const colspanAttr = colspan > 1 ? ` colspan="${colspan}"` : ''
+      const cellStyle = buildCellStyle(cellInfo)
+      const styleAttr = cellStyle ? ` style="${cellStyle}"` : ''
+      cellsHtml.push(`<td${rowspanAttr}${colspanAttr}${styleAttr}>${escapeHtml(text)}</td>`)
     }
     htmlRows.push(`<tr>${cellsHtml.join('')}</tr>`)
   }
@@ -134,55 +132,72 @@ export function renderTableHtml(rows: string[][], rowsTableInfo?: TableInfo[]): 
   return `<table${tableStyle ? ` style="${tableStyle}"` : ''}><tbody>${htmlRows.join('')}</tbody></table>`
 }
 
-/**
- * Build an inline CSS style string for the <table> element from TableBorders.
- *
- * We map Word border styles to CSS in a deliberately simple way:
- *   - Table-level top/bottom/left/right → outer border
- *   - insideH / insideV → border-collapse + td border
- *
- * For simplicity we apply the most prominent border to the table itself
- * and let cells inherit via `border-collapse: collapse`.
- */
-function buildTableBorderStyle(borders?: TableInfo['borders']): string {
-  if (!borders) return ''
+function buildCellStyle(cellInfo?: TableCellInfo): string {
+  if (!cellInfo) return ''
   const parts: string[] = []
-  const top = borderToCss(borders.top)
-  const bottom = borderToCss(borders.bottom)
-  const left = borderToCss(borders.left)
-  const right = borderToCss(borders.right)
-  const insideH = borderToCss(borders.insideH)
-  const insideV = borderToCss(borders.insideV)
 
-  // If we have any inside borders, use border-collapse so cells share borders.
-  if (insideH || insideV) {
-    parts.push('border-collapse:collapse')
+  if (cellInfo.borders) {
+    const top = borderToCss(cellInfo.borders.top)
+    const left = borderToCss(cellInfo.borders.left)
+    const bottom = borderToCss(cellInfo.borders.bottom)
+    const right = borderToCss(cellInfo.borders.right)
+    if (top) parts.push(`border-top:${top}`)
+    if (left) parts.push(`border-left:${left}`)
+    if (bottom) parts.push(`border-bottom:${bottom}`)
+    if (right) parts.push(`border-right:${right}`)
   }
 
-  // Outer borders on the <table>.
-  const outerParts: string[] = []
-  if (top) outerParts.push(`border-top:${top}`)
-  if (bottom) outerParts.push(`border-bottom:${bottom}`)
-  if (left) outerParts.push(`border-left:${left}`)
-  if (right) outerParts.push(`border-right:${right}`)
-  // Apply inner borders to td via the table style (CSS doesn't cascade to td
-  // border directly, so we emit a minimal style that the renderer can keep).
-  // We keep this simple: emit outer borders on the table; inside borders are
-  // applied per-cell by buildCellStyle when available.
-  parts.push(...outerParts)
+  if (cellInfo.widthTwips && cellInfo.widthTwips > 0) {
+    const widthPx = Math.round(cellInfo.widthTwips / 15)
+    parts.push(`width:${widthPx}px`)
+  }
+
   return parts.join(';')
 }
 
-/**
- * Convert a Word Brc border style to a CSS border shorthand string.
- * Returns empty string for "no border".
- */
+function buildTableBorderStyle(
+  borders?: TableInfo['borders'],
+  justification?: 'left' | 'center' | 'right',
+  indentTwips?: number,
+): string {
+  const parts: string[] = []
+
+  if (borders) {
+    const top = borderToCss(borders.top)
+    const bottom = borderToCss(borders.bottom)
+    const left = borderToCss(borders.left)
+    const right = borderToCss(borders.right)
+    const insideH = borderToCss(borders.insideH)
+    const insideV = borderToCss(borders.insideV)
+
+    if (insideH || insideV) {
+      parts.push('border-collapse:collapse')
+    }
+
+    if (top) parts.push(`border-top:${top}`)
+    if (bottom) parts.push(`border-bottom:${bottom}`)
+    if (left) parts.push(`border-left:${left}`)
+    if (right) parts.push(`border-right:${right}`)
+  }
+
+  // Table alignment via margin: auto for center, margin-left for indent.
+  if (justification === 'center') {
+    parts.push('margin-left:auto', 'margin-right:auto')
+  } else if (justification === 'right') {
+    parts.push('margin-left:auto', 'margin-right:0')
+  } else if (indentTwips && indentTwips > 0) {
+    const indentPx = Math.round(indentTwips / 15)
+    parts.push(`margin-left:${indentPx}px`)
+  }
+
+  return parts.join(';')
+}
+
 function borderToCss(border?: { colorIndex?: number; lineWidth?: number; borderType?: number }): string {
   if (!border) return ''
-  // borderType 0 = no border
   if (border.borderType === 0) return ''
-  const widthPt = (border.lineWidth ?? 4) / 8 // 1/8 pt → pt
-  const widthPx = Math.max(1, Math.round(widthPt * 4 / 3)) // pt → px (approx)
+  const widthPt = (border.lineWidth ?? 4) / 8
+  const widthPx = Math.max(1, Math.round(widthPt * 4 / 3))
   const style = borderTypeToCss(border.borderType)
   const color = colorIndexToCss(border.colorIndex)
   return `${widthPx}px ${style} ${color}`
@@ -190,19 +205,18 @@ function borderToCss(border?: { colorIndex?: number; lineWidth?: number; borderT
 
 function borderTypeToCss(type?: number): string {
   switch (type) {
-    case 1: return 'solid'      // single
-    case 2: return 'dotted'     // dotted
-    case 3: return 'dashed'     // dashed
-    case 4: return 'double'     // thin double
-    case 5: return 'double'     // double
-    case 6: return 'solid'      // thick (rendered as solid, wider)
-    case 7: return 'dash-dot'   // dot-dash
+    case 1: return 'solid'
+    case 2: return 'dotted'
+    case 3: return 'dashed'
+    case 4: return 'double'
+    case 5: return 'double'
+    case 6: return 'solid'
+    case 7: return 'dash-dot'
     default: return 'solid'
   }
 }
 
 function colorIndexToCss(idx?: number): string {
-  // Same mapping as formatParser's SHD_COLOR_MAP (Word 16-color palette).
   switch (idx) {
     case 1: return '#000000'
     case 2: return '#0000FF'

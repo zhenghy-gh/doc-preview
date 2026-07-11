@@ -93,12 +93,15 @@
 - ✅ 列表和编号还原（LST/LVLF/PlcfLfo 完整解析 + sprmPIlvl/ilst/ilfo + getListFormat 格式映射；启发式降为备用方案）
 - ✅ 超链接解析（PlcfFld + HYPERLINK 域提取已实现 + 集成到渲染，输出可点击 `<a>` 标签）
 - ✅ 文档属性（SummaryInformation + DocumentSummaryInformation 双流解析 + UI 展示全部属性）
-- ✅ 表格结构识别（基础：0x07 单元格终结符 + 连续行拼接为 HTML `<table>`，暂不支持 TAP 合并/边框）
+- ✅ 表格结构识别（基础：0x07 单元格终结符 + 连续行拼接为 HTML `<table>`）
+- ✅ 表格 TAP 增强（sprmPFInTable / sprmPTableDepth 标记表格段落与嵌套深度 + sprmTDefTable 解析 rgtc 提取 fVertMerge 实现 rowspan 垂直合并 + sprmTTableBorders 解析 6 个 Brc 还原表格边框并映射到 CSS border）
+- ✅ 修订痕迹内容解析（SttbfRMark 作者表 + RMRK 结构：sprmCFRMark/sprmCFRMarkDel 标记修订类型，sprmCRMark/sprmCRMarkDel 携带 ibstRMark + DTTM 提取作者索引与时间戳；FIB 索引 90/91 定位 SttbfRMark）
+- ✅ PICF 图片提取增强（pictureParser.ts 解析 FCPic/PICF 信封结构 + mm/xExt/yExt 元数据；sprmCFSpec/sprmCPicLocation SPRM 解码获取 fcPic；结构化返回 format/widthPx/heightPx/floating；UI 展示图片元信息标签）
 - ✅ 页眉 / 页脚（基础：ccpHdd 已分流到 `stories.headers`，UI 折叠面板展示）
 - ✅ 脚注 / 尾注（基础：ccpFtn / ccpEdn 已分流到 `stories.footnotes` / `stories.endnotes`）
 - ✅ 批注（基础：ccpAtn 已分流到 `stories.comments`）
 - ✅ 目录（TOC 域解析 + 层级渲染）
-- 修订痕迹（基础：已解析 DOP 的 fRMW 开关标志，UI 展示修订模式状态；未解析具体修订内容/作者/时间）
+- ✅ 修订痕迹（已解析 DOP fRMW 开关 + SttbfRMark 作者表 + RMRK 结构提取作者/时间/类型；UI 渲染插入下划线/删除删除线 + 作者 tooltip）
 - ✅ Section 级布局差异（已实现：DOP 的 fFacingPages 奇偶页不同 + fTitlePage 首页不同 标志解析，UI 展示）
 
 ### 资源与对象
@@ -260,7 +263,7 @@
 - ✅ prm 字段解析（piece 级别 CHPX 关联已实现）
 - ✅ 真实列表和编号恢复（已实现：LST/LVLF 解析、sprmPIlvl/ilst/ilfo 提取、getListFormat 格式映射，替换启发式列表检测）
 - 真实表格结构恢复
-- 修订痕迹（基础：DOP fRMW 标志已解析，UI 展示修订模式开关；不解析具体修订内容）
+- ✅ 修订痕迹（已完成：DOP fRMW 开关 + SttbfRMark 作者表 + RMRK 结构解析作者/时间/类型，UI 渲染插入/删除标记）
 - 超链接
 - TOC / 域结构
 - 图片和嵌入对象
@@ -274,7 +277,7 @@
 - CLX：可解析，支持多 piece 拼接，story 级分流已落地（按 rgCcp 切片），prm/fChp/chpxIndex 已实现
 - 文本抽取：可用，但仍依赖启发式编码判断和噪声清理（textutil 生成的文件 byte 12 不可靠）
 - 格式推断：已实现规范级 CHP/PAP/STSH 解析 + 样式继承；启发式降为备用方案
-- 表格：能识别 tab 风格块和 0x07 单元格终结符，但还未恢复真实 TAP 单元格结构
+- 表格：识别 tab 风格块和 0x07 单元格终结符，并已恢复真实 TAP 单元格结构（sprmTDefTable 合并 + sprmTTableBorders 边框）
 - 列表：已实现 LST/LVLF/PlcfLfo 完整解析 + ilfo > ilst 优先链；启发式降为备用方案
 - 页眉页脚 / 脚注 / 尾注 / 批注：已分流出文本，但还未做 section 区分、引用编号等精细化处理
 
@@ -295,7 +298,7 @@
 1. ✅ 页眉 / 页脚（已完成：ccpHdd 已分流到 `stories.headers`，UI 折叠面板）
 1. ✅ 表格结构化增强（已完成：0x07 单元格终结符识别 + HTML `<table>` 渲染）
 1. ✅ 列表编号增强（已完成：LST/LVLF 规范解析 + sprmPIlvl/ilst/ilfo → getListFormat，支持 decimal/lower-alpha/lower-roman/cjk-ideographic/disc 等格式）
-1. ✅ 图片与嵌入对象（已完成：Data 流魔数扫描 PNG/JPEG/BMP/GIF + UI 折叠面板）
+1. ✅ 图片与嵌入对象（已完成：Data 流魔数扫描 + PICF 结构解析 + sprmCPicLocation 定位 + UI 折叠面板含元数据）
 1. ✅ DOP 文档属性标志（已完成：fcDop/lcbDop 定位 + DOP 位域解析 + UI 展示页眉页脚变体与修订模式标志）
 1. 更严格的 CHP / PAP 结构恢复 ← **当前任务**
 1. 样本覆盖补齐

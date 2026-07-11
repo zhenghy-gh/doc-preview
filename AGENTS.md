@@ -41,9 +41,20 @@ src/
     styleParser.ts        # 样式表解析：STSH 结构、STD 样式定义、样式继承
     fontParser.ts         # 字体表解析：STTB Ffn、字体名称映射
     listParser.ts         # 列表解析：LST/LVLF/PlcfLfo、列表编号格式
-    fieldParser.ts        # 域解析：PlcfFld、超链接提取
-    imageExtractor.ts     # 图片提取：Data 流魔数扫描、嵌入式图片识别
+    fieldParser.ts        # 域解析：PlcfFld、超链接/文档元数据/页码域/交叉引用（REF/NOTEREF）提取
+    imageExtractor.ts     # 图片提取：Data 流魔数扫描、嵌入式图片识别（基础）
+    pictureParser.ts      # 图片增强解析：PICF/FCPic 结构、sprmCPicLocation 定位、结构化返回
     tableText.ts          # 表格处理：0x07 单元格终结符识别、表格结构重建
+    revisionParser.ts     # 修订痕迹解析：SttbfRMark 作者表、RMRK 结构、DTTM 时间戳
+    revisionRender.ts     # 修订渲染：applyRevisionsToText 纯函数，支持 marks/accepted/rejected 三种模式
+    dopParser.ts          # DOP 解析：文档属性容器、奇偶页/首页/修订模式标志
+    bookmarkParser.ts     # 书签解析：PlcfBkf/PlcfBkl + SttbfBkmk、文档内跳转
+    sectionParser.ts      # 分节解析：PlcfSed + SEPX、纸张/边距/方向/分栏/起始页码
+    shapeParser.ts        # 形状解析：Office Art Drawing Container、形状类型/位置/尺寸/锚点提取
+    equationParser.ts    # 公式解析：Equation Editor OLE 对象、EquationText 流提取、eqn 到 LaTeX 转换
+    chartParser.ts       # 图表解析：MSGraph/Excel/SmartArt OLE 对象、图表类型识别、图表面板展示
+    wordArtParser.ts     # 艺术字解析：Office Art WordArt 对象解析、文本/效果/颜色提取、艺术字面板展示
+    headerFooterParser.ts # 页眉页脚解析：PlcfHdd 位置表解析、首页/奇偶页页眉页脚拆分、启发式回退
     docParser.worker.ts   # Web Worker 后台解析
     parseWithWorker.ts    # Worker 封装：大文件异步解析
 ```
@@ -68,7 +79,22 @@ src/
    - **列表解析**（`listParser.ts`）：LST/LVLF/PlcfLfo 完整解析、sprmPIlvl/ilst/ilfo 提取、getListFormat 格式映射
 8. **文档属性提取** — 通过 SummaryInformation 流解析获取标题、作者、主题、关键词、字数等元数据（`propertyParser.ts`）
 9. **超链接提取** — PlcfFld 解析、HYPERLINK 域提取（`fieldParser.ts`）
-10. **图片提取** — Data 流魔数扫描（PNG/JPEG/BMP/GIF）（`imageExtractor.ts`）
+10. **图片提取** — Data 流魔数扫描（基础）+ PICF/FCPic 结构解析（增强），sprmCFSpec/sprmCPicLocation SPRM 解码，结构化返回格式/尺寸/浮动状态（`imageExtractor.ts` + `pictureParser.ts`）
+11. **修订痕迹** — SttbfRMark 作者表解析 + RMRK 结构 + DTTM 时间戳，sprmCFRMark/sprmCFRMarkDel/sprmCRMark/sprmCRMarkDel SPRM 解码（`revisionParser.ts`）
+12. **文档标志与元数据域** — DOP 解析（fFacingPages/fTitlePage/fRMW 等，`dopParser.ts`）；PlcfFld 文档域提取（AUTHOR/TITLE/DATE/REVNUM 等，`fieldParser.ts`）
+13. **书签解析** — PlcfBkf/PlcfBkl 位置表 + SttbfBkmk 名称表解析，文档内跳转范围（`bookmarkParser.ts`）
+14. **分节解析** — PlcfSed 位置表 + SEPX 分节属性提取（纸张大小、页边距、方向、装订线、分栏、起始页码，`sectionParser.ts`）
+15. **页码域解析** — PlcfFld 中 PAGE/NUMPAGES/SECTION/SECTIONPAGES 域识别（通过 instruction 文本关键字匹配，无专门 flt 值），域结果替换正文中的 instruction+result 连接串（`fieldParser.ts` + `docParser.ts`）
+16. **交叉引用解析** — PlcfFld 中 REF/NOTEREF 域识别（通过 instruction 文本关键字匹配），提取目标书签名称与域开关（\h/\n/\r/\w/\p/\f/\d），交叉引用面板展示（`fieldParser.ts`）
+17. **形状解析** — Office Art Drawing Container 解析（MS-ODRAW 规范），提取形状类型（矩形/椭圆/线条/文本框/图片/组合）、位置/尺寸（twips）、锚点类型/CP、浮动状态、关联图片 fcPic（`shapeParser.ts`）
+18. **公式解析** — Equation Editor OLE 对象解析，从 EquationText 流提取公式文本，将 eqn 格式转换为 LaTeX，支持希腊字母、分数、根号、上下标、运算符、三角函数、求和/积分等（`equationParser.ts`）
+19. **图表解析** — MSGraph/Excel/SmartArt OLE 对象解析，从目录表提取图表名称和类型，检测 Picture/Data 流，支持图表类型（柱状图/条形图/折线图/饼图等）和 SmartArt 类型（流程/循环/层次结构/矩阵/组织结构图）（`chartParser.ts`）
+20. **艺术字解析** — Office Art WordArt 对象解析，扫描 OLE 目录表中名称匹配 `^WordArt\.\d+` 的存储对象，提取 WordArt 流中的文本、效果（渐变/阴影/浮雕/斜角/轮廓/填充/3D/旋转/翻转/拉伸）和颜色信息，艺术字面板展示（`wordArtParser.ts`）
+21. **页眉页脚拆分** — PlcfHdd 位置表解析（FIB fcPlcfHdd/lcbPlcfHdd 偏移），根据 DOP fTitlePage/fFacingPages 标志位将 ccpHdd story 拆分为首页/奇数页/偶数页页眉页脚，PlcfHdd 不可用时回退到启发式段落拆分（`headerFooterParser.ts`）
+22. **修订模式切换（接受/拒绝修订）** — `applyRevisionsToText` 纯函数（`revisionRender.ts`）支持三种渲染模式：marks（生成 `<ins>`/`<del>` 标签）、accepted（insert 保留文本，delete 移除文本）、rejected（insert 移除文本，delete 保留文本）；DocPreview.vue 修订面板提供按钮切换模式并实时重新渲染文档
+23. **分页支持** — 按页面高度（A4 默认 842pt）自动分割内容为 `.page-content` 容器，工具栏分页导航控件（上一页/下一页/页码显示），支持 `pageBreakBefore` 段落强制换页，基于节信息动态计算页面尺寸
+24. **表格增强** — sprmTDefTable 完整解析 TC 结构（TCGrpf 位域 + 4 个 Brc 边框），单元格级边框渲染（上/下/左/右），水平合并（fHorzMerge → colspan）+ 垂直合并（fVertMerge → rowspan）完整支持
+25. **表格对齐与缩进** — sprmTJTable (0xD632) 表格对齐方式（左/居中/右），sprmTDxaTableIndent (0xD609) 表格缩进（twips），CSS margin 实现表格居中/右对齐/缩进渲染
 
 两条解析路径：
 - `parse()` — 只提取纯文本
@@ -106,11 +132,13 @@ src/
 2. 如果只有段落级格式 — 使用整体字体/对齐/加粗设置
 3. 纯文本降级 — 短文本居中加粗作为标题，其余正文
 
+**制表位渲染**：`applyTabStops()` 函数使用 Canvas 精确测量文本宽度，将 `\t` 替换为对应宽度的 `<span>`，实现与 Word 一致的制表位对齐效果；无自定义制表位时使用 CSS `tab-size` 回退。
+
 ### 关键类型 (`src/utils/docFormat.ts`)
 
 - `CharacterFormat` — fontName, fontSize, bold, italic, underline, strikethrough, superscript, subscript, color, highlight, smallCaps, allCaps, outline, shadow, letterSpacing
-- `ParagraphFormat` — alignment, indent, rightIndent, firstLineIndent, lineSpacing, spaceBefore, spaceAfter, outlineLevel, backgroundColor, tabs, border
-- `ParsedDocument` — paragraphs: FormattedText[], lists, hyperlinks, properties, stories (headers, footnotes, endnotes, comments, textboxes)
+- `ParagraphFormat` — alignment, indent, rightIndent, firstLineIndent, lineSpacing, spaceBefore, spaceAfter, outlineLevel, backgroundColor, tabs, borders, table, pageBreakBefore
+- `ParsedDocument` — paragraphs: FormattedText[], lists, hyperlinks, properties, stories (headers, footnotes, endnotes, comments, textboxes), toc, docFlags, revisions, documentFields, bookmarks, sections, pageFields, crossReferences, shapes
 - `ParseResult` — success, document?, text?, error?
 
 ### 文档属性类型 (`src/utils/propertyParser.ts`)
@@ -130,3 +158,5 @@ src/
 - Vite resolve 别名 `@` 指向 `src/` 目录
 - 确认无任何硬编码的文档特定模式；所有规则均基于通用文本特征
 - macOS `textutil` 创建的 .doc 文件 byte 12 始终为 0xBF，fComplex 标志不可靠
+- 图片提取采用双层策略：优先通过 CHPX `fcPic` + PICF 结构精确解析，回退到 Data 流魔数扫描；浮动图片通过 Office Art Drawing Container 解析获取形状锚点定位
+- `ParsedDocument.images`（data URL 数组）保留用于向后兼容；新增 `pictures` 字段提供结构化信息（format/widthPx/heightPx/floating/cp）
