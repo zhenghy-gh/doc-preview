@@ -2330,7 +2330,7 @@ export class DocParser {
   private getChineseFont(text: string, index: number): string {
     const before = text.substring(0, index)
     const chineseCount = (before.match(/[\u4e00-\u9fff]/g) || []).length
-    if (before.length === 0) return '宋体'
+    if (before.length === 0 || chineseCount === 0) return 'Times New Roman'
     return chineseCount / before.length > 0.7 ? '宋体' : '仿宋'
   }
 

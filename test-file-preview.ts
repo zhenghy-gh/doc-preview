@@ -32,11 +32,13 @@ for (let i = 0; i < (doc.paragraphs?.length || 0); i++) {
   }
 }
 console.log('\nFont usage counts:', fontCounts)
-console.log('\nBad paragraphs (first 10):')
-for (const bp of badParagraphs.slice(0, 10)) {
-  console.log(`  [${bp.index}] "${bp.text?.substring(0, 60)}" -> bad chars: "${bp.char}"`)
-}
+console.log('\nBad paragraphs count:', badParagraphs.length)
 
-console.log('\nParagraph 0 charFormat:', JSON.stringify(doc.paragraphs?.[0]?.charFormat))
-console.log('Paragraph 0 charFormatFromReal:', doc.paragraphs?.[0]?.charFormatFromReal)
-console.log('Paragraph 1 charFormatFromReal:', doc.paragraphs?.[1]?.charFormatFromReal)
+// Print all paragraphs summary
+console.log('\nAll paragraphs:')
+for (let i = 0; i < (doc.paragraphs?.length || 0); i++) {
+  const p = doc.paragraphs[i]
+  const styles = p.charFormat?.styles
+  const fontNames = styles ? [...new Set(styles.map((s: any) => s.style?.fontName || 'default'))] : ['(no styles)']
+  console.log(`  [${i}] "${p.text?.substring(0, 60)}" -> fonts: ${fontNames.join(', ')}`)
+}
