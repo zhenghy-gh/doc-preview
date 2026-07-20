@@ -891,6 +891,20 @@ export class DocParser {
     return this.splitPiecesByStory(pieces, rgCcp, wordDocData)
   }
 
+  private static readonly BINARY_SIGNATURES = [
+    'JFIF', 'ICC_PROFILE', 'Exif', 'Photoshop', 'Adobe', 'sRGB', 'XYZ', 'gAMA',
+    'PNG', 'GIF8', 'BM', 'RIFF', 'ID3', 'ftyp', 'mov,', 'MOVI', 'AVI', 'WEBP',
+    '<?xml', '<html', '<!DOCTYPE', '<!doctype',
+    '%PDF', ' obj\n', 'endobj', 'stream\n', 'endstream',
+    '\x89PNG', '\xFF\xD8\xFF', '\xFF\xFB', '\xFF\xF3', '\xFF\xF2', 'ID3',
+    'PK\x03\x04', 'PK\x05\x06', 'PK\x07\x08',
+  ]
+
+  private containsBinarySignature(text: string): boolean {
+    const tail = text.slice(-64)
+    return DocParser.BINARY_SIGNATURES.some(sig => tail.includes(sig))
+  }
+
   private extractTextFromRange(data: Uint8Array, start: number, end: number, isCompressed: boolean = false): string {
     if (start < 0 || end > data.length || start >= end) return ''
 
@@ -909,9 +923,16 @@ export class DocParser {
         else if (byte === 0x0A || byte === 0x00) continue
         else if (byte >= 0x80 && byte <= 0xFF) {
           const mapped = DocParser.HIGH_BYTE_MAP[byte - 0x80]
-          text += mapped ?? String.fromCharCode(byte)
+          if (mapped !== null) text += mapped
+          // Skip unmapped high bytes (likely binary noise)
         }
         else if (byte >= 0x20) text += String.fromCharCode(byte)
+        // Check for binary signature in the trailing 64 chars
+        if (text.length >= 8 && this.containsBinarySignature(text)) {
+          const lastNewline = text.lastIndexOf('\n')
+          text = lastNewline >= 0 ? text.slice(0, lastNewline) : ''
+          break
+        }
       }
     } else {
       for (let i = start; i < end - 1; i += 2) {
@@ -927,6 +948,12 @@ export class DocParser {
         else if (charCode === 0x000a || charCode === 0x0000) continue
         else if (DocParser.isValidPrintableChar(charCode)) {
           text += String.fromCharCode(charCode)
+        }
+        // Check for binary signature in the trailing 64 chars
+        if (text.length >= 8 && this.containsBinarySignature(text)) {
+          const lastNewline = text.lastIndexOf('\n')
+          text = lastNewline >= 0 ? text.slice(0, lastNewline) : ''
+          break
         }
       }
     }
@@ -2005,18 +2032,19 @@ export class DocParser {
 
   private extractTextWithFormatFromFib(data: Uint8Array, fib: FibData): any[] {
     const clxEnd = fib.fcClx + fib.lcbClx
+    const options = { fcMin: fib.fcMin, fComplex: fib.fComplex, fcMac: fib.fcMac || data.length }
     if (clxEnd > data.length) {
-      return this.extractParagraphsWithFormat(data, { fcMin: fib.fcMin, fComplex: fib.fComplex })
+      return this.extractParagraphsWithFormat(data, options)
     }
-    const paragraphs = this.extractParagraphsWithFormat(data, { fcMin: fib.fcMin, fComplex: fib.fComplex })
+    const paragraphs = this.extractParagraphsWithFormat(data, options)
     return this.filterParagraphsWithGenericLogic(paragraphs)
   }
 
-  private extractParagraphsWithFormat(data: Uint8Array, options?: { fcMin?: number; fComplex?: boolean; _isRetry?: boolean }): any[] {
+  private extractParagraphsWithFormat(data: Uint8Array, options?: { fcMin?: number; fComplex?: boolean; _isRetry?: boolean; fcMac?: number }): any[] {
     const paragraphs: any[] = []
     let currentParagraph = ''
     let paragraphIndex = 0
-    const maxBytes = Math.min(data.length, this.maxScanBytes)
+    const maxBytes = Math.min(data.length, this.maxScanBytes, options?.fcMac || data.length)
     let startOffset = options?.fcMin ?? 0
 
     if (startOffset < 200) {
@@ -2042,6 +2070,7 @@ export class DocParser {
         if (byte === 0x0A || byte === 0x00) continue
         if (byte === 0x07) { currentParagraph += '\u0007'; continue }
         if (byte >= 0x20) currentParagraph += String.fromCharCode(byte)
+        if (currentParagraph.length >= 8 && this.containsBinarySignature(currentParagraph)) break
       }
     } else {
       for (let i = startOffset; i < maxBytes - 1; i++) {
@@ -2061,6 +2090,7 @@ export class DocParser {
         if (!result) continue
         if (result.ch) currentParagraph += result.ch
         i += result.advance - 1
+        if (currentParagraph.length >= 8 && this.containsBinarySignature(currentParagraph)) break
       }
     }
 
