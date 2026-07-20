@@ -1,4 +1,27 @@
 import { logger, enableDebugMode } from './logger'
+
+/**
+ * 解析进度阶段标识
+ */
+export type ParseProgressStage =
+  | 'verifying'
+  | 'parsing_fib'
+  | 'parsing_clx'
+  | 'parsing_formats'
+  | 'parsing_fields'
+  | 'parsing_shapes'
+  | 'building_paragraphs'
+  | 'extracting_properties'
+  | 'extracting_images'
+  | 'finalizing'
+
+/**
+ * 解析进度回调
+ * @param stage 阶段标识
+ * @param percent 进度百分比 0-100
+ */
+export type ProgressCallback = (stage: ParseProgressStage, percent: number) => void
+
 export { enableDebugMode }
 
 import { OleParser } from './oleParser'
@@ -176,15 +199,17 @@ export class DocParser {
    * @returns Parse result with `{ document, text, success, error? }`.
    *   `document.paragraphs` is an array of `{ text, charFormat, paraFormat }`.
    */
-  parseWithFormat(): { success: boolean; document?: any; text?: string; error?: string } {
+  parseWithFormat(onProgress?: ProgressCallback): { success: boolean; document?: any; text?: string; error?: string } {
     try {
       logger.info('开始解析带格式的 DOC 文件')
+      onProgress?.('verifying', 5)
 
       if (!this.ole.isOleFile()) {
         const error = this.ole.getFormatErrorString()
         return { success: false, error }
       }
 
+      onProgress?.('parsing_fib', 15)
       const header = this.ole.parseHeader()
       const fat = this.ole.getFatSectors(header)
       const directory = this.ole.getDirectorySectors(header, fat)
@@ -199,7 +224,8 @@ export class DocParser {
         return { success: false, error: '未找到 WordDocument 流' }
       }
 
-      const extracted = this.extractFormattedText(wordDocumentStream, directory)
+      onProgress?.('parsing_clx', 25)
+      const extracted = this.extractFormattedText(wordDocumentStream, directory, onProgress)
 
       if (extracted.paragraphs.length === 0) {
         const fallbackText = this.extractTextSimple(wordDocumentStream.data)
@@ -209,6 +235,7 @@ export class DocParser {
         return { success: false, error: '文档内容为空' }
       }
 
+      onProgress?.('building_paragraphs', 80)
       const plainText = extracted.paragraphs.map(p => p.text).join('\n\n')
       const document: any = { paragraphs: extracted.paragraphs }
       if (extracted.stories) document.stories = extracted.stories
@@ -249,6 +276,7 @@ export class DocParser {
         document.styleSet = extracted.styleSet
       }
 
+      onProgress?.('extracting_properties', 85)
       // Extract document properties from SummaryInformation stream
       const props = this.extractProperties(directory)
       if (props && hasProperties(props)) {
@@ -279,6 +307,7 @@ export class DocParser {
         }
       }
 
+      onProgress?.('extracting_images', 92)
       // Extract embedded images (PNG/JPEG/BMP/GIF) from the Data stream,
       // falling back to the WordDocument stream. Attached as data URLs.
       const images = this.extractImages(directory, wordDocumentStream.data)
@@ -289,6 +318,7 @@ export class DocParser {
       const pictures = this.extractPictures(directory, chpxRunsForPics)
       if (pictures.length > 0) document.pictures = pictures
 
+      onProgress?.('finalizing', 100)
       return { success: true, document, text: plainText }
     } catch (error) {
       const message = error instanceof Error ? `${error.message}\n${error.stack}` : '未知错误'
@@ -1469,6 +1499,8 @@ export class DocParser {
             ...merged,
           }
           newPara.charFormatFromReal = true
+          // Clear heuristic styles array since real CHPX format is available
+          delete newPara.charFormat.styles
         }
 
         result.push(newPara)
@@ -1483,6 +1515,7 @@ export class DocParser {
   private extractFormattedText(
     wordStream: StreamData,
     directory: DirectoryEntry[],
+    onProgress?: ProgressCallback,
   ): { paragraphs: any[]; stories?: DocumentStories; chpxRuns?: ChpxRun[]; papxRuns?: PapxRun[]; styles?: StyleDefinition[]; hyperlinks?: FieldRange[]; tocEntries?: TocEntry[]; indexEntries?: IndexEntry[]; revisions?: RevisionMark[]; documentFields?: DocumentFields; bookmarks?: BookmarkRange[]; sections?: SectionInfo[]; pageFields?: PageFieldInfo[]; crossReferences?: CrossReferenceInfo[]; shapes?: ShapeInfo[]; equations?: EquationInfo[]; charts?: ChartInfo[]; wordArts?: WordArtInfo[]; styleSet?: StyleSetInfo } {
     const data = wordStream.data
     const fib = parseFib(data)
@@ -1517,10 +1550,12 @@ export class DocParser {
         }
 
         if (mainText.length > 0) {
+          onProgress?.('parsing_formats', 35)
           // Parse formats AFTER we have the text (needed for hyperlink extraction)
           const { chpxRuns, papxRuns, styles, fontNames, listEntries, lfoEntries, hyperlinks, tocEntries, indexEntries, revisions, documentFields, bookmarks, sections, pageFields, crossReferences, shapes, equations, charts, wordArts, styleSet } =
             this.parseFormatRuns(fib, directory, data, mainText)
 
+          onProgress?.('parsing_fields', 55)
           // Replace page field placeholders in mainText before paragraph splitting.
           // mainText currently contains instruction+result concatenations like "PAGE1"
           // (0x13/0x14/0x15 were skipped during extraction). We replace each field's
@@ -1529,6 +1564,7 @@ export class DocParser {
             mainText = this.replacePageFieldsInText(mainText, pageFields)
           }
 
+          onProgress?.('parsing_shapes', 65)
           const hasRealFormats = chpxRuns.length > 0 || papxRuns.length > 0 || styles.length > 0 || listEntries.length > 0
 
           let paragraphs: any[]
@@ -2226,13 +2262,13 @@ export class DocParser {
     for (let i = 0; i < text.length; i++) {
       const char = text[i]
       const isDigit = /[0-9]/.test(char)
-      const isChinese = /\u4e00-\u9fff/.test(char)
+      const isChinese = /[\u4e00-\u9fff]/.test(char)
       const isUpperCase = /[A-Z]/.test(char)
       const isLowerCase = /[a-z]/.test(char)
       const isWhitespace = /\s/.test(char)
 
       let charStyle: any = null
-      if (isWhitespace) charStyle = { fontName: '宋体', underline: false }
+      if (isWhitespace) charStyle = { underline: false }
       else if (isDigit) charStyle = { fontName: 'Times New Roman', underline: this.shouldHaveUnderline(text, i) }
       else if (isUpperCase || isLowerCase) charStyle = { fontName: 'Times New Roman', underline: false }
       else if (isChinese) charStyle = { fontName: '仿宋', underline: false }
@@ -2282,7 +2318,13 @@ export class DocParser {
 
   private isSameStyle(style1: any, style2: any): boolean {
     if (!style1 || !style2) return false
-    return style1.fontName === style2.fontName && (style1.underline || false) === (style2.underline || false)
+    const fn1 = style1.fontName
+    const fn2 = style2.fontName
+    // If either has no explicit fontName, treat as same style (inherits paragraph default)
+    if (fn1 === undefined || fn2 === undefined) {
+      return (style1.underline || false) === (style2.underline || false)
+    }
+    return fn1 === fn2 && (style1.underline || false) === (style2.underline || false)
   }
 
   private getChineseFont(text: string, index: number): string {

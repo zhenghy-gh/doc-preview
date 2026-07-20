@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import DocPreview from './components/DocPreview.vue'
+import { currentLocale, setLocale, t } from './utils/locale'
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024 // 50MB limit
 
@@ -143,12 +144,15 @@ watch(darkMode, (val) => {
   <div class="app-container" :class="{ 'reader-mode': readerMode }">
     <header class="header">
       <div class="header-top">
-        <h1>DOC文件在线预览</h1>
-        <button class="theme-btn" @click="toggleDarkMode" :title="darkMode ? '切换亮色模式' : '切换暗色模式'">
+        <h1>{{ t('app.title') }}</h1>
+        <button class="theme-btn" @click="toggleDarkMode" :title="darkMode ? t('app.theme.light') : t('app.theme.dark')">
           {{ darkMode ? '☀️' : '🌙' }}
         </button>
+        <button class="theme-btn lang-switch" @click="setLocale(currentLocale === 'zh-CN' ? 'en' : 'zh-CN')" :title="t('app.lang.switch')">
+          {{ currentLocale === 'zh-CN' ? 'EN' : '中文' }}
+        </button>
       </div>
-      <p>上传或通过地址加载 .doc 文件进行在线预览（纯前端实现）</p>
+      <p>{{ t('app.desc') }}</p>
     </header>
 
     <main class="main-content">
@@ -161,8 +165,8 @@ watch(darkMode, (val) => {
           @dragleave="handleDragLeave"
         >
           <div class="upload-icon">{{ isDragOver ? '📂' : '📄' }}</div>
-          <h2>{{ isDragOver ? '释放文件开始预览' : '选择或拖拽DOC文档' }}</h2>
-          <p>支持 .doc / .dot 格式文件，最大 50MB</p>
+          <h2>{{ isDragOver ? t('app.upload.area.title.drag') : t('app.upload.area.title') }}</h2>
+          <p>{{ t('app.upload.area.hint') }}</p>
 
           <div v-if="errorMessage" class="error-banner">
             {{ errorMessage }}
@@ -175,20 +179,20 @@ watch(darkMode, (val) => {
               @change="handleFileChange"
               class="file-input"
             />
-            <span>点击选择文件</span>
+            <span>{{ t('app.upload.btn') }}</span>
           </label>
 
           <div class="url-section">
-            <div class="divider"><span>或者</span></div>
+            <div class="divider"><span>{{ t('app.upload.or') }}</span></div>
             <div class="url-input-row">
               <input
                 type="text"
                 v-model="urlInput"
-                placeholder="输入 .doc 文件地址..."
+                :placeholder="t('app.upload.url.placeholder')"
                 class="url-input"
                 @keyup.enter="loadFromUrl"
               />
-              <button class="url-btn" @click="loadFromUrl">加载</button>
+              <button class="url-btn" @click="loadFromUrl">{{ t('app.upload.url.btn') }}</button>
             </div>
           </div>
         </div>
@@ -196,21 +200,21 @@ watch(darkMode, (val) => {
 
       <template v-else>
         <div class="preview-header">
-          <span class="file-name">{{ typeof previewSource === 'string' ? previewSource.split('/').pop() : selectedFile?.name || '文档预览' }}</span>
+          <span class="file-name">{{ typeof previewSource === 'string' ? previewSource.split('/').pop() : selectedFile?.name || t('app.title') }}</span>
           <div class="header-actions">
             <button
               class="header-btn"
               @click="toggleWebFont"
               :class="{ active: useWebFont }"
-              :title="useWebFont ? '关闭 Web Font' : '启用 Web Font'"
+              :title="useWebFont ? t('app.font.on') : t('app.font.off')"
             >
               🔤
             </button>
-            <button class="header-btn" @click="toggleReaderMode" :title="readerMode ? '退出阅读模式' : '阅读模式'">
+            <button class="header-btn" @click="toggleReaderMode" :title="readerMode ? t('app.reader.on') : t('app.reader.off')">
               {{ readerMode ? '⊟' : '⊞' }}
             </button>
             <button class="back-btn" @click="resetFile">
-              ← 返回
+              {{ t('app.back') }}
             </button>
           </div>
         </div>

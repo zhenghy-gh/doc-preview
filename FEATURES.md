@@ -233,6 +233,13 @@
 | 导出为 Markdown | ✅ 已实现 | 使用 DOM 解析器将预览 HTML 转换为标准 Markdown 格式，支持标题/加粗/斜体/删除线/链接/图片/表格/有序无序列表/代码块/引用 |
 | 快捷键面板 | ✅ 已实现 | ⌨️ 面板展示全部快捷键列表（搜索/缩放/分页导航等），工具栏按钮 + ? + Ctrl+/ 触发，点击遮罩或 Escape 关闭 |
 | 虚拟滚动（性能优化） | ✅ 已实现 | 页面级虚拟滚动，仅渲染可视区域 ±1 页内容，非可视页面用占位 div（高度缓存）保持滚动条正确；搜索/大纲导航时临时禁用确保全部页面可查询 |
+| 移动端适配 | ✅ 已实现 | CSS 三断点响应式布局（900px/640px/480px），工具栏水平滚动，全宽面板，大触控目标（44px） |
+| 文档统计 | ✅ 已实现 | 折叠面板展示字数/字符数/段落数/页数/图片数/表格数 6 项统计 |
+| 国际化（中英文切换） | ✅ 已实现 | locale.ts 翻译模块（180+ 条目），App.vue 语言切换按钮，全部组件模板字符串替换为 t() 调用 |
+| 加载进度条 | ✅ 已实现 | CSS 动画进度条（indeterminate + shimmer 效果），阶段文字提示（读取/下载/解析/渲染），异步阶段自动切换 |
+| 解析百分比进度 | ✅ 已实现 | `parseWithFormat` 支持 `onProgress` 回调，Worker 消息协议升级为 progress/result 双类型，10 阶段进度报告（5%/15%/25%/35%/55%/65%/80%/85%/92%/100%） |
+| 错误分类与重试 | ✅ 已实现 | `errorClassifier.ts` 6 类错误分类（network/format/parse/corrupted/memory/unknown），ErrorDisplay 组件含重试按钮 + 解决建议 + 技术细节折叠 |
+| 组件拆分 | ✅ 已实现 | DocPreview.vue 拆分出 CollapsiblePanel/DocStatsPanel/ShortcutsPanel/LoadingOverlay/ErrorDisplay 5 个子组件，减少代码重复 |
 | 宏（VBA） | ❌ 不支持 | 纯预览，不执行宏 |
 | 密码保护文档 | ❌ 不支持 | 加密文档无法解析 |
 | 数字签名 | ❌ 不支持 | |
@@ -256,8 +263,8 @@
 | 批注与修订 | 4 | 4 | 0 | 0 | **100%** |
 | 超链接 | 4 | 4 | 0 | 0 | **100%** |
 | 样式与模板 | 5 | 5 | 0 | 0 | **100%** |
-| 其他功能 | 12 | 10 | 0 | 3 | **83%** |
-| **总计** | **111** | **107** | **0** | **4** | **~96%** |
+| 其他功能 | 20 | 18 | 0 | 2 | **90%** |
+| **总计** | **119** | **115** | **0** | **4** | **~97%** |
 
 > **说明**：完成度基于"功能点数量"计算。字符格式、段落格式、列表、样式等核心解析功能已全面实现规范级格式恢复。剩余待实现功能主要集中在页面布局、高级域和复杂图形领域。
 
@@ -304,6 +311,13 @@
 35. **虚拟滚动（性能优化）** - 页面级虚拟滚动，仅渲染可视区域 ±1 页内容，非可视页面用占位 div（高度缓存）保持滚动条正确；formatFormattedTextToHtml 返回页面数组 string[]，模板用 v-for 渲染配合 isPageVisible/getPagePlaceholderHeight；搜索/大纲导航时临时禁用虚拟滚动确保全部页面可查询；window scroll/resize 监听 + requestAnimationFrame throttle；小文档（≤3 页）自动跳过虚拟滚动
 36. **导出为 Markdown** - DOM 解析器将预览 HTML 转换为标准 Markdown 格式（标题/加粗/斜体/删除线/链接/图片/表格/列表/代码块/引用），工具栏 📝 按钮一键下载 .md 文件
 37. **快捷键面板** - ⌨️ 面板展示全部快捷键列表（搜索/缩放/分页导航等），工具栏按钮 + ? + Ctrl+/ 触发，点击遮罩或 Escape 关闭，kbd 标签样式渲染按键
+38. **移动端适配** - CSS 三断点响应式布局（900px 工具栏折叠 + 侧边栏内嵌、640px 全宽面板、480px 44px 触控目标），工具栏水平滚动按钮
+39. **文档统计** - 折叠面板展示字数/字符数/段落数/页数/图片数/表格数 6 项统计，基于 ParsedDocument 实时计算
+40. **国际化 i18n（中英文切换）** - 轻量级 i18n 方案（无 vue-i18n 依赖），locale.ts 含 180+ 中英文翻译条目，App.vue 语言切换按钮 + localStorage 持久化，DocPreview.vue 全部模板字符串替换为 t() 响应式调用
+41. **加载进度条** - CSS 动画进度条（indeterminate + shimmer 双重动画），阶段文字提示（读取/下载/解析/渲染），异步阶段自动切换
+42. **解析百分比进度** - `parseWithFormat` 支持 `onProgress` 回调穿透，Worker 消息协议升级为 `{type:'progress'|'result'}` 双类型分流，10 阶段进度报告（verifying 5% → parsing_fib 15% → parsing_clx 25% → parsing_formats 35% → parsing_fields 55% → parsing_shapes 65% → building_paragraphs 80% → extracting_properties 85% → extracting_images 92% → finalizing 100%）
+43. **错误分类与重试** - `errorClassifier.ts` 6 类错误分类（network/format/parse/corrupted/memory/unknown），每类含友好标题 + 详细描述 + 解决建议列表 + retryable 标志；ErrorDisplay 组件展示分类图标 + 标题 + 建议 + 重试按钮 + 技术细节折叠（details/summary）
+44. **组件拆分** - DocPreview.vue 拆分出 5 个子组件：`CollapsiblePanel`（通用折叠面板，slot 模式）、`DocStatsPanel`、`ShortcutsPanel`、`LoadingOverlay`（支持 indeterminate 和百分比两种模式）、`ErrorDisplay`；减少代码重复，为后续面板迁移到 CollapsiblePanel 奠定基础
 
 ### 待实现（按优先级）
 

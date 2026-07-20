@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, onErrorCaptured, nextTick } from 'vue'
 import { parseDocFileWithFormat, parseDocFileFromBuffer } from '../utils/docParser'
+import type { ParseProgressStage } from '../utils/docParser'
 import { parseWithWorker } from '../utils/parseWithWorker'
 import { renderTableHtml, renderNestedTableHtml, splitTableCells } from '../utils/tableText'
 import type { CharacterFormat, ParagraphFormat, CharStyleSegment, TableInfo, RevisionMark, RevisionType, BookmarkRange, SectionInfo, PageFieldRange, CrossReferenceRange, ShapeInfo, EquationInfo, ChartInfo, WordArtInfo } from '../utils/docFormat'
@@ -8,6 +9,12 @@ import type { DocumentFields } from '../utils/fieldParser'
 import { applyRevisionsToText } from '../utils/revisionRender'
 import type { RevisionMode } from '../utils/revisionRender'
 import { WORD_VERSION_LABELS, type WordVersion } from '../utils/fibParser'
+import { t } from '../utils/locale'
+import DocStatsPanel from './DocStatsPanel.vue'
+import ShortcutsPanel from './ShortcutsPanel.vue'
+import LoadingOverlay from './LoadingOverlay.vue'
+import ErrorDisplay from './ErrorDisplay.vue'
+import CollapsiblePanel from './CollapsiblePanel.vue'
 
 const WORKER_THRESHOLD = 1024 * 1024 // 1MB — files larger than this use Web Worker
 const isWorkerSupported = typeof Worker !== 'undefined'
@@ -152,6 +159,32 @@ const error = ref('')
 const loadingTime = ref(0)
 const loadingTimer = ref<ReturnType<typeof setInterval> | null>(null)
 const fileSize = ref('')
+const progressStep = ref('')
+const progressPercent = ref<number>(-1)
+
+// 上次加载的源（用于错误重试）
+const lastSource = ref<{ type: 'file'; file: File } | { type: 'url'; url: string } | null>(null)
+
+/** 将解析阶段映射为本地化的进度提示文字 */
+function getProgressStepText(stage: ParseProgressStage): string {
+  switch (stage) {
+    case 'verifying':
+      return t('loading.progress.reading')
+    case 'parsing_fib':
+    case 'parsing_clx':
+    case 'parsing_formats':
+    case 'parsing_fields':
+    case 'parsing_shapes':
+      return t('loading.progress.parsing')
+    case 'building_paragraphs':
+    case 'extracting_properties':
+    case 'extracting_images':
+    case 'finalizing':
+      return t('loading.progress.rendering')
+    default:
+      return t('loading.text')
+  }
+}
 
 // --- Virtual scroll (page-level) ---
 // pages: 每页的 HTML 字符串数组（与 .page-content 一一对应）
@@ -180,6 +213,37 @@ const previewRef = ref<HTMLElement | null>(null)
 
 // --- Shortcuts panel ---
 const showShortcuts = ref(false)
+
+// --- Document stats ---
+const showStats = ref(false)
+const docStats = computed(() => {
+  const paragraphs = lastParseResult.value?.paragraphs || []
+  const pCount = paragraphs.length
+  const imgCount = pictures.value.length + images.value.length
+  const pageCount = pages.value.length
+  const tableCount = (htmlContent.value.match(/<table[\s>]/gi) || []).length
+
+  let charCount = 0
+  let wordCount = 0
+  let cjkCount = 0
+  for (const p of paragraphs) {
+    const text = p.text || ''
+    charCount += text.length
+    cjkCount += (text.match(/[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/g) || []).length
+    const words = text.match(/[a-zA-Z]+/g)
+    if (words) wordCount += words.length
+  }
+  wordCount += cjkCount
+
+  return {
+    wordCount,
+    charCount,
+    paragraphCount: pCount,
+    pageCount,
+    imageCount: imgCount,
+    tableCount,
+  }
+})
 
 // --- Zoom ---
 const zoomLevel = ref(100)
@@ -286,13 +350,7 @@ const isRichFormat = ref(false)
 // --- Stories (headers / footnotes / endnotes / comments / textboxes) ---
 const stories = ref<DocumentStories | null>(null)
 const showStories = ref(false)
-const STORY_LABELS: Record<string, string> = {
-  headers: '页眉/页脚',
-  footnotes: '脚注',
-  endnotes: '尾注',
-  comments: '批注',
-  textboxes: '文本框',
-}
+// STORY_LABELS removed, use t('story.' + key) instead
 
 // --- Embedded images extracted from the Data stream ---
 const images = ref<string[]>([])
@@ -333,31 +391,15 @@ const showSections = ref(false)
 const pageFields = ref<PageFieldRange[]>([])
 const showPageFields = ref(false)
 
-const PAGE_FIELD_TYPE_LABEL: Record<string, string> = {
-  page: '当前页码 (PAGE)',
-  numPages: '总页数 (NUMPAGES)',
-  section: '当前节 (SECTION)',
-  sectionPages: '节内页数 (SECTIONPAGES)',
-}
+// PAGE_FIELD_TYPE_LABEL removed, use t('pageFields.type.' + type) instead
 
 // --- Cross-references (REF / NOTEREF) ---
 const crossReferences = ref<CrossReferenceRange[]>([])
 const showCrossReferences = ref(false)
 
-const CROSS_REF_TYPE_LABEL: Record<string, string> = {
-  ref: '引用 (REF)',
-  noteref: '脚注引用 (NOTEREF)',
-}
+// CROSS_REF_TYPE_LABEL removed, use t('crossRefs.type.' + type) instead
 
-const CROSS_REF_SWITCH_LABEL: Record<string, string> = {
-  '\\h': '超链接',
-  '\\n': '段落编号',
-  '\\r': '段落编号(无分隔符)',
-  '\\w': '完整段落编号',
-  '\\p': '相对位置(上方/下方)',
-  '\\f': '插入引用类型',
-  '\\d': '分隔符',
-}
+// CROSS_REF_SWITCH_LABEL removed, use t('crossRefs.switch.' + key) instead
 
 // --- Shapes (Office Art Drawing Container) ---
 const shapes = ref<ShapeInfo[]>([])
@@ -378,92 +420,26 @@ const showWordArts = ref(false)
 // --- Style Set ---
 const styleSet = ref<{ name: string; isCustom?: boolean } | null>(null)
 
-const SHAPE_TYPE_LABEL: Record<string, string> = {
-  rectangle: '矩形',
-  ellipse: '椭圆',
-  line: '线条',
-  freeform: '自由形状',
-  textbox: '文本框',
-  picture: '图片',
-  group: '组合',
-  unknown: '未知',
-}
+// SHAPE_TYPE_LABEL removed, use t('shapes.type.' + type) instead
 
-const SHAPE_ANCHOR_LABEL: Record<string, string> = {
-  char: '字符',
-  paragraph: '段落',
-  page: '页面',
-  margin: '边距',
-  unknown: '未知',
-}
+// SHAPE_ANCHOR_LABEL removed, use t('shapes.anchor.' + type) instead
 
-const BREAK_TYPE_LABEL: Record<string, string> = {
-  nextPage: '下一页',
-  oddPage: '奇数页',
-  evenPage: '偶数页',
-  continuous: '连续',
-}
+// BREAK_TYPE_LABEL removed, use t('sections.break.' + type) instead
 
-const CHART_TYPE_LABEL: Record<string, string> = {
-  msgraph: 'MSGraph',
-  excel: 'Excel',
-  smartart: 'SmartArt',
-  oleobject: 'OLE 对象',
-  chart: '图表',
-  unknown: '未知',
-}
+// CHART_TYPE_LABEL removed, use t('charts.type.' + type) instead
 
-const CHART_SUBTYPE_LABEL: Record<string, string> = {
-  column: '柱状图',
-  bar: '条形图',
-  line: '折线图',
-  pie: '饼图',
-  area: '面积图',
-  scatter: '散点图',
-  doughnut: '环形图',
-  radar: '雷达图',
-  surface: '曲面图',
-  bubble: '气泡图',
-  stock: '股价图',
-  cone: '圆锥图',
-  cylinder: '圆柱图',
-  pyramid: '棱锥图',
-  orgchart: '组织结构图',
-  process: '流程',
-  cycle: '循环',
-  hierarchy: '层次结构',
-  matrix: '矩阵',
-  relationship: '关系',
-  list: '列表',
-  picture: '图片',
-  chart: '图表',
-  unknown: '未知',
-}
+// CHART_SUBTYPE_LABEL removed, use t('charts.subtype.' + type) instead
 
 function getChartTypeLabel(type: string): string {
-  return CHART_TYPE_LABEL[type] || '未知'
+  return t('charts.type.' + type) || t('charts.type.unknown')
 }
 
 function getChartSubtypeLabel(subtype: string): string {
-  return CHART_SUBTYPE_LABEL[subtype] || '未知'
-}
-
-const WORDART_EFFECT_LABEL: Record<string, string> = {
-  gradient: '渐变',
-  shadow: '阴影',
-  emboss: '浮雕',
-  bevel: '斜角',
-  outline: '轮廓',
-  fill: '填充',
-  '3d': '3D',
-  rotate: '旋转',
-  flip: '翻转',
-  stretch: '拉伸',
-  unknown: '未知',
+  return t('charts.subtype.' + subtype) || t('charts.subtype.unknown')
 }
 
 function getWordArtEffectLabel(effect: string): string {
-  return WORDART_EFFECT_LABEL[effect] || '未知'
+  return t('wordart.effect.' + effect) || t('wordart.effect.unknown')
 }
 
 function formatSizePt(pt: number | undefined): string {
@@ -489,7 +465,7 @@ const revisionItems = computed<Array<{ type: RevisionType; label: string; author
   // Group by (type + author + timestamp) to collapse consecutive marks from the same author.
   const groups = new Map<string, { type: RevisionType; author: string; time: string; count: number }>()
   for (const r of revisions.value) {
-    const author = r.author || (r.authorIndex !== undefined ? `作者#${r.authorIndex}` : '未知作者')
+    const author = r.author || (r.authorIndex !== undefined ? t('revision.author.prefix', { i: r.authorIndex }) : t('revisions.author.unknown'))
     const time = formatRevisionTime(r.timestamp)
     const key = `${r.type}|${author}|${time}`
     const existing = groups.get(key)
@@ -505,9 +481,9 @@ const revisionItems = computed<Array<{ type: RevisionType; label: string; author
     }
   }
   const typeLabel: Record<RevisionType, string> = {
-    insert: '插入',
-    delete: '删除',
-    format: '格式修订',
+    insert: t('revisions.type.insert'),
+    delete: t('revisions.type.delete'),
+    format: t('revisions.type.format'),
   }
   return Array.from(groups.values()).map(g => ({ ...g, label: typeLabel[g.type] }))
 })
@@ -622,37 +598,30 @@ const docFlagItems = computed<Array<{ label: string; description: string }>>(() 
   if (!docFlags.value) return []
   const items: Array<{ label: string; description: string }> = []
   if (docFlags.value.facingPages) {
-    items.push({ label: '奇偶页不同', description: 'fFacingPages — 奇数页和偶数页有不同的页眉页脚' })
+    items.push({ label: t('flags.facingPages'), description: t('flags.facingPages.desc') })
   }
   if (docFlags.value.titlePage) {
-    items.push({ label: '首页不同', description: 'fTitlePage — 首页有独立的页眉页脚' })
+    items.push({ label: t('flags.titlePage'), description: t('flags.titlePage.desc') })
   }
   if (docFlags.value.pmhMain) {
-    items.push({ label: '有页眉', description: 'fPMHMain — 主文档包含页眉' })
+    items.push({ label: t('flags.pmhMain'), description: t('flags.pmhMain.desc') })
   }
   if (docFlags.value.trackChanges) {
-    items.push({ label: '修订模式', description: 'fRMW — 文档启用了修订记录（track changes）' })
+    items.push({ label: t('flags.trackChanges'), description: t('flags.trackChanges.desc') })
   }
   if (docFlags.value.ftnRestart) {
-    items.push({ label: '脚注重编号', description: 'fFtnRestart — 脚注每页或每节重新编号' })
+    items.push({ label: t('flags.ftnRestart'), description: t('flags.ftnRestart.desc') })
   }
   if (docFlags.value.ftnEnd) {
-    items.push({ label: '脚注在节末', description: 'fFtnEnd — 脚注位于节末' })
+    items.push({ label: t('flags.ftnEnd'), description: t('flags.ftnEnd.desc') })
   }
   if (docFlags.value.ftnAtEnd) {
-    items.push({ label: '脚注在文末', description: 'fFtnAtEnd — 脚注位于文档末尾' })
+    items.push({ label: t('flags.ftnAtEnd'), description: t('flags.ftnAtEnd.desc') })
   }
   return items
 })
 
-const HEADER_PART_LABELS: Record<string, string> = {
-  titleHeader: '首页页眉',
-  titleFooter: '首页页脚',
-  oddHeader: '奇数页页眉',
-  oddFooter: '奇数页页脚',
-  evenHeader: '偶数页页眉',
-  evenFooter: '偶数页页脚',
-}
+// HEADER_PART_LABELS removed, use t('story.headerParts.' + key) instead
 
 const storySections = computed<StorySection[]>(() => {
   if (!stories.value) return []
@@ -667,7 +636,7 @@ const storySections = computed<StorySection[]>(() => {
       if (content && (content.text.trim() || content.images && content.images.length > 0)) {
         out.push({
           key: `headerParts_${key}` as any,
-          label: HEADER_PART_LABELS[key] || key,
+          label: t('story.headerParts.' + key) || key,
           text: content.text.trim(),
           images: content.images?.map((img: { dataUrl: string; widthPx?: number; heightPx?: number; format: string }) => ({
             dataUrl: img.dataUrl,
@@ -687,14 +656,14 @@ const storySections = computed<StorySection[]>(() => {
       if (text && text.trim()) {
         out.push({
           key: `headerParts_${key}` as any,
-          label: HEADER_PART_LABELS[key] || key,
+          label: t('story.headerParts.' + key) || key,
           text: text.trim(),
         })
       }
     }
   } else if (stories.value.headers && stories.value.headers.trim()) {
     // 没有 headerParts 时回退到合并的 headers 文本
-    out.push({ key: 'headers', label: '页眉/页脚', text: stories.value.headers.trim() })
+    out.push({ key: 'headers', label: t('story.headerFallback'), text: stories.value.headers.trim() })
   }
 
   // 其他 story（footnotes/endnotes/comments/textboxes）
@@ -702,7 +671,7 @@ const storySections = computed<StorySection[]>(() => {
   for (const key of otherKeys) {
     const text = stories.value[key] as string | undefined
     if (text && text.trim()) {
-      out.push({ key, label: STORY_LABELS[key], text: text.trim() })
+      out.push({ key, label: t('story.' + key), text: text.trim() })
     }
   }
   return out
@@ -780,6 +749,9 @@ const loadFromFile = async (file: File) => {
   emit('loading', true)
   error.value = ''
   isUsingWorker.value = false
+  progressPercent.value = -1
+  progressStep.value = ''
+  lastSource.value = { type: 'file', file }
   startLoadingTimer()
 
   try {
@@ -787,10 +759,16 @@ const loadFromFile = async (file: File) => {
     const useWorker = isWorkerSupported && file.size > WORKER_THRESHOLD
     isUsingWorker.value = useWorker
 
+    const onProgress = (stage: ParseProgressStage, percent: number) => {
+      progressStep.value = getProgressStepText(stage)
+      progressPercent.value = percent
+    }
+
     let result
     if (useWorker) {
+      progressStep.value = t('loading.progress.reading')
       const buffer = await file.arrayBuffer()
-      result = await parseWithWorker(buffer)
+      result = await parseWithWorker(buffer, undefined, onProgress)
     } else {
       result = await parseDocFileWithFormat(file)
     }
@@ -801,11 +779,13 @@ const loadFromFile = async (file: File) => {
       emit('loading', false)
       return
     }
+    progressStep.value = t('loading.progress.rendering')
+    progressPercent.value = 100
     renderResult(result)
     emit('loaded')
   } catch (err) {
     console.error('Error parsing DOC file:', err)
-    error.value = `❌ 解析失败\n\n${err instanceof Error ? err.message : '未知错误'}`
+    error.value = err instanceof Error ? err.message : '未知错误'
   } finally {
     loading.value = false
     emit('loading', false)
@@ -819,9 +799,13 @@ const loadFromUrl = async (url: string) => {
   loading.value = true
   emit('loading', true)
   error.value = ''
+  progressPercent.value = -1
+  progressStep.value = ''
+  lastSource.value = { type: 'url', url }
   startLoadingTimer()
 
   try {
+    progressStep.value = t('loading.progress.downloading')
     const response = await fetch(url)
     if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`)
 
@@ -831,8 +815,15 @@ const loadFromUrl = async (url: string) => {
     // Use Worker for large files
     const useWorker = isWorkerSupported && buffer.byteLength > WORKER_THRESHOLD
     isUsingWorker.value = useWorker
+    progressStep.value = t('loading.progress.parsing')
+
+    const onProgress = (stage: ParseProgressStage, percent: number) => {
+      progressStep.value = getProgressStepText(stage)
+      progressPercent.value = percent
+    }
+
     const result = useWorker
-      ? await parseWithWorker(buffer)
+      ? await parseWithWorker(buffer, undefined, onProgress)
       : parseDocFileFromBuffer(buffer, fileName.value)
 
     if (!result.success) {
@@ -845,16 +836,21 @@ const loadFromUrl = async (url: string) => {
     emit('loaded')
   } catch (err) {
     console.error('Error loading from URL:', err)
-    const msg = err instanceof Error ? err.message : '未知错误'
-    if (msg.includes('HTTP') || msg.includes('Failed to fetch')) {
-      error.value = `❌ 无法从地址加载文件\n\n${msg}\n\n可能原因：\n• 地址不可达或已失效\n• 跨域限制（CORS）\n• 服务器返回了错误状态码`
-    } else {
-      error.value = `❌ 加载失败\n\n${msg}`
-    }
+    error.value = err instanceof Error ? err.message : '未知错误'
   } finally {
     loading.value = false
     emit('loading', false)
     stopLoadingTimer()
+  }
+}
+
+/** 重试上次加载 */
+const retryLoad = () => {
+  if (!lastSource.value) return
+  if (lastSource.value.type === 'file') {
+    loadFromFile(lastSource.value.file)
+  } else {
+    loadFromUrl(lastSource.value.url)
   }
 }
 
@@ -1297,7 +1293,7 @@ function renderTextboxAnchorHtml(shape: ShapeInfo): string {
     parts.push(`尺寸: ${twipsToPx(shape.width)}×${twipsToPx(shape.height)}px`)
   }
   if (shape.anchorType) {
-    const anchorLabel = SHAPE_ANCHOR_LABEL[shape.anchorType] || shape.anchorType
+    const anchorLabel = t('shapes.anchor.' + shape.anchorType) || shape.anchorType
     parts.push(`锚点: ${anchorLabel}`)
   }
   const info = parts.length > 0 ? parts.join(' · ') : ''
@@ -2696,27 +2692,6 @@ function downloadMarkdown() {
 
 // ---- Keyboard shortcuts ----
 
-interface ShortcutItem {
-  keys: string
-  label: string
-}
-
-const shortcutList: ShortcutItem[] = [
-  { keys: 'Ctrl+F', label: '搜索文档' },
-  { keys: 'F3 / Ctrl+G', label: '下一个匹配' },
-  { keys: 'Shift+F3 / Ctrl+Shift+G', label: '上一个匹配' },
-  { keys: 'Escape', label: '关闭搜索' },
-  { keys: 'Ctrl+P', label: '打印 / 导出 PDF' },
-  { keys: 'Ctrl+= / Ctrl++', label: '放大' },
-  { keys: 'Ctrl+-', label: '缩小' },
-  { keys: 'Ctrl+0', label: '重置缩放' },
-  { keys: 'PageUp', label: '上一页' },
-  { keys: 'PageDown', label: '下一页' },
-  { keys: 'Home', label: '首页' },
-  { keys: 'End', label: '末页' },
-  { keys: '? / Ctrl+/', label: '显示快捷键' },
-]
-
 function toggleShortcuts() {
   showShortcuts.value = !showShortcuts.value
 }
@@ -2861,22 +2836,18 @@ defineExpose({ reload, getPlainText, focusContent })
   <div class="doc-preview" :style="{ '--zoom': zoomLevel / 100 }" tabindex="-1">
     <a class="skip-link" href="#" @click.prevent="focusContent">跳到文档内容</a>
     <!-- Loading -->
-    <div v-if="loading" class="loading-container">
-      <div class="loading-spinner"></div>
-      <p>正在解析文档...</p>
-      <p class="loading-filename" v-if="fileName">{{ fileName }}</p>
-      <p class="loading-meta">
-        <span v-if="fileSize">大小: {{ fileSize }}</span>
-        <span v-if="loadingTime > 2">已用: {{ loadingTime }}秒</span>
-        <span v-if="isUsingWorker" class="worker-badge">⚡ 后台线程</span>
-      </p>
-    </div>
+    <LoadingOverlay
+      v-if="loading"
+      :file-name="fileName"
+      :file-size="fileSize"
+      :loading-time="loadingTime"
+      :is-using-worker="isUsingWorker"
+      :progress-step="progressStep"
+      :progress-percent="progressPercent"
+    />
 
     <!-- Error -->
-    <div v-else-if="error" class="error-container">
-      <div class="error-icon">❌</div>
-      <div class="error-message">{{ error }}</div>
-    </div>
+    <ErrorDisplay v-else-if="error" :error="error" @retry="retryLoad" />
 
     <!-- Preview -->
     <div v-else ref="previewRef" class="preview-wrapper">
@@ -2901,16 +2872,16 @@ defineExpose({ reload, getPlainText, focusContent })
           <button class="toolbar-btn" @click="printDocument" title="打印 / 导出 PDF" aria-label="打印">🖨️</button>
 
           <!-- Download text -->
-          <button class="toolbar-btn" @click="downloadText" title="下载为文本文件" aria-label="下载为文本文件">📥</button>
+          <button class="toolbar-btn" @click="downloadText" :title="t('toolbar.download.txt')" :aria-label="t('toolbar.download.txt')">📥</button>
 
           <!-- Download HTML -->
-          <button class="toolbar-btn" @click="downloadHtml" title="下载为 HTML 文件" aria-label="下载为 HTML 文件">🌐</button>
+          <button class="toolbar-btn" @click="downloadHtml" :title="t('toolbar.download.html')" :aria-label="t('toolbar.download.html')">🌐</button>
 
           <!-- Download Markdown -->
-          <button class="toolbar-btn" @click="downloadMarkdown" title="下载为 Markdown 文件" aria-label="下载为 Markdown 文件">📝</button>
+          <button class="toolbar-btn" @click="downloadMarkdown" :title="t('toolbar.download.md')" :aria-label="t('toolbar.download.md')">📝</button>
 
           <!-- Copy text -->
-          <button class="toolbar-btn" @click="copyText" title="复制文本到剪贴板" aria-label="复制文本到剪贴板">📋</button>
+          <button class="toolbar-btn" @click="copyText" :title="t('toolbar.copy')" :aria-label="t('toolbar.copy')">📋</button>
 
           <span class="toolbar-sep" role="separator"></span>
 
@@ -2920,8 +2891,8 @@ defineExpose({ reload, getPlainText, focusContent })
             :class="{ active: showOutline }"
             :disabled="outline.length === 0"
             @click="showOutline = !showOutline"
-            title="文档大纲"
-            aria-label="文档大纲"
+            :title="t('toolbar.outline')"
+            :aria-label="t('toolbar.outline')"
           >📑</button>
 
           <!-- Hidden text toggle -->
@@ -2929,14 +2900,14 @@ defineExpose({ reload, getPlainText, focusContent })
             class="toolbar-btn"
             :class="{ active: showHiddenText }"
             @click="toggleHiddenText"
-            :title="showHiddenText ? '隐藏文字：显示中' : '隐藏文字：已隐藏'"
-            aria-label="切换隐藏文字显示"
+            :title="showHiddenText ? t('toolbar.hidden.show') : t('toolbar.hidden.hide')"
+            :aria-label="t('toolbar.hidden.toggle')"
           >👁️</button>
         </div>
 
         <div class="toolbar-right">
           <span class="doc-stats" v-if="wordCount > 0">
-            {{ wordCount }} 词 · {{ paragraphCount }} 段 · {{ charCount }} 字
+            {{ wordCount }} {{ t('stats.words') }} · {{ paragraphCount }} {{ t('stats.paragraphs') }} · {{ charCount }} {{ t('stats.chars') }}
           </span>
 
           <span class="toolbar-sep" role="separator"></span>
@@ -2946,8 +2917,8 @@ defineExpose({ reload, getPlainText, focusContent })
             class="toolbar-btn"
             :class="{ active: darkMode }"
             @click="toggleDarkMode"
-            :title="darkMode ? '切换亮色模式' : '切换暗色模式'"
-            aria-label="切换主题"
+            :title="darkMode ? t('app.theme.light') : t('app.theme.dark')"
+            :aria-label="t('toolbar.theme')"
           >
             {{ darkMode ? '☀️' : '🌙' }}
           </button>
@@ -2957,8 +2928,8 @@ defineExpose({ reload, getPlainText, focusContent })
             class="toolbar-btn"
             :class="{ active: showShortcuts }"
             @click="toggleShortcuts"
-            title="快捷键 (?)"
-            aria-label="快捷键"
+            :title="t('toolbar.shortcuts') + ' (?)'"
+            :aria-label="t('toolbar.shortcuts')"
           >⌨️</button>
 
           <span class="toolbar-sep" role="separator"></span>
@@ -2969,8 +2940,8 @@ defineExpose({ reload, getPlainText, focusContent })
               class="pagination-btn"
               @click="goToPrevPage"
               :disabled="currentPage <= 1"
-              title="上一页"
-              aria-label="上一页"
+              :title="t('pagination.prev')"
+              :aria-label="t('pagination.prev')"
             >◀</button>
             <span class="pagination-info">
               {{ currentPage }} / {{ totalPages }}
@@ -2979,8 +2950,8 @@ defineExpose({ reload, getPlainText, focusContent })
               class="pagination-btn"
               @click="goToNextPage"
               :disabled="currentPage >= totalPages"
-              title="下一页"
-              aria-label="下一页"
+              :title="t('pagination.next')"
+              :aria-label="t('pagination.next')"
             >▶</button>
           </div>
         </div>
@@ -2993,33 +2964,33 @@ defineExpose({ reload, getPlainText, focusContent })
           v-model="searchQuery"
           type="text"
           class="search-input"
-          placeholder="搜索文档内容..."
+          :placeholder="t('search.placeholder')"
           @input="performSearch"
           @keyup.enter="nextMatch"
         />
-        <label class="search-option" title="区分大小写">
+        <label class="search-option" :title="t('search.case')">
           <input type="checkbox" v-model="searchCaseSensitive" @change="performSearch" />
           <span>Aa</span>
         </label>
-        <label class="search-option" title="全词匹配">
+        <label class="search-option" :title="t('search.word')">
           <input type="checkbox" v-model="searchWholeWord" @change="performSearch" />
           <span>W</span>
         </label>
         <span class="search-status">{{ searchStatusLabel }}</span>
-        <button class="toolbar-btn" @click="prevMatch" :disabled="searchResults.length === 0" title="上一个">▲</button>
-        <button class="toolbar-btn" @click="nextMatch" :disabled="searchResults.length === 0" title="下一个">▼</button>
-        <button class="toolbar-btn" @click="toggleSearch" title="关闭搜索">✕</button>
+        <button class="toolbar-btn" @click="prevMatch" :disabled="searchResults.length === 0" :title="t('search.placeholder') + ' ▲'" aria-label="前一个匹配">▲</button>
+        <button class="toolbar-btn" @click="nextMatch" :disabled="searchResults.length === 0" :title="t('search.placeholder') + ' ▼'" aria-label="后一个匹配">▼</button>
+        <button class="toolbar-btn" @click="toggleSearch" :title="t('toolbar.search')" aria-label="关闭搜索">✕</button>
       </div>
 
       <!-- Document info -->
       <div class="doc-info">
         <span class="doc-name">{{ fileName }}</span>
-        <span class="doc-status">✓ 解析成功</span>
+        <span class="doc-status">{{ t('doc.status.ok') }}</span>
       </div>
 
       <!-- Document outline sidebar -->
       <div v-if="showOutline && outline.length > 0" class="outline-sidebar">
-        <div class="outline-header">文档大纲</div>
+        <div class="outline-header">{{ t('outline.header') }}</div>
         <div class="outline-list">
           <div
             v-for="item in outline"
@@ -3050,224 +3021,200 @@ defineExpose({ reload, getPlainText, focusContent })
       </div>
 
       <!-- Stories panel (headers / footnotes / endnotes / comments / textboxes) -->
-      <div v-if="storySections.length > 0" class="stories-panel">
-        <button
-          class="stories-toggle"
-          @click="showStories = !showStories"
-          :aria-expanded="showStories"
+      <CollapsiblePanel
+        v-if="storySections.length > 0"
+        v-model="showStories"
+        :title="`${t('story.title')}（${storySections.length}）`"
+        :summary="storySections.map((s: StorySection) => s.label).join(' · ')"
+        panel-class="stories-panel"
+      >
+        <div
+          v-for="section in storySections"
+          :key="section.key"
+          class="story-section"
+          :class="'story-' + section.key"
         >
-          <span class="stories-toggle-icon">{{ showStories ? '▾' : '▸' }}</span>
-          <span>非正文内容（{{ storySections.length }}）</span>
-          <span class="stories-toggle-summary">
-            {{ storySections.map((s: StorySection) => s.label).join(' · ') }}
-          </span>
-        </button>
-        <div v-if="showStories" class="stories-content">
-          <div
-            v-for="section in storySections"
-            :key="section.key"
-            class="story-section"
-            :class="'story-' + section.key"
-          >
-            <div class="story-section-title">{{ section.label }}</div>
-            <div class="story-section-text" v-html="formatStoryText(section.text)"></div>
-            <div v-if="section.images && section.images.length > 0" class="story-section-images">
-              <div
-                v-for="(img, idx) in section.images"
-                :key="idx"
-                class="story-image-item"
-              >
-                <img
-                  :src="img.dataUrl"
-                  :alt="`图片 ${idx + 1}`"
-                  :style="{
-                    maxWidth: '100%',
-                    height: 'auto',
-                    maxHeight: '200px',
-                  }"
-                  class="story-image"
-                />
-                <span class="story-image-caption">{{ img.format?.toUpperCase() || '图片' }}</span>
-              </div>
+          <div class="story-section-title">{{ section.label }}</div>
+          <div class="story-section-text" v-html="formatStoryText(section.text)"></div>
+          <div v-if="section.images && section.images.length > 0" class="story-section-images">
+            <div
+              v-for="(img, idx) in section.images"
+              :key="idx"
+              class="story-image-item"
+            >
+              <img
+                :src="img.dataUrl"
+                :alt="`图片 ${idx + 1}`"
+                :style="{
+                  maxWidth: '100%',
+                  height: 'auto',
+                  maxHeight: '200px',
+                }"
+                class="story-image"
+              />
+              <span class="story-image-caption">{{ img.format?.toUpperCase() || '图片' }}</span>
             </div>
           </div>
         </div>
-      </div>
+      </CollapsiblePanel>
 
       <!-- Document properties (title / author / keywords etc.) -->
-      <div v-if="docProperties" class="properties-panel">
-        <button
-          class="stories-toggle"
-          @click="showProperties = !showProperties"
-          :aria-expanded="showProperties"
-        >
-          <span class="stories-toggle-icon">{{ showProperties ? '▾' : '▸' }}</span>
-          <span>文档属性</span>
-          <span class="stories-toggle-summary">
-            {{ docProperties.title || docProperties.author || '查看详情' }}
-          </span>
-        </button>
-        <div v-if="showProperties" class="properties-content">
-          <div v-if="docProperties.title" class="property-item">
-            <span class="property-label">标题:</span>
-            <span class="property-value">{{ docProperties.title }}</span>
-          </div>
-          <div v-if="docProperties.subject" class="property-item">
-            <span class="property-label">主题:</span>
-            <span class="property-value">{{ docProperties.subject }}</span>
-          </div>
-          <div v-if="docProperties.author" class="property-item">
-            <span class="property-label">作者:</span>
-            <span class="property-value">{{ docProperties.author }}</span>
-          </div>
-          <div v-if="docProperties.lastAuthor" class="property-item">
-            <span class="property-label">最后修改者:</span>
-            <span class="property-value">{{ docProperties.lastAuthor }}</span>
-          </div>
-          <div v-if="docProperties.keywords" class="property-item">
-            <span class="property-label">关键词:</span>
-            <span class="property-value">{{ docProperties.keywords }}</span>
-          </div>
-          <div v-if="docProperties.comments" class="property-item">
-            <span class="property-label">备注:</span>
-            <span class="property-value">{{ docProperties.comments }}</span>
-          </div>
-          <div v-if="docProperties.pageCount" class="property-item">
-            <span class="property-label">页数:</span>
-            <span class="property-value">{{ docProperties.pageCount }}</span>
-          </div>
-          <div v-if="docProperties.wordCount" class="property-item">
-            <span class="property-label">字数:</span>
-            <span class="property-value">{{ docProperties.wordCount }}</span>
-          </div>
-          <div v-if="docProperties.charCount" class="property-item">
-            <span class="property-label">字符数:</span>
-            <span class="property-value">{{ docProperties.charCount }}</span>
-          </div>
-          <div v-if="docProperties.category" class="property-item">
-            <span class="property-label">类别:</span>
-            <span class="property-value">{{ docProperties.category }}</span>
-          </div>
-          <div v-if="docProperties.company" class="property-item">
-            <span class="property-label">公司:</span>
-            <span class="property-value">{{ docProperties.company }}</span>
-          </div>
-          <div v-if="docProperties.manager" class="property-item">
-            <span class="property-label">经理:</span>
-            <span class="property-value">{{ docProperties.manager }}</span>
-          </div>
-          <div v-if="docProperties.template" class="property-item">
-            <span class="property-label">模板:</span>
-            <span class="property-value">{{ docProperties.template }}</span>
-          </div>
-          <div v-if="styleSet" class="property-item">
-            <span class="property-label">样式集:</span>
-            <span class="property-value">{{ styleSet.name }}{{ styleSet.isCustom ? ' (自定义)' : '' }}</span>
-          </div>
-          <div v-if="docProperties.appName" class="property-item">
-            <span class="property-label">应用程序:</span>
-            <span class="property-value">{{ docProperties.appName }}</span>
-          </div>
-          <div v-if="wordVersionLabel" class="property-item">
-            <span class="property-label">Word 版本:</span>
-            <span class="property-value">{{ wordVersionLabel }}</span>
-          </div>
-          <div v-if="docProperties.revisionNumber" class="property-item">
-            <span class="property-label">修订号:</span>
-            <span class="property-value">{{ docProperties.revisionNumber }}</span>
-          </div>
-          <div v-if="docProperties.lineCount" class="property-item">
-            <span class="property-label">行数:</span>
-            <span class="property-value">{{ docProperties.lineCount }}</span>
-          </div>
-          <div v-if="docProperties.paragraphCount" class="property-item">
-            <span class="property-label">段落数:</span>
-            <span class="property-value">{{ docProperties.paragraphCount }}</span>
-          </div>
-          <div v-if="docProperties.charCountWithSpaces" class="property-item">
-            <span class="property-label">字符数(含空格):</span>
-            <span class="property-value">{{ docProperties.charCountWithSpaces }}</span>
-          </div>
+      <CollapsiblePanel
+        v-if="docProperties"
+        v-model="showProperties"
+        :title="t('props.title')"
+        :summary="docProperties.title || docProperties.author || t('props.title')"
+        panel-class="properties-panel"
+      >
+        <div v-if="docProperties.title" class="property-item">
+          <span class="property-label">{{ t('props.field.title') }}:</span>
+          <span class="property-value">{{ docProperties.title }}</span>
         </div>
-      </div>
+        <div v-if="docProperties.subject" class="property-item">
+          <span class="property-label">{{ t('props.field.subject') }}:</span>
+          <span class="property-value">{{ docProperties.subject }}</span>
+        </div>
+        <div v-if="docProperties.author" class="property-item">
+          <span class="property-label">{{ t('props.field.author') }}:</span>
+          <span class="property-value">{{ docProperties.author }}</span>
+        </div>
+        <div v-if="docProperties.lastAuthor" class="property-item">
+          <span class="property-label">{{ t('props.field.lastAuthor') }}:</span>
+          <span class="property-value">{{ docProperties.lastAuthor }}</span>
+        </div>
+        <div v-if="docProperties.keywords" class="property-item">
+          <span class="property-label">{{ t('props.field.keywords') }}:</span>
+          <span class="property-value">{{ docProperties.keywords }}</span>
+        </div>
+        <div v-if="docProperties.comments" class="property-item">
+          <span class="property-label">{{ t('props.field.comments') }}:</span>
+          <span class="property-value">{{ docProperties.comments }}</span>
+        </div>
+        <div v-if="docProperties.pageCount" class="property-item">
+          <span class="property-label">{{ t('props.pages') }}:</span>
+          <span class="property-value">{{ docProperties.pageCount }}</span>
+        </div>
+        <div v-if="docProperties.wordCount" class="property-item">
+          <span class="property-label">{{ t('props.words') }}:</span>
+          <span class="property-value">{{ docProperties.wordCount }}</span>
+        </div>
+        <div v-if="docProperties.charCount" class="property-item">
+          <span class="property-label">{{ t('props.chars') }}:</span>
+          <span class="property-value">{{ docProperties.charCount }}</span>
+        </div>
+        <div v-if="docProperties.category" class="property-item">
+          <span class="property-label">{{ t('props.category') }}:</span>
+          <span class="property-value">{{ docProperties.category }}</span>
+        </div>
+        <div v-if="docProperties.company" class="property-item">
+          <span class="property-label">{{ t('props.company') }}:</span>
+          <span class="property-value">{{ docProperties.company }}</span>
+        </div>
+        <div v-if="docProperties.manager" class="property-item">
+          <span class="property-label">{{ t('props.manager') }}:</span>
+          <span class="property-value">{{ docProperties.manager }}</span>
+        </div>
+        <div v-if="docProperties.template" class="property-item">
+          <span class="property-label">{{ t('props.template') }}:</span>
+          <span class="property-value">{{ docProperties.template }}</span>
+        </div>
+        <div v-if="styleSet" class="property-item">
+          <span class="property-label">{{ t('props.styleSet') }}:</span>
+          <span class="property-value">{{ styleSet.name }}{{ styleSet.isCustom ? t('props.styleSet.custom') : '' }}</span>
+        </div>
+        <div v-if="docProperties.appName" class="property-item">
+          <span class="property-label">{{ t('props.appName') }}:</span>
+          <span class="property-value">{{ docProperties.appName }}</span>
+        </div>
+        <div v-if="wordVersionLabel" class="property-item">
+          <span class="property-label">{{ t('props.wordVersion') }}:</span>
+          <span class="property-value">{{ wordVersionLabel }}</span>
+        </div>
+        <div v-if="docProperties.revisionNumber" class="property-item">
+          <span class="property-label">{{ t('props.revisionNumber') }}:</span>
+          <span class="property-value">{{ docProperties.revisionNumber }}</span>
+        </div>
+        <div v-if="docProperties.lineCount" class="property-item">
+          <span class="property-label">{{ t('props.lines') }}:</span>
+          <span class="property-value">{{ docProperties.lineCount }}</span>
+        </div>
+        <div v-if="docProperties.paragraphCount" class="property-item">
+          <span class="property-label">{{ t('props.paragraphs') }}:</span>
+          <span class="property-value">{{ docProperties.paragraphCount }}</span>
+        </div>
+        <div v-if="docProperties.charCountWithSpaces" class="property-item">
+          <span class="property-label">{{ t('props.charsWithSpaces') }}:</span>
+          <span class="property-value">{{ docProperties.charCountWithSpaces }}</span>
+        </div>
+      </CollapsiblePanel>
 
       <!-- Document fields (from PlcfFld - AUTHOR/TITLE/DATE etc.) -->
-      <div v-if="docFields" class="properties-panel">
-        <button
-          class="stories-toggle"
-          @click="showProperties = !showProperties"
-          :aria-expanded="showProperties"
-        >
-          <span class="stories-toggle-icon">{{ showProperties ? '▾' : '▸' }}</span>
-          <span>文档域</span>
-          <span class="stories-toggle-summary">
-            {{ docFields.title || docFields.author || '查看详情' }}
-          </span>
-        </button>
-        <div v-if="showProperties" class="properties-content">
-          <div v-if="docFields.title" class="property-item">
-            <span class="property-label">标题:</span>
-            <span class="property-value">{{ docFields.title }}</span>
-          </div>
-          <div v-if="docFields.author" class="property-item">
-            <span class="property-label">作者:</span>
-            <span class="property-value">{{ docFields.author }}</span>
-          </div>
-          <div v-if="docFields.subject" class="property-item">
-            <span class="property-label">主题:</span>
-            <span class="property-value">{{ docFields.subject }}</span>
-          </div>
-          <div v-if="docFields.keywords" class="property-item">
-            <span class="property-label">关键词:</span>
-            <span class="property-value">{{ docFields.keywords }}</span>
-          </div>
-          <div v-if="docFields.comments" class="property-item">
-            <span class="property-label">备注:</span>
-            <span class="property-value">{{ docFields.comments }}</span>
-          </div>
-          <div v-if="docFields.lastSavedBy" class="property-item">
-            <span class="property-label">最后保存者:</span>
-            <span class="property-value">{{ docFields.lastSavedBy }}</span>
-          </div>
-          <div v-if="docFields.createDate" class="property-item">
-            <span class="property-label">创建日期:</span>
-            <span class="property-value">{{ docFields.createDate }}</span>
-          </div>
-          <div v-if="docFields.lastSavedDate" class="property-item">
-            <span class="property-label">最后保存日期:</span>
-            <span class="property-value">{{ docFields.lastSavedDate }}</span>
-          </div>
-          <div v-if="docFields.printDate" class="property-item">
-            <span class="property-label">打印日期:</span>
-            <span class="property-value">{{ docFields.printDate }}</span>
-          </div>
-          <div v-if="docFields.date" class="property-item">
-            <span class="property-label">日期:</span>
-            <span class="property-value">{{ docFields.date }}</span>
-          </div>
-          <div v-if="docFields.time" class="property-item">
-            <span class="property-label">时间:</span>
-            <span class="property-value">{{ docFields.time }}</span>
-          </div>
-          <div v-if="docFields.revisionNumber" class="property-item">
-            <span class="property-label">修订号:</span>
-            <span class="property-value">{{ docFields.revisionNumber }}</span>
-          </div>
+      <CollapsiblePanel
+        v-if="docFields"
+        v-model="showProperties"
+        :title="t('props.docFields')"
+        :summary="docFields.title || docFields.author || t('props.docFields')"
+        panel-class="properties-panel"
+      >
+        <div v-if="docFields.title" class="property-item">
+          <span class="property-label">{{ t('props.field.title') }}:</span>
+          <span class="property-value">{{ docFields.title }}</span>
         </div>
-      </div>
+        <div v-if="docFields.author" class="property-item">
+          <span class="property-label">{{ t('props.field.author') }}:</span>
+          <span class="property-value">{{ docFields.author }}</span>
+        </div>
+        <div v-if="docFields.subject" class="property-item">
+          <span class="property-label">{{ t('props.field.subject') }}:</span>
+          <span class="property-value">{{ docFields.subject }}</span>
+        </div>
+        <div v-if="docFields.keywords" class="property-item">
+          <span class="property-label">{{ t('props.field.keywords') }}:</span>
+          <span class="property-value">{{ docFields.keywords }}</span>
+        </div>
+        <div v-if="docFields.comments" class="property-item">
+          <span class="property-label">{{ t('props.field.comments') }}:</span>
+          <span class="property-value">{{ docFields.comments }}</span>
+        </div>
+        <div v-if="docFields.lastSavedBy" class="property-item">
+          <span class="property-label">{{ t('props.field.lastSavedBy') }}:</span>
+          <span class="property-value">{{ docFields.lastSavedBy }}</span>
+        </div>
+        <div v-if="docFields.createDate" class="property-item">
+          <span class="property-label">{{ t('props.field.created') }}:</span>
+          <span class="property-value">{{ docFields.createDate }}</span>
+        </div>
+        <div v-if="docFields.lastSavedDate" class="property-item">
+          <span class="property-label">{{ t('props.field.lastSaved') }}:</span>
+          <span class="property-value">{{ docFields.lastSavedDate }}</span>
+        </div>
+        <div v-if="docFields.printDate" class="property-item">
+          <span class="property-label">{{ t('props.field.printed') }}:</span>
+          <span class="property-value">{{ docFields.printDate }}</span>
+        </div>
+        <div v-if="docFields.date" class="property-item">
+          <span class="property-label">{{ t('props.field.date') }}:</span>
+          <span class="property-value">{{ docFields.date }}</span>
+        </div>
+        <div v-if="docFields.time" class="property-item">
+          <span class="property-label">{{ t('props.field.time') }}:</span>
+          <span class="property-value">{{ docFields.time }}</span>
+        </div>
+        <div v-if="docFields.revisionNumber" class="property-item">
+          <span class="property-label">{{ t('props.field.revision') }}:</span>
+          <span class="property-value">{{ docFields.revisionNumber }}</span>
+        </div>
+      </CollapsiblePanel>
 
       <!-- Document flags from DOP (facing pages / title page / track changes etc.) -->
-      <div v-if="docFlagItems.length > 0" class="doc-flags-panel">
-        <button
-          class="stories-toggle"
-          @click="showDocFlags = !showDocFlags"
-          :aria-expanded="showDocFlags"
-        >
-          <span class="stories-toggle-icon">{{ showDocFlags ? '▾' : '▸' }}</span>
-          <span>文档标志</span>
-          <span class="stories-toggle-summary">{{ docFlagItems.length }} 项</span>
-        </button>
-        <div v-if="showDocFlags" class="doc-flags-content">
+      <CollapsiblePanel
+        v-if="docFlagItems.length > 0"
+        v-model="showDocFlags"
+        :title="t('flags.title')"
+        :summary="t('flags.items', { n: docFlagItems.length })"
+        panel-class="doc-flags-panel"
+      >
+        <div class="doc-flags-content">
           <div
             v-for="(item, index) in docFlagItems"
             :key="index"
@@ -3277,19 +3224,16 @@ defineExpose({ reload, getPlainText, focusContent })
             <span class="flag-description">{{ item.description }}</span>
           </div>
         </div>
-      </div>
+      </CollapsiblePanel>
 
       <!-- Table of Contents -->
-      <div v-if="toc.length > 0" class="toc-panel">
-        <button
-          class="stories-toggle"
-          @click="showToc = !showToc"
-          :aria-expanded="showToc"
-        >
-          <span class="stories-toggle-icon">{{ showToc ? '▾' : '▸' }}</span>
-          <span>目录（{{ toc.length }}）</span>
-        </button>
-        <div v-if="showToc" class="toc-content">
+      <CollapsiblePanel
+        v-if="toc.length > 0"
+        v-model="showToc"
+        :title="`${t('toc.title')}（${toc.length}）`"
+        panel-class="toc-panel"
+      >
+        <div class="toc-content">
           <ul class="toc-list">
             <li
               v-for="(entry, index) in toc"
@@ -3302,19 +3246,16 @@ defineExpose({ reload, getPlainText, focusContent })
             </li>
           </ul>
         </div>
-      </div>
+      </CollapsiblePanel>
 
       <!-- Index -->
-      <div v-if="index.length > 0" class="toc-panel">
-        <button
-          class="stories-toggle"
-          @click="showIndex = !showIndex"
-          :aria-expanded="showIndex"
-        >
-          <span class="stories-toggle-icon">{{ showIndex ? '▾' : '▸' }}</span>
-          <span>索引（{{ index.length }}）</span>
-        </button>
-        <div v-if="showIndex" class="toc-content">
+      <CollapsiblePanel
+        v-if="index.length > 0"
+        v-model="showIndex"
+        :title="`${t('index.title')}（${index.length}）`"
+        panel-class="toc-panel"
+      >
+        <div class="toc-content">
           <ul class="toc-list">
             <li
               v-for="(entry, i) in index"
@@ -3328,71 +3269,61 @@ defineExpose({ reload, getPlainText, focusContent })
             </li>
           </ul>
         </div>
-      </div>
+      </CollapsiblePanel>
 
       <!-- Revision marks (track changes: insert / delete) -->
-      <div v-if="revisions.length > 0" class="revisions-panel">
-        <button
-          class="stories-toggle"
-          @click="showRevisions = !showRevisions"
-          :aria-expanded="showRevisions"
-        >
-          <span class="stories-toggle-icon">{{ showRevisions ? '▾' : '▸' }}</span>
-          <span>修订记录（{{ revisions.length }}）</span>
-          <span class="stories-toggle-summary">
-            {{ revisionItems.length }} 批次
-          </span>
-        </button>
-        <div v-if="showRevisions" class="revisions-content">
-          <div class="revision-mode-toolbar" role="group" aria-label="修订显示模式">
-            <button
-              class="revision-mode-btn"
-              :class="{ active: revisionMode === 'marks' }"
-              :aria-pressed="revisionMode === 'marks'"
-              @click="setRevisionMode('marks')"
-              title="显示 <ins>/<del> 修订标记"
-            >显示标记</button>
-            <button
-              class="revision-mode-btn"
-              :class="{ active: revisionMode === 'accepted' }"
-              :aria-pressed="revisionMode === 'accepted'"
-              @click="setRevisionMode('accepted')"
-              title="接受全部修订：保留插入文本，移除删除文本"
-            >接受全部</button>
-            <button
-              class="revision-mode-btn"
-              :class="{ active: revisionMode === 'rejected' }"
-              :aria-pressed="revisionMode === 'rejected'"
-              @click="setRevisionMode('rejected')"
-              title="拒绝全部修订：移除插入文本，保留删除文本"
-            >拒绝全部</button>
-          </div>
-          <div
-            v-for="(item, idx) in revisionItems"
-            :key="idx"
-            class="revision-item"
-            :class="'revision-type-' + item.type"
-          >
-            <span class="revision-badge">{{ item.label }}</span>
-            <span class="revision-author">{{ item.author }}</span>
-            <span v-if="item.time" class="revision-time">{{ item.time }}</span>
-            <span class="revision-count">{{ item.count }} 处</span>
-          </div>
+      <CollapsiblePanel
+        v-if="revisions.length > 0"
+        v-model="showRevisions"
+        :title="`${t('revisions.title')}（${revisions.length}）`"
+        :summary="t('revisions.count', { n: revisionItems.length })"
+        panel-class="revisions-panel"
+      >
+        <div class="revision-mode-toolbar" role="group" :aria-label="t('revisions.title')">
+          <button
+            class="revision-mode-btn"
+            :class="{ active: revisionMode === 'marks' }"
+            :aria-pressed="revisionMode === 'marks'"
+            @click="setRevisionMode('marks')"
+            :title="t('revisions.marks')"
+          >{{ t('revisions.marks') }}</button>
+          <button
+            class="revision-mode-btn"
+            :class="{ active: revisionMode === 'accepted' }"
+            :aria-pressed="revisionMode === 'accepted'"
+            @click="setRevisionMode('accepted')"
+            :title="t('revisions.accept')"
+          >{{ t('revisions.accept') }}</button>
+          <button
+            class="revision-mode-btn"
+            :class="{ active: revisionMode === 'rejected' }"
+            :aria-pressed="revisionMode === 'rejected'"
+            @click="setRevisionMode('rejected')"
+            :title="t('revisions.reject')"
+          >{{ t('revisions.reject') }}</button>
         </div>
-      </div>
+        <div
+          v-for="(item, idx) in revisionItems"
+          :key="idx"
+          class="revision-item"
+          :class="'revision-type-' + item.type"
+        >
+          <span class="revision-badge">{{ item.label }}</span>
+          <span class="revision-author">{{ item.author }}</span>
+          <span v-if="item.time" class="revision-time">{{ item.time }}</span>
+          <span class="revision-count">{{ t('revisions.count', { n: item.count }) }}</span>
+        </div>
+      </CollapsiblePanel>
 
       <!-- Bookmarks (named ranges from PlcfBkf/PlcfBkl/SttbfBkmk) -->
-      <div v-if="bookmarks.length > 0" class="bookmarks-panel">
-        <button
-          class="stories-toggle"
-          @click="showBookmarks = !showBookmarks"
-          :aria-expanded="showBookmarks"
-        >
-          <span class="stories-toggle-icon">{{ showBookmarks ? '▾' : '▸' }}</span>
-          <span>书签（{{ bookmarks.length }}）</span>
-          <span class="stories-toggle-summary">命名范围</span>
-        </button>
-        <div v-if="showBookmarks" class="bookmarks-content">
+      <CollapsiblePanel
+        v-if="bookmarks.length > 0"
+        v-model="showBookmarks"
+        :title="`${t('bookmarks.title')}（${bookmarks.length}）`"
+        :summary="t('bookmarks.summary')"
+        panel-class="bookmarks-panel"
+      >
+        <div class="bookmarks-content">
           <div
             v-for="(bm, idx) in bookmarks"
             :key="idx"
@@ -3402,20 +3333,17 @@ defineExpose({ reload, getPlainText, focusContent })
             <span class="bookmark-range">CP: {{ bm.cpStart }} – {{ bm.cpEnd }}</span>
           </div>
         </div>
-      </div>
+      </CollapsiblePanel>
 
       <!-- Sections (page layout from PlcfSed/SEPX) -->
-      <div v-if="sections.length > 0" class="sections-panel">
-        <button
-          class="stories-toggle"
-          @click="showSections = !showSections"
-          :aria-expanded="showSections"
-        >
-          <span class="stories-toggle-icon">{{ showSections ? '▾' : '▸' }}</span>
-          <span>分节与页面布局（{{ sections.length }}）</span>
-          <span class="stories-toggle-summary">纸张 / 边距 / 方向 / 分栏</span>
-        </button>
-        <div v-if="showSections" class="sections-content">
+      <CollapsiblePanel
+        v-if="sections.length > 0"
+        v-model="showSections"
+        :title="`${t('sections.title')}（${sections.length}）`"
+        :summary="t('sections.summary')"
+        panel-class="sections-panel"
+      >
+        <div class="sections-content">
           <div
             v-for="(sec, idx) in sections"
             :key="idx"
@@ -3424,67 +3352,64 @@ defineExpose({ reload, getPlainText, focusContent })
             <div class="section-header">
               <span class="section-index">节 {{ sec.index + 1 }}</span>
               <span v-if="sec.breakType" class="section-break">
-                {{ BREAK_TYPE_LABEL[sec.breakType] || sec.breakType }}
+                {{ t('sections.break.' + sec.breakType) || sec.breakType }}
               </span>
               <span v-if="sec.orientation" class="section-orientation">
-                {{ sec.orientation === 'landscape' ? '横向' : '纵向' }}
+                {{ sec.orientation === 'landscape' ? t('sections.orientation.landscape') : t('sections.orientation.portrait') }}
               </span>
             </div>
             <div class="section-grid">
               <div v-if="sec.pageWidthPt && sec.pageHeightPt" class="section-field">
-                <span class="section-field-label">页面尺寸</span>
+                <span class="section-field-label">{{ t('sections.pageSize') }}</span>
                 <span class="section-field-value">
                   {{ formatSizePt(sec.pageWidthPt) }} × {{ formatSizePt(sec.pageHeightPt) }}
                 </span>
               </div>
               <div v-if="sec.marginLeftPt" class="section-field">
-                <span class="section-field-label">左边距</span>
+                <span class="section-field-label">{{ t('sections.marginLeft') }}</span>
                 <span class="section-field-value">{{ formatSizePt(sec.marginLeftPt) }}</span>
               </div>
               <div v-if="sec.marginRightPt" class="section-field">
-                <span class="section-field-label">右边距</span>
+                <span class="section-field-label">{{ t('sections.marginRight') }}</span>
                 <span class="section-field-value">{{ formatSizePt(sec.marginRightPt) }}</span>
               </div>
               <div v-if="sec.marginTopPt" class="section-field">
-                <span class="section-field-label">上边距</span>
+                <span class="section-field-label">{{ t('sections.marginTop') }}</span>
                 <span class="section-field-value">{{ formatSizePt(sec.marginTopPt) }}</span>
               </div>
               <div v-if="sec.marginBottomPt" class="section-field">
-                <span class="section-field-label">下边距</span>
+                <span class="section-field-label">{{ t('sections.marginBottom') }}</span>
                 <span class="section-field-value">{{ formatSizePt(sec.marginBottomPt) }}</span>
               </div>
               <div v-if="sec.gutterPt" class="section-field">
-                <span class="section-field-label">装订线</span>
+                <span class="section-field-label">{{ t('sections.gutter') }}</span>
                 <span class="section-field-value">{{ formatSizePt(sec.gutterPt) }}</span>
               </div>
               <div v-if="sec.columnCount && sec.columnCount > 1" class="section-field">
-                <span class="section-field-label">分栏</span>
+                <span class="section-field-label">{{ t('sections.columns') }}</span>
                 <span class="section-field-value">
-                  {{ sec.columnCount }} 栏
-                  <span v-if="sec.columnSpacingPt">（间距 {{ formatSizePt(sec.columnSpacingPt) }}）</span>
+                  {{ sec.columnCount }} {{ t('sections.columns') }}
+                  <span v-if="sec.columnSpacingPt">{{ t('sections.columns.gap', { pt: formatSizePt(sec.columnSpacingPt) }) }}</span>
                 </span>
               </div>
               <div v-if="sec.pageStart !== undefined" class="section-field">
-                <span class="section-field-label">起始页码</span>
+                <span class="section-field-label">{{ t('sections.startPageNum') }}</span>
                 <span class="section-field-value">{{ sec.pageStart }}</span>
               </div>
             </div>
           </div>
         </div>
-      </div>
+      </CollapsiblePanel>
 
       <!-- Page fields (PAGE / NUMPAGES / SECTION / SECTIONPAGES) -->
-      <div v-if="pageFields.length > 0" class="page-fields-panel">
-        <button
-          class="stories-toggle"
-          @click="showPageFields = !showPageFields"
-          :aria-expanded="showPageFields"
-        >
-          <span class="stories-toggle-icon">{{ showPageFields ? '▾' : '▸' }}</span>
-          <span>页码域（{{ pageFields.length }}）</span>
-          <span class="stories-toggle-summary">PAGE / NUMPAGES</span>
-        </button>
-        <div v-if="showPageFields" class="page-fields-content">
+      <CollapsiblePanel
+        v-if="pageFields.length > 0"
+        v-model="showPageFields"
+        :title="`${t('pageFields.title')}（${pageFields.length}）`"
+        summary="PAGE / NUMPAGES"
+        panel-class="page-fields-panel"
+      >
+        <div class="page-fields-content">
           <div
             v-for="(pf, idx) in pageFields"
             :key="idx"
@@ -3492,28 +3417,25 @@ defineExpose({ reload, getPlainText, focusContent })
           >
             <div class="page-field-header">
               <span class="page-field-type">
-                {{ PAGE_FIELD_TYPE_LABEL[pf.type] || pf.type }}
+                {{ t('pageFields.type.' + pf.type) || pf.type }}
               </span>
-              <span v-if="pf.result" class="page-field-result">值：{{ pf.result }}</span>
+              <span v-if="pf.result" class="page-field-result">{{ t('pageFields.value', { v: pf.result }) }}</span>
             </div>
-            <div class="page-field-instruction">指令：{{ pf.instruction }}</div>
+            <div class="page-field-instruction">{{ t('pageFields.instruction', { inst: pf.instruction }) }}</div>
             <div class="page-field-cp">CP: {{ pf.cpStart }} – {{ pf.cpEnd }}</div>
           </div>
         </div>
-      </div>
+      </CollapsiblePanel>
 
       <!-- Cross-references (REF / NOTEREF) -->
-      <div v-if="crossReferences.length > 0" class="cross-refs-panel">
-        <button
-          class="stories-toggle"
-          @click="showCrossReferences = !showCrossReferences"
-          :aria-expanded="showCrossReferences"
-        >
-          <span class="stories-toggle-icon">{{ showCrossReferences ? '▾' : '▸' }}</span>
-          <span>交叉引用（{{ crossReferences.length }}）</span>
-          <span class="stories-toggle-summary">REF / NOTEREF</span>
-        </button>
-        <div v-if="showCrossReferences" class="cross-refs-content">
+      <CollapsiblePanel
+        v-if="crossReferences.length > 0"
+        v-model="showCrossReferences"
+        :title="`${t('crossRefs.title')}（${crossReferences.length}）`"
+        summary="REF / NOTEREF"
+        panel-class="cross-refs-panel"
+      >
+        <div class="cross-refs-content">
           <div
             v-for="(cr, idx) in crossReferences"
             :key="idx"
@@ -3521,177 +3443,164 @@ defineExpose({ reload, getPlainText, focusContent })
           >
             <div class="cross-ref-header">
               <span class="cross-ref-type">
-                {{ CROSS_REF_TYPE_LABEL[cr.type] || cr.type }}
+                {{ t('crossRefs.type.' + cr.type) || cr.type }}
               </span>
-              <span v-if="cr.result" class="cross-ref-result">显示：{{ cr.result }}</span>
+              <span v-if="cr.result" class="cross-ref-result">{{ t('crossRefs.show', { v: cr.result }) }}</span>
             </div>
             <div class="cross-ref-target">
-              目标书签：<code>{{ cr.targetBookmarkName }}</code>
+              {{ t('crossRefs.target') }}：<code>{{ cr.targetBookmarkName }}</code>
             </div>
-            <div class="cross-ref-instruction">指令：{{ cr.instruction }}</div>
+            <div class="cross-ref-instruction">{{ t('crossRefs.instruction', { inst: cr.instruction }) }}</div>
             <div v-if="cr.switches.length > 0" class="cross-ref-switches">
-              开关：
+              {{ t('crossRefs.switches') }}：
               <span
                 v-for="sw in cr.switches"
                 :key="sw"
                 class="cross-ref-switch"
-                :title="CROSS_REF_SWITCH_LABEL[sw]"
-              >{{ sw }}{{ CROSS_REF_SWITCH_LABEL[sw] ? ` (${CROSS_REF_SWITCH_LABEL[sw]})` : '' }}</span>
+                :title="t('crossRefs.switch.' + sw.replace('\\\\', ''))"
+              >{{ sw }}{{ t('crossRefs.switch.' + sw.replace('\\\\', '')) ? ` (${t('crossRefs.switch.' + sw.replace('\\\\', ''))})` : '' }}</span>
             </div>
             <div class="cross-ref-cp">CP: {{ cr.cpStart }} – {{ cr.cpEnd }}</div>
           </div>
         </div>
-      </div>
+      </CollapsiblePanel>
 
       <!-- Shapes (Office Art Drawing Container - floating images with anchors) -->
-      <div v-if="shapes.length > 0" class="shapes-panel">
-        <button
-          class="stories-toggle"
-          @click="showShapes = !showShapes"
-          :aria-expanded="showShapes"
-        >
-          <span class="stories-toggle-icon">{{ showShapes ? '▾' : '▸' }}</span>
-          <span>形状与图片锚点（{{ shapes.length }}）</span>
-          <span class="stories-toggle-summary">浮动图片定位</span>
-        </button>
-        <div v-if="showShapes" class="shapes-content">
+      <CollapsiblePanel
+        v-if="shapes.length > 0"
+        v-model="showShapes"
+        :title="`${t('shapes.title')}（${shapes.length}）`"
+        :summary="t('shapes.summary')"
+        panel-class="shapes-panel"
+      >
+        <div class="shapes-content">
           <div
             v-for="(shape, idx) in shapes"
             :key="idx"
             class="shape-item"
           >
             <div class="shape-header">
-              <span class="shape-type">{{ SHAPE_TYPE_LABEL[shape.type] || shape.type }}</span>
-              <span v-if="shape.floating" class="shape-floating">浮动</span>
-              <span v-if="shape.hasPicture" class="shape-picture">含图片</span>
+              <span class="shape-type">{{ t('shapes.type.' + shape.type) || shape.type }}</span>
+              <span v-if="shape.floating" class="shape-floating">{{ t('shapes.floating') }}</span>
+              <span v-if="shape.hasPicture" class="shape-picture">{{ t('shapes.hasPicture') }}</span>
             </div>
-            <div class="shape-spid">形状 ID: {{ shape.spid }}</div>
+            <div class="shape-spid">{{ t('shapes.spid', { id: shape.spid }) }}</div>
             <div v-if="shape.x !== undefined && shape.y !== undefined" class="shape-position">
-              位置: ({{ shape.x }}, {{ shape.y }}) twips
+              {{ t('shapes.position', { x: shape.x, y: shape.y }) }}
             </div>
             <div v-if="shape.width !== undefined && shape.height !== undefined" class="shape-size">
-              尺寸: {{ shape.width }} × {{ shape.height }} twips
+              {{ t('shapes.size', { w: shape.width, h: shape.height }) }}
             </div>
             <div class="shape-anchor">
-              锚点类型: {{ SHAPE_ANCHOR_LABEL[shape.anchorType] || shape.anchorType }}
-              <span v-if="shape.anchorCp !== undefined"> (CP: {{ shape.anchorCp }})</span>
+              {{ t('shapes.anchorType', { type: t('shapes.anchor.' + shape.anchorType) || shape.anchorType, cp: shape.anchorCp !== undefined ? shape.anchorCp : '' }) }}
             </div>
             <div v-if="shape.fcPic !== undefined" class="shape-fcpic">
-              图片偏移 (fcPic): {{ shape.fcPic }}
+              {{ t('shapes.fcPic', { fc: shape.fcPic }) }}
             </div>
-            <div v-if="shape.name" class="shape-name">名称: {{ shape.name }}</div>
+            <div v-if="shape.name" class="shape-name">{{ t('shapes.name', { name: shape.name }) }}</div>
             <div v-if="shape.groupId !== undefined" class="shape-group">
-              组合 ID: {{ shape.groupId }}
+              {{ t('shapes.groupId', { id: shape.groupId }) }}
             </div>
           </div>
         </div>
-      </div>
+      </CollapsiblePanel>
 
       <!-- Equations (Equation Editor OLE objects) -->
-      <div v-if="equations.length > 0" class="equations-panel">
-        <button
-          class="stories-toggle"
-          @click="showEquations = !showEquations"
-          :aria-expanded="showEquations"
-        >
-          <span class="stories-toggle-icon">{{ showEquations ? '▾' : '▸' }}</span>
-          <span>公式（{{ equations.length }}）</span>
-          <span class="stories-toggle-summary">Equation Editor 公式</span>
-        </button>
-        <div v-if="showEquations" class="equations-content">
+      <CollapsiblePanel
+        v-if="equations.length > 0"
+        v-model="showEquations"
+        :title="`${t('equations.title')}（${equations.length}）`"
+        :summary="t('equations.summary')"
+        panel-class="equations-panel"
+      >
+        <div class="equations-content">
           <div
             v-for="(eq, idx) in equations"
             :key="idx"
             class="equation-item"
           >
             <div class="equation-header">
-              <span class="equation-id">公式 {{ eq.id }}</span>
-              <span v-if="eq.hasPicture" class="equation-has-picture">含图片</span>
+              <span class="equation-id">{{ t('equations.id', { id: eq.id }) }}</span>
+              <span v-if="eq.hasPicture" class="equation-has-picture">{{ t('equations.hasPicture') }}</span>
             </div>
             <div v-if="eq.latex" class="equation-latex">
-              <span class="equation-label">LaTeX:</span>
+              <span class="equation-label">{{ t('equations.latex') }}</span>
               <span class="equation-code">{{ eq.latex }}</span>
             </div>
             <div v-if="eq.eqnText" class="equation-eqntext">
-              <span class="equation-label">原始:</span>
+              <span class="equation-label">{{ t('equations.original') }}</span>
               <span class="equation-code">{{ eq.eqnText }}</span>
             </div>
           </div>
         </div>
-      </div>
+      </CollapsiblePanel>
 
       <!-- Charts (MSGraph/Excel/SmartArt OLE objects) -->
-      <div v-if="charts.length > 0" class="charts-panel">
-        <button
-          class="stories-toggle"
-          @click="showCharts = !showCharts"
-          :aria-expanded="showCharts"
-        >
-          <span class="stories-toggle-icon">{{ showCharts ? '▾' : '▸' }}</span>
-          <span>图表（{{ charts.length }}）</span>
-          <span class="stories-toggle-summary">MSGraph/Excel/SmartArt 对象</span>
-        </button>
-        <div v-if="showCharts" class="charts-content">
+      <CollapsiblePanel
+        v-if="charts.length > 0"
+        v-model="showCharts"
+        :title="`${t('charts.title')}（${charts.length}）`"
+        :summary="t('charts.summary')"
+        panel-class="charts-panel"
+      >
+        <div class="charts-content">
           <div
             v-for="(chart, idx) in charts"
             :key="idx"
             class="chart-item"
           >
             <div class="chart-header">
-              <span class="chart-id">图表 {{ chart.id }}</span>
+              <span class="chart-id">{{ t('charts.id', { id: chart.id }) }}</span>
               <span class="chart-type">{{ getChartTypeLabel(chart.type) }}</span>
-              <span v-if="chart.hasPicture" class="chart-has-picture">含图片</span>
-              <span v-if="chart.hasData" class="chart-has-data">含数据</span>
+              <span v-if="chart.hasPicture" class="chart-has-picture">{{ t('charts.hasPicture') }}</span>
+              <span v-if="chart.hasData" class="chart-has-data">{{ t('charts.hasData') }}</span>
             </div>
             <div class="chart-name">
-              <span class="chart-label">名称:</span>
+              <span class="chart-label">{{ t('charts.label.name') }}</span>
               <span class="chart-value">{{ chart.name }}</span>
             </div>
             <div v-if="chart.subtype && chart.subtype !== 'unknown'" class="chart-subtype">
-              <span class="chart-label">子类型:</span>
+              <span class="chart-label">{{ t('charts.label.subtype') }}</span>
               <span class="chart-value">{{ getChartSubtypeLabel(chart.subtype) }}</span>
             </div>
             <div v-if="chart.dataSize" class="chart-datasize">
-              <span class="chart-label">数据大小:</span>
+              <span class="chart-label">{{ t('charts.label.dataSize') }}</span>
               <span class="chart-value">{{ formatFileSize(chart.dataSize) }}</span>
             </div>
           </div>
         </div>
-      </div>
+      </CollapsiblePanel>
 
       <!-- WordArt (Office Art Drawing WordArt objects) -->
-      <div v-if="wordArts.length > 0" class="wordart-panel">
-        <button
-          class="stories-toggle"
-          @click="showWordArts = !showWordArts"
-          :aria-expanded="showWordArts"
-        >
-          <span class="stories-toggle-icon">{{ showWordArts ? '▾' : '▸' }}</span>
-          <span>艺术字（{{ wordArts.length }}）</span>
-          <span class="stories-toggle-summary">Office Art WordArt 对象</span>
-        </button>
-        <div v-if="showWordArts" class="wordart-content">
+      <CollapsiblePanel
+        v-if="wordArts.length > 0"
+        v-model="showWordArts"
+        :title="`${t('wordart.title')}（${wordArts.length}）`"
+        :summary="t('wordart.summary')"
+        panel-class="wordart-panel"
+      >
+        <div class="wordart-content">
           <div
             v-for="(wa, idx) in wordArts"
             :key="idx"
             class="wordart-item"
           >
             <div class="wordart-header">
-              <span class="wordart-id">艺术字 {{ wa.id }}</span>
+              <span class="wordart-id">{{ t('wordart.id', { id: wa.id }) }}</span>
               <span v-for="(effect, eIdx) in wa.effects" :key="eIdx" class="wordart-effect">
                 {{ getWordArtEffectLabel(effect) }}
               </span>
             </div>
             <div v-if="wa.text" class="wordart-text">
-              <span class="wordart-label">文本:</span>
+              <span class="wordart-label">{{ t('wordart.text') }}</span>
               <span class="wordart-value">{{ wa.text }}</span>
             </div>
             <div class="wordart-name">
-              <span class="wordart-label">名称:</span>
+              <span class="wordart-label">{{ t('wordart.name') }}</span>
               <span class="wordart-value">{{ wa.name }}</span>
             </div>
             <div v-if="wa.colors && wa.colors.length > 0" class="wordart-colors">
-              <span class="wordart-label">颜色:</span>
+              <span class="wordart-label">{{ t('wordart.colors') }}</span>
               <div class="wordart-color-list">
                 <span
                   v-for="(color, cIdx) in wa.colors"
@@ -3704,20 +3613,17 @@ defineExpose({ reload, getPlainText, focusContent })
             </div>
           </div>
         </div>
-      </div>
+      </CollapsiblePanel>
 
       <!-- Embedded images extracted from the Data stream -->
-      <div v-if="pictures.length > 0 || images.length > 0" class="images-panel">
-        <button
-          class="stories-toggle"
-          @click="showImages = !showImages"
-          :aria-expanded="showImages"
-        >
-          <span class="stories-toggle-icon">{{ showImages ? '▾' : '▸' }}</span>
-          <span>文档图片（{{ pictures.length > 0 ? pictures.length : images.length }}）</span>
-          <span class="stories-toggle-summary">点击展开查看嵌入图片</span>
-        </button>
-        <div v-if="showImages" class="images-content">
+      <CollapsiblePanel
+        v-if="pictures.length > 0 || images.length > 0"
+        v-model="showImages"
+        :title="`${t('images.title')}（${pictures.length > 0 ? pictures.length : images.length}）`"
+        :summary="t('images.summary')"
+        panel-class="images-panel"
+      >
+        <div class="images-content">
           <template v-if="pictures.length > 0">
             <div
               v-for="(pic, idx) in pictures"
@@ -3740,31 +3646,17 @@ defineExpose({ reload, getPlainText, focusContent })
               :key="idx"
               class="image-item"
             >
-              <img :src="src" :alt="`图片 ${idx + 1}`" loading="lazy" />
+              <img :src="src" :alt="t('images.alt', { n: idx + 1 })" loading="lazy" />
             </div>
           </template>
         </div>
-      </div>
+      </CollapsiblePanel>
+
+      <!-- Document statistics -->
+      <DocStatsPanel v-model="showStats" :stats="docStats" />
 
       <!-- Keyboard shortcuts panel -->
-      <div v-if="showShortcuts" class="shortcuts-overlay" @click.self="showShortcuts = false">
-        <div class="shortcuts-panel" role="dialog" aria-label="快捷键列表">
-          <div class="shortcuts-header">
-            <span>快捷键</span>
-            <button class="shortcuts-close" @click="showShortcuts = false" aria-label="关闭快捷键面板">✕</button>
-          </div>
-          <div class="shortcuts-body">
-            <div
-              v-for="(item, idx) in shortcutList"
-              :key="idx"
-              class="shortcut-row"
-            >
-              <kbd class="shortcut-keys" v-for="key in item.keys.split(' / ')" :key="key">{{ key }}</kbd>
-              <span class="shortcut-label">{{ item.label }}</span>
-            </div>
-          </div>
-        </div>
-      </div>
+      <ShortcutsPanel v-model="showShortcuts" />
     </div>
   </div>
 </template>
@@ -3828,6 +3720,53 @@ defineExpose({ reload, getPlainText, focusContent })
   font-size: 1.1rem;
 }
 
+.loading-step {
+  margin-top: 4px;
+  font-size: 0.95rem;
+  min-height: 1.4em;
+}
+
+.progress-track {
+  width: 280px;
+  max-width: 80%;
+  height: 6px;
+  background: var(--border-color);
+  border-radius: 4px;
+  margin: 16px auto 8px;
+  overflow: hidden;
+}
+
+.progress-bar {
+  height: 100%;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-light));
+  transition: width 0.3s ease;
+}
+
+.progress-bar.indeterminate {
+  width: 35%;
+  animation: progressIndeterminate 1.5s ease-in-out infinite;
+  background: linear-gradient(
+    90deg,
+    var(--accent) 0%,
+    var(--accent-light) 50%,
+    var(--accent) 100%
+  );
+  background-size: 200% 100%;
+  animation: progressIndeterminate 1.5s ease-in-out infinite,
+             progressShimmer 2s linear infinite;
+}
+
+@keyframes progressIndeterminate {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(380px); }
+}
+
+@keyframes progressShimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
 .loading-filename {
   color: var(--text-muted);
   font-size: 0.85rem;
@@ -3876,6 +3815,107 @@ defineExpose({ reload, getPlainText, focusContent })
   white-space: pre-line;
   max-width: 480px;
   line-height: 1.6;
+}
+
+/* Enhanced error display */
+.enhanced-error {
+  flex-direction: row;
+  gap: 16px;
+  text-align: left;
+  align-items: flex-start;
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.enhanced-error .error-icon {
+  font-size: 2.5rem;
+  margin-bottom: 0;
+  flex-shrink: 0;
+}
+
+.enhanced-error .error-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.enhanced-error .error-title {
+  font-size: 1.2rem;
+  font-weight: 600;
+  color: var(--error-text);
+  margin-bottom: 8px;
+}
+
+.enhanced-error .error-detail {
+  color: var(--text-primary);
+  font-size: 0.95rem;
+  line-height: 1.5;
+  margin-bottom: 12px;
+  white-space: pre-line;
+}
+
+.enhanced-error .error-suggestions {
+  margin: 0 0 12px 0;
+  padding-left: 20px;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
+.enhanced-error .error-suggestions li {
+  margin-bottom: 4px;
+}
+
+.enhanced-error .error-actions {
+  margin-bottom: 8px;
+}
+
+.enhanced-error .error-retry-btn {
+  background: var(--accent, #3b82f6);
+  color: #fff;
+  border: none;
+  padding: 6px 16px;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.enhanced-error .error-retry-btn:hover {
+  opacity: 0.85;
+}
+
+.enhanced-error .error-raw {
+  margin-top: 8px;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.enhanced-error .error-raw summary {
+  cursor: pointer;
+  user-select: none;
+  padding: 4px 0;
+}
+
+.enhanced-error .error-raw pre {
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: var(--bg-secondary);
+  border-radius: 4px;
+  overflow-x: auto;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* Progress percent text */
+.progress-percent {
+  text-align: center;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin: 4px 0 8px;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ==================== Toolbar ==================== */
@@ -4372,7 +4412,7 @@ defineExpose({ reload, getPlainText, focusContent })
   overflow: hidden;
 }
 
-.properties-content {
+.properties-panel .stories-content {
   padding: 16px;
   display: grid;
   gap: 12px;
@@ -4514,7 +4554,7 @@ defineExpose({ reload, getPlainText, focusContent })
   overflow: hidden;
 }
 
-.revisions-content {
+.revisions-panel .stories-content {
   padding: 12px 16px;
   display: grid;
   gap: 8px;
@@ -5398,6 +5438,49 @@ defineExpose({ reload, getPlainText, focusContent })
   color: #1976d2;
 }
 
+/* ==================== Stats panel ==================== */
+.stats-panel {
+  max-width: 800px;
+  margin: 0 auto 32px auto;
+  background: var(--bg-secondary, #f5f5f5);
+  border: 1px solid var(--border-color, #ddd);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.stats-content {
+  padding: 12px 16px 16px;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.stat-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 12px 8px;
+  background: var(--bg-primary, #fff);
+  border-radius: 8px;
+  border: 1px solid var(--border-color, #e8e8e8);
+}
+
+.stat-value {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--accent, #1a73e8);
+  line-height: 1.2;
+}
+
+.stat-label {
+  font-size: 0.78rem;
+  color: var(--text-secondary, #888);
+}
+
 /* ==================== Shortcuts Panel ==================== */
 .shortcuts-overlay {
   position: fixed;
@@ -5523,22 +5606,95 @@ defineExpose({ reload, getPlainText, focusContent })
 }
 
 /* ==================== Mobile ==================== */
-@media (max-width: 768px) {
+@media (max-width: 900px) {
+  .outline-sidebar {
+    float: none;
+    width: auto;
+    margin: 16px;
+    max-height: 280px;
+    position: static;
+  }
+
+  .doc-preview {
+    border-radius: 0 !important;
+  }
+
   .paper-page {
-    padding: 28px 20px;
-    margin: 12px auto;
+    padding: 24px 16px;
+    margin: 8px auto;
   }
 
   .doc-info {
     padding: 8px 14px;
+    font-size: 0.8rem;
   }
 
   .toolbar {
-    padding: 6px 10px;
+    padding: 6px 8px;
+    gap: 4px;
+  }
+
+  .toolbar-left {
+    overflow-x: auto;
+    flex: 1;
+    gap: 2px;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    touch-action: pan-x;
+  }
+
+  .toolbar-left::-webkit-scrollbar {
+    display: none;
+  }
+
+  .toolbar-right {
+    gap: 2px;
+  }
+
+  .toolbar-btn {
+    min-width: 36px;
+    height: 36px;
+    padding: 0 6px;
+    font-size: 0.82rem;
+    flex-shrink: 0;
+  }
+
+  .toolbar-sep {
+    margin: 0 2px;
+    flex-shrink: 0;
   }
 
   .toolbar-right .doc-stats {
     font-size: 0.7rem;
+  }
+
+  .zoom-label {
+    min-width: 36px;
+  }
+
+  .pagination-controls {
+    gap: 2px;
+  }
+
+  .pagination-btn {
+    min-width: 34px;
+    height: 34px;
+    font-size: 0.8rem;
+  }
+
+  .search-bar {
+    padding: 8px 12px;
+    gap: 6px;
+    flex-wrap: nowrap;
+  }
+
+  .search-bar .toolbar-btn {
+    min-width: 34px;
+    height: 34px;
+  }
+
+  .properties-grid {
+    grid-template-columns: 1fr 1fr;
   }
 }
 
@@ -5548,8 +5704,8 @@ defineExpose({ reload, getPlainText, focusContent })
   }
 
   .paper-page {
-    padding: 20px 14px;
-    margin: 8px auto;
+    padding: 16px 10px;
+    margin: 6px auto;
   }
 
   .loading-container,
@@ -5559,6 +5715,167 @@ defineExpose({ reload, getPlainText, focusContent })
 
   .doc-stats {
     display: none;
+  }
+
+  .toolbar {
+    padding: 4px 6px;
+    gap: 2px;
+  }
+
+  .toolbar-left {
+    gap: 1px;
+  }
+
+  .toolbar-btn {
+    min-width: 40px;
+    height: 40px;
+    padding: 0 5px;
+    font-size: 0.85rem;
+  }
+
+  .toolbar-sep {
+    display: none;
+  }
+
+  .pagination-controls {
+    gap: 1px;
+  }
+
+  .pagination-btn {
+    min-width: 38px;
+    height: 38px;
+    font-size: 0.78rem;
+  }
+
+  .pagination-current {
+    font-size: 0.75rem;
+    min-width: 50px;
+  }
+
+  .search-bar {
+    padding: 6px 8px;
+    gap: 4px;
+  }
+
+  .search-bar .toolbar-btn {
+    min-width: 38px;
+    height: 38px;
+  }
+
+  .outline-sidebar {
+    margin: 10px;
+    max-height: 240px;
+    border-radius: 6px;
+    font-size: 0.78rem;
+  }
+
+  .stories-panel,
+  .properties-panel,
+  .doc-flags-panel,
+  .toc-panel,
+  .revisions-panel,
+  .bookmarks-panel,
+  .sections-panel,
+  .page-fields-panel,
+  .cross-refs-panel,
+  .shapes-panel,
+  .equations-panel,
+  .charts-panel,
+  .wordart-panel,
+  .images-panel,
+  .stats-panel {
+    max-width: 100%;
+    margin: 0 10px 20px 10px;
+  }
+
+  .stories-content,
+  .properties-content,
+  .doc-flags-content,
+  .toc-content,
+  .revisions-content,
+  .bookmarks-content,
+  .sections-content,
+  .page-fields-content,
+  .cross-refs-content,
+  .shapes-content,
+  .equations-content,
+  .charts-content,
+  .wordart-content,
+  .images-content,
+  .stats-content {
+    padding: 8px 10px;
+  }
+
+  .properties-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .section-grid {
+    grid-template-columns: 1fr 1fr;
+    gap: 4px;
+  }
+
+  .stories-toggle {
+    padding: 10px;
+    font-size: 0.82rem;
+  }
+
+  .revision-mode-btn {
+    padding: 6px 10px;
+    font-size: 0.75rem;
+  }
+
+  .shortcuts-panel {
+    width: calc(100vw - 24px);
+    max-height: min(80vh, 480px);
+    border-radius: 10px;
+  }
+
+  .shortcut-row {
+    padding: 6px 14px;
+  }
+
+  .page-host .page-content {
+    padding: 0 4px;
+  }
+}
+
+@media (max-width: 480px) {
+  .toolbar-btn {
+    min-width: 44px;
+    height: 44px;
+    padding: 0 6px;
+    font-size: 0.9rem;
+  }
+
+  .pagination-btn {
+    min-width: 42px;
+    height: 42px;
+    font-size: 0.82rem;
+  }
+
+  .paper-page {
+    padding: 12px 8px;
+    margin: 4px auto;
+  }
+
+  .pagination-current {
+    font-size: 0.72rem;
+    min-width: 44px;
+  }
+
+  .toolbar-left .toolbar-btn.zoom-reset-label {
+    display: none;
+  }
+
+  .outline-header {
+    padding: 8px 10px;
+    font-size: 0.8rem;
+  }
+
+  .outline-item {
+    padding: 6px 10px 6px calc(10px + 12px * (var(--level, 1) - 1));
+    font-size: 0.78rem;
   }
 }
 </style>
