@@ -1,6 +1,6 @@
 {
   "name": "@zhenghy/doc-preview",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Vue 3 component for previewing Microsoft Word .doc files (OLE2/CFB) in the browser. Pure frontend, no server, no backend. Supports search, zoom, print, dark mode.",
   "type": "module",
   "main": "./dist/doc-preview.umd.cjs",
