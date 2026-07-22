@@ -3950,6 +3950,7 @@ defineExpose({ reload, getPlainText, focusContent })
       </CollapsiblePanel>
 
       <!-- Charts (MSGraph/Excel/SmartArt OLE objects) -->
+      <!--
       <CollapsiblePanel
         v-if="charts.length > 0"
         v-model="showCharts"
@@ -3984,6 +3985,7 @@ defineExpose({ reload, getPlainText, focusContent })
           </div>
         </div>
       </CollapsiblePanel>
+      -->
 
       <!-- WordArt (Office Art Drawing WordArt objects) -->
       <CollapsiblePanel
@@ -4030,6 +4032,7 @@ defineExpose({ reload, getPlainText, focusContent })
       </CollapsiblePanel>
 
       <!-- Embedded images extracted from the Data stream -->
+      <!--
       <CollapsiblePanel
         v-if="pictures.length > 0 || images.length > 0"
         v-model="showImages"
@@ -4065,9 +4068,10 @@ defineExpose({ reload, getPlainText, focusContent })
           </template>
         </div>
       </CollapsiblePanel>
+      -->
 
       <!-- Document statistics -->
-      <DocStatsPanel v-model="showStats" :stats="docStats" />
+      <!-- <DocStatsPanel v-model="showStats" :stats="docStats" /> -->
 
       <!-- Keyboard shortcuts panel -->
       <ShortcutsPanel v-model="showShortcuts" />
@@ -4083,6 +4087,7 @@ defineExpose({ reload, getPlainText, focusContent })
   box-shadow: var(--shadow);
   min-height: 500px;
   outline: none;
+  padding-bottom: 32px;
 }
 
 .skip-link {
