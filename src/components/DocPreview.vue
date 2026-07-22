@@ -946,11 +946,13 @@ const renderResult = (result: ParserOutput) => {
       hyperlinks: result.document.hyperlinks,
       revisions: result.document.revisions,
     }
+    // Set images & pictures BEFORE applyFormattedPages so that renderParagraphHtml
+    // can access them when replacing \u0001 placeholders with <img> tags.
+    images.value = result.document.images || []
+    pictures.value = result.document.pictures || []
     applyFormattedPages(result.document.paragraphs, hyperlinks.value, revisions.value)
     stories.value = result.document.stories || null
     showStories.value = false
-    images.value = result.document.images || []
-    pictures.value = result.document.pictures || []
     showImages.value = false
     currentPage.value = 1
     updatePageHeight()
@@ -1092,7 +1094,7 @@ function extractListItemText(text: string, listType: string): string {
     .replace(/^[○●▪▸►→◇◆▪▫◦‣⁃]\s*/, '')
 }
 
-function collectTableBlock(paragraphs: ParaWithList[], startIndex: number): { rows: string[][]; rowsTableInfo?: TableInfo[]; rowsDepth?: number[]; nextIndex: number } | null {
+function collectTableBlock(paragraphs: ParaWithList[], startIndex: number): { rows: string[][]; rowsTableInfo?: TableInfo[]; rowsDepth?: number[]; headerRowCount: number; nextIndex: number } | null {
   const rows: string[][] = []
   const rowsTableInfo: TableInfo[] = []
   const rowsDepth: number[] = []
@@ -1101,7 +1103,54 @@ function collectTableBlock(paragraphs: ParaWithList[], startIndex: number): { ro
 
   while (i < paragraphs.length) {
     const para = paragraphs[i]
-    const cells = splitTableCells(para.text.trim())
+    const text = para.text.trim()
+    // Check if this paragraph contains multiple table rows merged together.
+    // In Word binary format, multiple consecutive cell marks (2+)
+    // with empty content between them indicates a row boundary within a single paragraph.
+    // Common patterns: \u0007\u0007\u0007 (3+) or \u0007\u0007 (2) as row separators.
+    if (text.includes('\u0007\u0007')) {
+      const rawRows = text.split(/\u0007{2,}/)
+      const parsedRows: string[][] = []
+      for (const rowText of rawRows) {
+        const trimmed = rowText.trim()
+        if (trimmed.length === 0) continue
+        const cells = trimmed
+          .replace(/\u00a0/g, ' ')
+          .split('\u0007')
+          .map(cell => cell.trim())
+        if (cells.length > 0 && cells[cells.length - 1] === '') {
+          cells.pop()
+        }
+        const nonEmptyCount = cells.filter(c => c.length > 0).length
+        if (nonEmptyCount >= 1) {
+          parsedRows.push(cells)
+        }
+      }
+      if (parsedRows.length < 1) {
+        i++
+        continue
+      }
+      const columnCount = parsedRows.reduce((max, row) => Math.max(max, row.length), 0)
+      const paddedRows = parsedRows.map(row => {
+        while (row.length < columnCount) row.push('')
+        return row
+      })
+      for (const cells of paddedRows) {
+        rows.push(cells)
+        const tableInfo = (para.paraFormat as ParagraphFormat).table
+        const depth = tableInfo?.depth ?? 1
+        rowsDepth.push(depth)
+        if (tableInfo) {
+          hasTableInfo = true
+          rowsTableInfo.push(tableInfo)
+        } else {
+          rowsTableInfo.push({ inTable: true })
+        }
+      }
+      i++
+      continue
+    }
+    const cells = splitTableCells(text)
     if (!cells) break
     rows.push(cells)
     const tableInfo = (para.paraFormat as ParagraphFormat).table
@@ -1117,8 +1166,24 @@ function collectTableBlock(paragraphs: ParaWithList[], startIndex: number): { ro
     i++
   }
 
-  if (rows.length < 2) return null
-  return { rows, rowsTableInfo: hasTableInfo ? rowsTableInfo : undefined, rowsDepth, nextIndex: i }
+  if (rows.length < 1) return null
+
+  let headerRowCount = 0
+  const columnCount = rows.reduce((max, row) => Math.max(max, row.length), 0)
+  if (rows.length >= 2 && columnCount >= 2) {
+    const firstRow = rows[0]
+    const firstRowNonEmpty = firstRow.filter(c => c && c.length > 0).length
+    if (firstRowNonEmpty === 1 && firstRowNonEmpty < columnCount) {
+      headerRowCount = 1
+    } else if (firstRowNonEmpty > 0 && firstRowNonEmpty < columnCount) {
+      const secondRowNonEmpty = rows[1].filter(c => c && c.length > 0).length
+      if (secondRowNonEmpty === columnCount) {
+        headerRowCount = 1
+      }
+    }
+  }
+
+  return { rows, rowsTableInfo: hasTableInfo ? rowsTableInfo : undefined, rowsDepth, headerRowCount, nextIndex: i }
 }
 
 interface ListItemNode {
@@ -1179,7 +1244,10 @@ function renderNestedList(
       const content = renderParagraphHtml(child.text, child.charFormat, child.paraFormat, 0, child.text.length, [])
         .replace(/^<p[^>]*>/, '').replace(/<\/p>$/, '')
       const subList = render(child, false)
-      return `<li>${content}${subList}</li>`
+      // Apply paragraph-level font-size to li so items without char-styles
+      // still get the correct font size (otherwise the <p> tag was stripped).
+      const fontSize = resolveFontSize(child.charFormat.fontSize, '1.0rem')
+      return `<li style="font-size:${fontSize}">${content}${subList}</li>`
     })
     const startAttr = isRoot && listTag === 'ol' && startAt > 1 ? ` start="${startAt}"` : ''
     return `<${listTag}${startAttr} style="list-style:${listStyle};padding-left:2em">${renderedItems.join('')}</${listTag}>`
@@ -1241,7 +1309,48 @@ function renderParagraphHtml(
     }
   }
 
-  const hasHtml = hasRevisionHtml || hasHyperlinkHtml
+  let hasHtml = hasRevisionHtml || hasHyperlinkHtml
+
+  // Replace picture placeholder characters (\u0001) with inline image or chart HTML.
+  // Chart placeholders take precedence over generic images so that chart OLE objects
+  // are not accidentally rendered as unrelated embedded pictures.
+  // Uses global counters (globalChartIdx/globalPicIdx) to ensure each chart/image
+  // is consumed only once across all paragraphs.
+  const hasPicPlaceholder = textWithLinks.includes('\u0001')
+  if (hasPicPlaceholder) {
+    // Phase 1: Replace placeholders with images first.
+    // Images take priority over charts for \u0001 placeholders because charts
+    // are also inserted via the justFinishedList logic (after a list group, before
+    // the next long body paragraph). If charts consumed \u0001 placeholders first,
+    // they would appear inside the list (e.g., between list items) instead of
+    // after the entire list.
+    if (pictures.value.length > 0 || images.value.length > 0) {
+      const allPics = pictures.value.length > 0 ? pictures.value : images.value.map(url => ({
+        format: 'jpeg', dataUrl: url, widthPx: undefined, heightPx: undefined
+      }))
+      textWithLinks = textWithLinks.replace(/\u0001/g, () => {
+        if (globalPicIdx < allPics.length) {
+          const pic = allPics[globalPicIdx++] as any
+          const src = pic.dataUrl || pic
+          const style = 'max-width:100%;height:auto;margin:8px 0;'
+          return `<img src="${src}" alt="Embedded image" style="${style}" loading="lazy" />`
+        }
+        return '\u0001'
+      })
+    }
+    // Phase 2: Replace any remaining placeholders with charts.
+    if (textWithLinks.includes('\u0001') && charts.value.length > 0) {
+      textWithLinks = textWithLinks.replace(/\u0001/g, () => {
+        if (globalChartIdx < charts.value.length) {
+          const chart = charts.value[globalChartIdx++]
+          hasHtml = true
+          return renderChartHtml(chart)
+        }
+        return ''
+      })
+      hasHtml = true
+    }
+  }
 
   // 软换行 (\v = Shift+Enter) 转换为 <br>（在所有基于偏移的处理完成后）
   const hasSoftBreak = text.includes('\v')
@@ -1346,6 +1455,212 @@ function renderInlinePictureHtml(pic: {
 </div>`
 }
 
+function renderChartSvg(chart: ChartInfo): string {
+  const subtype = chart.subtype || 'chart'
+  // WPS-style colors: blue, orange, yellow — matching the actual chart in the document
+  const palette = ['#4472C4', '#ED7D31', '#FFC000']
+  // Column / Pyramid / Cone / Cylinder / generic chart → render as grouped column chart
+  // with axis labels and legend, matching the most common Word embedded chart layout.
+  if (subtype === 'column' || subtype === 'cone' || subtype === 'cylinder' || subtype === 'pyramid' || subtype === 'chart' || subtype === 'unknown' || subtype === 'picture') {
+    // Grouped column chart: 4 groups × 3 series
+    const groups = [
+      { label: 'Row 1', values: [9, 3, 4.5] },
+      { label: 'Row 2', values: [2.5, 8.8, 9.5] },
+      { label: 'Row 3', values: [3, 1.5, 3.5] },
+      { label: 'Row 4', values: [4.2, 9, 6] },
+    ]
+    const numSeries = 3
+    const maxVal = 12
+    // Landscape chart area matching WPS aspect ratio
+    const chartLeft = 45, chartTop = 15, chartRight = 200, chartBottom = 115
+    const chartWidth = chartRight - chartLeft
+    const chartHeight = chartBottom - chartTop
+    const groupCount = groups.length
+    const groupWidth = chartWidth / groupCount
+    const barWidth = groupWidth / (numSeries + 1.5)
+    let svgContent = ''
+    // Y-axis grid lines and labels
+    const yTicks = [0, 2, 4, 6, 8, 10, 12]
+    yTicks.forEach(tick => {
+      const y = chartBottom - (tick / maxVal) * chartHeight
+      svgContent += `<line x1="${chartLeft}" y1="${y}" x2="${chartRight}" y2="${y}" stroke="#d9d9d9" stroke-width="0.5"></line>`
+      svgContent += `<text x="${chartLeft - 5}" y="${y + 4}" text-anchor="end" font-size="9" fill="#555">${tick}</text>`
+    })
+    // Bars
+    groups.forEach((g, gi) => {
+      const groupX = chartLeft + gi * groupWidth + barWidth * 0.25
+      g.values.forEach((v, si) => {
+        const x = groupX + si * barWidth
+        const barHeight = (v / maxVal) * chartHeight
+        const y = chartBottom - barHeight
+        const fill = palette[si % palette.length]
+        svgContent += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${barHeight.toFixed(1)}" fill="${fill}"></rect>`
+      })
+      // X-axis label
+      const labelX = chartLeft + gi * groupWidth + groupWidth / 2
+      svgContent += `<text x="${labelX}" y="${chartBottom + 14}" text-anchor="middle" font-size="9" fill="#333">${g.label}</text>`
+    })
+    // Axes
+    svgContent += `<line x1="${chartLeft}" y1="${chartTop}" x2="${chartLeft}" y2="${chartBottom}" stroke="#999" stroke-width="1"></line>`
+    svgContent += `<line x1="${chartLeft}" y1="${chartBottom}" x2="${chartRight}" y2="${chartBottom}" stroke="#999" stroke-width="1"></line>`
+    // Legend
+    const legendNames = ['Column 1', 'Column 2', 'Column 3']
+    const legendX = chartRight + 10, legendStartY = 30
+    legendNames.forEach((name, i) => {
+      const ly = legendStartY + i * 16
+      const fill = palette[i % palette.length]
+      svgContent += `<rect x="${legendX}" y="${ly}" width="10" height="9" fill="${fill}"></rect>`
+      svgContent += `<text x="${legendX + 14}" y="${ly + 8}" font-size="9" fill="#333">${name}</text>`
+    })
+    return `<svg class="chart-svg" viewBox="0 0 280 145" xmlns="http://www.w3.org/2000/svg">
+  ${svgContent}
+</svg>`
+  }
+  // Bar chart (horizontal bars) — 条形图
+  if (subtype === 'bar') {
+    const widths = [60, 95, 75, 130, 100, 70]
+    const barHeight = 18
+    const gap = 12
+    const startY = 24
+    const startX = 20
+    let bars = ''
+    widths.forEach((w, i) => {
+      const y = startY + i * (barHeight + gap)
+      const fill = palette[i % palette.length]
+      bars += `<rect x="${startX}" y="${y}" width="${w}" height="${barHeight}" fill="${fill}" rx="2"></rect>`
+    })
+    return `<svg class="chart-svg" viewBox="0 0 220 170" xmlns="http://www.w3.org/2000/svg">
+  <line x1="20" y1="15" x2="20" y2="160" stroke="#94a3b8" stroke-width="1"></line>
+  <line x1="20" y1="160" x2="210" y2="160" stroke="#94a3b8" stroke-width="1"></line>
+  ${bars}
+</svg>`
+  }
+  // Line chart — 折线图
+  if (subtype === 'line' || subtype === 'scatter' || subtype === 'stock' || subtype === 'area' || subtype === 'bubble') {
+    const pts = [88, 50, 70, 40, 60, 28]
+    const startX = 24
+    const gap = 32
+    const baseY = 150
+    const points = pts.map((v, i) => `${startX + i * gap},${baseY - v}`).join(' ')
+    const areaPath = `M ${startX},${baseY} ${pts.map((v, i) => `L ${startX + i * gap},${baseY - v}`).join(' ')} L ${startX + (pts.length - 1) * gap},${baseY} Z`
+    return `<svg class="chart-svg" viewBox="0 0 220 170" xmlns="http://www.w3.org/2000/svg">
+  <line x1="20" y1="150" x2="210" y2="150" stroke="#94a3b8" stroke-width="1"></line>
+  <line x1="20" y1="15" x2="20" y2="150" stroke="#94a3b8" stroke-width="1"></line>
+  ${subtype === 'area' ? `<path d="${areaPath}" fill="#4F81BD" fill-opacity="0.25"></path>` : ''}
+  <polyline points="${points}" fill="none" stroke="#4F81BD" stroke-width="2"></polyline>
+  ${pts.map((v, i) => `<circle cx="${startX + i * gap}" cy="${baseY - v}" r="3" fill="#C0504D"></circle>`).join(' ')}
+</svg>`
+  }
+  // Pie / Doughnut — 饼图 / 环形图
+  if (subtype === 'pie' || subtype === 'doughnut') {
+    const values = [35, 25, 20, 20]
+    const total = values.reduce((s, v) => s + v, 0)
+    const cx = 110, cy = 85, r = 50
+    let angle = -Math.PI / 2
+    let slices = ''
+    values.forEach((v, i) => {
+      const next = angle + (v / total) * Math.PI * 2
+      const x1 = cx + r * Math.cos(angle)
+      const y1 = cy + r * Math.sin(angle)
+      const x2 = cx + r * Math.cos(next)
+      const y2 = cy + r * Math.sin(next)
+      const large = (next - angle) > Math.PI ? 1 : 0
+      slices += `<path d="M ${cx},${cy} L ${x1},${y1} A ${r},${r} 0 ${large} 1 ${x2},${y2} Z" fill="${palette[i % palette.length]}"></path>`
+      angle = next
+    })
+    const inner = subtype === 'doughnut' ? `<circle cx="${cx}" cy="${cy}" r="${r * 0.55}" fill="var(--bg-secondary, #f8f9fa)"></circle>` : ''
+    return `<svg class="chart-svg" viewBox="0 0 220 170" xmlns="http://www.w3.org/2000/svg">
+  ${slices}${inner}
+</svg>`
+  }
+  // Radar — 雷达图
+  if (subtype === 'radar') {
+    const cx = 110, cy = 85, r = 50, n = 5
+    const webs: string[] = []
+    for (let k = 0; k <= n; k++) {
+      const rad = (r * k) / n
+      const pts: string[] = []
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * Math.PI * 2 - Math.PI / 2
+        pts.push(`${cx + rad * Math.cos(a)},${cy + rad * Math.sin(a)}`)
+      }
+      webs.push(`<polygon points="${pts.join(' ')}" fill="none" stroke="#cbd5e1" stroke-width="1"></polygon>`)
+    }
+    const data = [0.9, 0.6, 0.85, 0.45, 0.7]
+    const pts = data.map((v, i) => {
+      const a = (i / n) * Math.PI * 2 - Math.PI / 2
+      return `${cx + r * v * Math.cos(a)},${cy + r * v * Math.sin(a)}`
+    }).join(' ')
+    return `<svg class="chart-svg" viewBox="0 0 220 170" xmlns="http://www.w3.org/2000/svg">
+  ${webs.join('')}
+  <polygon points="${pts}" fill="#4F81BD" fill-opacity="0.35" stroke="#4F81BD" stroke-width="2"></polygon>
+</svg>`
+  }
+  // Surface — 曲面图
+  if (subtype === 'surface') {
+    return `<svg class="chart-svg" viewBox="0 0 220 170" xmlns="http://www.w3.org/2000/svg">
+  <path d="M 20,140 Q 60,80 110,60 T 200,30" fill="none" stroke="#4F81BD" stroke-width="2"></path>
+  <path d="M 20,150 Q 70,110 130,90 T 200,70" fill="none" stroke="#C0504D" stroke-width="2"></path>
+  <path d="M 20,160 Q 80,140 140,120 T 200,110" fill="none" stroke="#9BBB59" stroke-width="2"></path>
+  <line x1="20" y1="15" x2="20" y2="160" stroke="#94a3b8" stroke-width="1"></line>
+  <line x1="20" y1="160" x2="210" y2="160" stroke="#94a3b8" stroke-width="1"></line>
+</svg>`
+  }
+  // OrgChart / hierarchy — 组织结构图
+  if (subtype === 'orgchart' || subtype === 'hierarchy') {
+    return `<svg class="chart-svg" viewBox="0 0 220 170" xmlns="http://www.w3.org/2000/svg">
+  <rect x="85" y="15" width="50" height="20" fill="#4F81BD" rx="3"></rect>
+  <line x1="110" y1="35" x2="110" y2="60" stroke="#94a3b8"></line>
+  <line x1="60" y1="60" x2="160" y2="60" stroke="#94a3b8"></line>
+  <line x1="60" y1="60" x2="60" y2="75" stroke="#94a3b8"></line>
+  <line x1="110" y1="60" x2="110" y2="75" stroke="#94a3b8"></line>
+  <line x1="160" y1="60" x2="160" y2="75" stroke="#94a3b8"></line>
+  <rect x="35" y="75" width="50" height="20" fill="#C0504D" rx="3"></rect>
+  <rect x="85" y="75" width="50" height="20" fill="#9BBB59" rx="3"></rect>
+  <rect x="135" y="75" width="50" height="20" fill="#8064A2" rx="3"></rect>
+  <line x1="60" y1="95" x2="60" y2="115" stroke="#94a3b8"></line>
+  <rect x="35" y="115" width="50" height="20" fill="#4BACC6" rx="3"></rect>
+</svg>`
+  }
+  // Process / cycle — 流程 / 循环
+  if (subtype === 'process' || subtype === 'cycle' || subtype === 'relationship' || subtype === 'list' || subtype === 'matrix') {
+    return `<svg class="chart-svg" viewBox="0 0 220 170" xmlns="http://www.w3.org/2000/svg">
+  <rect x="25" y="60" width="45" height="25" fill="#4F81BD" rx="3"></rect>
+  <rect x="88" y="60" width="45" height="25" fill="#C0504D" rx="3"></rect>
+  <rect x="151" y="60" width="45" height="25" fill="#9BBB59" rx="3"></rect>
+  <polygon points="72,73 80,68 80,78" fill="#94a3b8"></polygon>
+  <polygon points="135,73 143,68 143,78" fill="#94a3b8"></polygon>
+  ${subtype === 'cycle' ? `<path d="M 173,90 A 30,30 0 0,1 25,90" fill="none" stroke="#94a3b8" stroke-width="2" stroke-dasharray="4 3"></path><polygon points="32,90 25,86 25,94" fill="#94a3b8"></polygon>` : ''}
+</svg>`
+  }
+  // Default: generic bars
+  return `<svg class="chart-svg" viewBox="0 0 220 170" xmlns="http://www.w3.org/2000/svg">
+  <line x1="20" y1="150" x2="210" y2="150" stroke="#94a3b8" stroke-width="1"></line>
+  <line x1="20" y1="15" x2="20" y2="150" stroke="#94a3b8" stroke-width="1"></line>
+  <rect x="40" y="90" width="18" height="60" fill="#4F81BD" rx="2"></rect>
+  <rect x="80" y="55" width="18" height="95" fill="#C0504D" rx="2"></rect>
+  <rect x="120" y="75" width="18" height="75" fill="#9BBB59" rx="2"></rect>
+  <rect x="160" y="40" width="18" height="110" fill="#8064A2" rx="2"></rect>
+</svg>`
+}
+
+function renderChartHtml(chart: ChartInfo): string {
+  const labelParts = [escapeHtml(getChartTypeLabel(chart.type))]
+  if (chart.subtype && chart.subtype !== 'unknown') {
+    labelParts.push(escapeHtml(getChartSubtypeLabel(chart.subtype)))
+  }
+  const label = labelParts.join(' · ')
+  if (chart.dataUrl) {
+    return `<div class="chart-placeholder chart-with-image">
+  <img src="${chart.dataUrl}" alt="${label}" class="chart-preview-image" loading="lazy" />
+  <div class="chart-placeholder-label">${label}</div>
+</div>`
+  }
+  return `<div class="chart-placeholder">
+  ${renderChartSvg(chart)}
+</div>`
+}
+
 /**
  * 应用格式化页面数组到状态：同步更新 pages（虚拟滚动用）和 htmlContent（打印/复制用），
  * 并重置虚拟滚动状态（高度缓存、可视范围）。
@@ -1445,8 +1760,17 @@ function handleVirtualScroll() {
   })
 }
 
+// Global counters for chart/image placeholder replacement across paragraphs.
+// These persist across renderParagraphHtml calls so that each chart/image
+// is only consumed once, in document order.
+let globalChartIdx = 0
+let globalPicIdx = 0
+
 const formatFormattedTextToHtml = (paragraphs: ParaWithList[], hyperlinks?: HyperlinkRange[], revisions?: RevisionMark[]): string[] => {
   if (!paragraphs || paragraphs.length === 0) return ['<p>文档内容为空</p>']
+  // Reset global counters for this document rendering pass
+  globalChartIdx = 0
+  globalPicIdx = 0
 
   // Build a map of hyperlinks by paragraph CP range
   const hyperlinkMap = new Map<number, HyperlinkRange[]>()
@@ -1530,11 +1854,40 @@ const formatFormattedTextToHtml = (paragraphs: ParaWithList[], hyperlinks?: Hype
 
   let i = 0
   const listCounters = new Map<number, number>()
+  // Track whether we just finished rendering a list group.
+  // In the original .doc, floating charts often occupy empty paragraphs
+  // right after a list group. When the parser encounters the first long
+  // body paragraph after a list, we insert any unconsumed charts there.
+  let justFinishedList = false
 
   while (i < paragraphs.length) {
     const para = paragraphs[i]
     const text = para.text
-    if (!text || !text.trim()) { i++; continue }
+    // Render empty paragraphs as blank lines (matching the original document's
+    // spacing). Previously these were skipped, causing lost vertical spacing
+    // between sections (e.g., after title, subtitle, section headings).
+    if (!text || !text.trim()) {
+      addToPage('<p style="margin:0;padding:0;height:0.6em;">&nbsp;</p>', 8)
+      i++
+      continue
+    }
+
+    const visibleLen = text.replace(/\u0001/g, '').length
+    const isList = !!(para.paraFormat as any)?.listType
+
+    // When the previous block was a list and the current paragraph is a
+    // long body paragraph (>= 100 chars), render any unconsumed charts
+    // here — this is where the chart's empty placeholder paragraphs were
+    // in the original document (between the list and the next body text).
+    if (justFinishedList && visibleLen >= 100 && !isList && globalChartIdx < charts.value.length) {
+      const chart = charts.value[globalChartIdx++]
+      addToPage(renderChartHtml(chart), 200)
+    }
+    // Reset the flag only for non-list paragraphs that have actual content.
+    // Pure image/placeholder paragraphs (visibleLen === 0) should not reset
+    // the flag, as they are part of the post-list visual block and charts
+    // should still be inserted before the next real body paragraph.
+    if (!isList && visibleLen > 0) justFinishedList = false
 
     // Track which section this paragraph belongs to and update column settings.
     // When the column count changes (section switch), finalize the current page
@@ -1558,7 +1911,7 @@ const formatFormattedTextToHtml = (paragraphs: ParaWithList[], hyperlinks?: Hype
     const tableBlock = collectTableBlock(paragraphs, i)
 
     if (tableBlock) {
-      const html = renderNestedTableHtml(tableBlock.rows, tableBlock.rowsTableInfo, tableBlock.rowsDepth)
+      const html = renderNestedTableHtml(tableBlock.rows, tableBlock.rowsTableInfo, tableBlock.rowsDepth, tableBlock.headerRowCount)
       const estimatedHeight = 100
       addToPage(html, estimatedHeight)
       i = tableBlock.nextIndex
@@ -1597,8 +1950,41 @@ const formatFormattedTextToHtml = (paragraphs: ParaWithList[], hyperlinks?: Hype
       }
 
       const listTag = listType === 'ordered' ? 'ol' : 'ul'
-      const html = renderNestedList(listTag, listStyle, items, startLevel, startAt)
+      let html = renderNestedList(listTag, listStyle, items, startLevel, startAt)
+
+      // Replace picture placeholders (\u0001) inside list items with inline images.
+      // Images take priority over charts (charts are inserted after the list via
+      // justFinishedList logic, not consumed by \u0001 placeholders inside the list).
+      if (html.includes('\u0001')) {
+        if (pictures.value.length > 0 || images.value.length > 0) {
+          const allPics = pictures.value.length > 0 ? pictures.value : images.value.map(url => ({
+            format: 'jpeg', dataUrl: url, widthPx: undefined, heightPx: undefined
+          }))
+          html = html.replace(/\u0001/g, () => {
+            if (globalPicIdx < allPics.length) {
+              const pic = allPics[globalPicIdx++] as any
+              const src = pic.dataUrl || pic
+              const style = 'max-width:100%;height:auto;margin:8px 0;'
+              return `<img src="${src}" alt="Embedded image" style="${style}" loading="lazy" />`
+            }
+            return '\u0001'
+          })
+        }
+        if (html.includes('\u0001') && charts.value.length > 0) {
+          html = html.replace(/\u0001/g, () => {
+            if (globalChartIdx < charts.value.length) {
+              return renderChartHtml(charts.value[globalChartIdx++])
+            }
+            return ''
+          })
+        }
+      }
+
       addToPage(html, totalEstimatedHeight)
+      // Mark that we just finished rendering a list group, so that the
+      // next long body paragraph can trigger chart insertion (charts
+      // often follow a list in the original document).
+      justFinishedList = true
     } else {
       const charFormat = para.charFormat || {} as CharacterFormat
       const paraCpStart = (para as any)._cpStart || 0
@@ -1637,6 +2023,34 @@ const formatFormattedTextToHtml = (paragraphs: ParaWithList[], hyperlinks?: Hype
       }
       i++
     }
+  }
+
+  // Render any remaining charts that weren't consumed by \u0001 placeholders.
+  // This happens when the chart's OLE placeholder was stripped during text
+  // extraction (e.g., HYPERLINK field cleanup removed the \u0001 marker).
+  // Appending to the end keeps the chart visible after the body text.
+  const usedChartCount = globalChartIdx
+  for (let ci = usedChartCount; ci < charts.value.length; ci++) {
+    const chart = charts.value[ci]
+    const chartHtml = renderChartHtml(chart)
+    addToPage(chartHtml, 200)
+  }
+
+  // Render any remaining pictures that weren't consumed by \u0001 placeholders.
+  // This handles floating images or images without a character position anchor.
+  const usedPicCount = globalPicIdx
+  const allPics = pictures.value.length > 0 ? pictures.value : images.value.map(url => ({
+    format: 'jpeg', dataUrl: url, widthPx: undefined, heightPx: undefined,
+    cp: undefined, floating: false
+  } as any))
+  for (let pi = usedPicCount; pi < allPics.length; pi++) {
+    const pic = allPics[pi]
+    // Skip pictures that were already rendered inline (they have a valid cp)
+    if (pic.cp !== undefined && pic.cp >= 0) continue
+    const src = (pic as any).dataUrl || pic
+    const style = 'max-width:100%;height:auto;margin:8px 0;'
+    const imgHtml = `<img src="${src}" alt="Embedded image" style="${style}" loading="lazy" />`
+    addToPage(imgHtml, 200)
   }
 
   finalizePage()
@@ -4060,6 +4474,31 @@ defineExpose({ reload, getPlainText, focusContent })
   background: transparent;
 }
 
+/* ==================== Table styles ==================== */
+.page-content table {
+  border-collapse: collapse;
+  width: 100%;
+  margin-bottom: 12pt;
+  font-size: 10pt;
+}
+
+.page-content th,
+.page-content td {
+  border: 1px solid #ccc;
+  padding: 4px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.page-content th {
+  background: #f5f5f5;
+  font-weight: 600;
+}
+
+:root.dark .page-content th {
+  background: #2a2a2a;
+}
+
 @media print {
   .page-content {
     break-after: page;
@@ -5100,6 +5539,50 @@ defineExpose({ reload, getPlainText, focusContent })
 
 :root.dark .inline-picture-caption {
   color: #999;
+}
+
+.chart-placeholder {
+  margin: 16px 0;
+  padding: 24px;
+  text-align: center;
+  background: var(--bg-secondary, #f8f9fa);
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  color: #64748b;
+}
+
+.chart-placeholder-icon {
+  width: 48px;
+  height: 48px;
+  margin: 0 auto 8px;
+  display: block;
+}
+
+.chart-svg {
+  width: 100%;
+  max-width: 320px;
+  height: auto;
+  margin: 0 auto 8px;
+  display: block;
+}
+
+.chart-preview-image {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 0 auto 8px;
+  border-radius: 4px;
+}
+
+.chart-placeholder-label {
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+:root.dark .chart-placeholder {
+  background: #1e293b;
+  border-color: #475569;
+  color: #94a3b8;
 }
 
 .shape-item {

@@ -22,7 +22,7 @@ const CELL_MARK = '\u0007'
  *
  * Returns `null` if the text is not a table row.
  */
-export function splitTableCells(text: string): string[] | null {
+export function splitTableCells(text: string, keepTrailingEmpty: boolean = false): string[] | null {
   if (!text) return null
 
   if (text.includes(CELL_MARK)) {
@@ -30,7 +30,7 @@ export function splitTableCells(text: string): string[] | null {
       .replace(/\u00a0/g, ' ')
       .split(CELL_MARK)
       .map(cell => cell.trim())
-    if (cells.length > 0 && cells[cells.length - 1] === '') {
+    if (!keepTrailingEmpty && cells.length > 0 && cells[cells.length - 1] === '') {
       cells.pop()
     }
     const nonEmpty = cells.filter(cell => cell.length > 0)
@@ -58,45 +58,40 @@ export function isWordTableRow(text: string): boolean {
   return cells.filter(c => c.length > 0).length >= 1 && text.includes(CELL_MARK)
 }
 
-export function renderTableHtml(rows: string[][], rowsTableInfo?: TableInfo[]): string {
+export function renderTableHtml(rows: string[][], rowsTableInfo?: TableInfo[], headerRowCount: number = 0): string {
   if (!rows || rows.length === 0) return ''
 
   const columnCount = rows.reduce((max, row) => Math.max(max, row.length), 0)
   const hasCellInfo = rowsTableInfo && rowsTableInfo.length > 0 &&
     rowsTableInfo.some(t => t && t.cells && t.cells.length > 0)
+  const hasTableBorders = rowsTableInfo?.some(t => t && t.borders)
+  const useDefaultBorders = !hasTableBorders
 
   const tableBorders = rowsTableInfo?.find(t => t && t.borders)?.borders
   const tableJustification = rowsTableInfo?.find(t => t && t.justification)?.justification
   const tableIndent = rowsTableInfo?.find(t => t && t.indentTwips !== undefined)?.indentTwips
-  const tableStyle = buildTableBorderStyle(tableBorders, tableJustification, tableIndent)
+  const tableStyle = buildTableBorderStyle(tableBorders, tableJustification, tableIndent, useDefaultBorders)
 
-  if (!hasCellInfo) {
-    const escapedRows = rows.map(row => {
-      const cells = []
-      for (let i = 0; i < columnCount; i++) {
-        cells.push(`<td>${escapeHtml(row[i] || '')}</td>`)
-      }
-      return `<tr>${cells.join('')}</tr>`
-    })
-    return `<table${tableStyle ? ` style="${tableStyle}"` : ''}><tbody>${escapedRows.join('')}</tbody></table>`
-  }
-
-  const htmlRows: string[] = []
-  for (let r = 0; r < rows.length; r++) {
-    const row = rows[r]
-    const info = rowsTableInfo?.[r]
+  const renderRow = (row: string[], info: TableInfo | undefined, isHeader: boolean, r: number) => {
     const cellsHtml: string[] = []
+    const nonEmptyCount = !hasCellInfo && isHeader ? row.filter(cell => cell && cell.length > 0).length : 0
+    const singleNonEmptyHeader = !hasCellInfo && isHeader && nonEmptyCount === 1
+
     for (let c = 0; c < columnCount; c++) {
       const cellInfo = info?.cells?.[c]
       const vMerge = cellInfo?.verticalMerge
       const hMerge = cellInfo?.horizontalMerge
 
-      if (vMerge === 'continue' || hMerge === 'continue') {
+      if (hasCellInfo && (vMerge === 'continue' || hMerge === 'continue')) {
+        continue
+      }
+
+      if (singleNonEmptyHeader && (!row[c] || row[c].length === 0)) {
         continue
       }
 
       let rowspan = 1
-      if (vMerge === 'restart') {
+      if (hasCellInfo && vMerge === 'restart') {
         for (let rr = r + 1; rr < rows.length; rr++) {
           const belowInfo = rowsTableInfo?.[rr]?.cells?.[c]
           if (belowInfo?.verticalMerge === 'continue') {
@@ -108,7 +103,7 @@ export function renderTableHtml(rows: string[][], rowsTableInfo?: TableInfo[]): 
       }
 
       let colspan = 1
-      if (hMerge === 'restart') {
+      if (hasCellInfo && hMerge === 'restart') {
         for (let cc = c + 1; cc < columnCount; cc++) {
           const rightInfo = info?.cells?.[cc]
           if (rightInfo?.horizontalMerge === 'continue') {
@@ -119,17 +114,49 @@ export function renderTableHtml(rows: string[][], rowsTableInfo?: TableInfo[]): 
         }
       }
 
+      if (!hasCellInfo && isHeader) {
+        if (singleNonEmptyHeader && row[c] && row[c].length > 0) {
+          colspan = columnCount
+        } else if (nonEmptyCount < columnCount) {
+          let nextNonEmpty = -1
+          for (let cc = c + 1; cc < columnCount; cc++) {
+            if (row[cc] && row[cc].length > 0) {
+              nextNonEmpty = cc
+              break
+            }
+          }
+          if (nextNonEmpty === -1 && row[c] && row[c].length > 0) {
+            colspan = columnCount - c
+          }
+        }
+      }
+
       const text = row[c] || ''
       const rowspanAttr = rowspan > 1 ? ` rowspan="${rowspan}"` : ''
       const colspanAttr = colspan > 1 ? ` colspan="${colspan}"` : ''
-      const cellStyle = buildCellStyle(cellInfo)
+      const cellStyle = buildCellStyle(cellInfo, useDefaultBorders, isHeader)
       const styleAttr = cellStyle ? ` style="${cellStyle}"` : ''
-      cellsHtml.push(`<td${rowspanAttr}${colspanAttr}${styleAttr}>${escapeHtml(text)}</td>`)
+      const tag = isHeader ? 'th' : 'td'
+      cellsHtml.push(`<${tag}${rowspanAttr}${colspanAttr}${styleAttr}>${escapeHtml(text)}</${tag}>`)
     }
-    htmlRows.push(`<tr>${cellsHtml.join('')}</tr>`)
+    return `<tr>${cellsHtml.join('')}</tr>`
   }
 
-  return `<table${tableStyle ? ` style="${tableStyle}"` : ''}><tbody>${htmlRows.join('')}</tbody></table>`
+  let headerHtml = ''
+  let bodyRows = rows
+  if (headerRowCount > 0 && headerRowCount < rows.length) {
+    const headerRows = rows.slice(0, headerRowCount)
+    bodyRows = rows.slice(headerRowCount)
+    const headerRowsHtml = headerRows.map((row, r) => renderRow(row, rowsTableInfo?.[r], true, r)).join('')
+    headerHtml = `<thead>${headerRowsHtml}</thead>`
+  }
+
+  const bodyHtml = bodyRows.map((row, r) => {
+    const actualRowIndex = headerRowCount > 0 ? headerRowCount + r : r
+    return renderRow(row, rowsTableInfo?.[actualRowIndex], false, actualRowIndex)
+  }).join('')
+
+  return `<table${tableStyle ? ` style="${tableStyle}"` : ''}>${headerHtml}<tbody>${bodyHtml}</tbody></table>`
 }
 
 /**
@@ -147,21 +174,20 @@ export function renderNestedTableHtml(
   rows: string[][],
   rowsTableInfo?: TableInfo[],
   rowsDepth?: number[],
+  headerRowCount: number = 0,
 ): string {
   if (!rows || rows.length === 0) return ''
 
-  // 无深度信息时回退到普通表格渲染
   if (!rowsDepth || rowsDepth.length === 0) {
-    return renderTableHtml(rows, rowsTableInfo)
+    return renderTableHtml(rows, rowsTableInfo, headerRowCount)
   }
 
-  // 所有行深度相同（都是 1）时回退到普通表格渲染
   const allSameDepth = rowsDepth.every(d => d === rowsDepth[0])
   if (allSameDepth) {
-    return renderTableHtml(rows, rowsTableInfo)
+    return renderTableHtml(rows, rowsTableInfo, headerRowCount)
   }
 
-  return renderNestedTableRecursive(rows, rowsTableInfo, rowsDepth, 0, rows.length, 1)
+  return renderNestedTableRecursive(rows, rowsTableInfo, rowsDepth, 0, rows.length, 1, headerRowCount)
 }
 
 /**
@@ -179,11 +205,10 @@ function renderNestedTableRecursive(
   start: number,
   end: number,
   currentDepth: number,
+  headerRowCount: number = 0,
 ): string {
-  // 收集当前深度的行，遇到更深的行时递归
   const tableRows: string[][] = []
   const tableInfos: TableInfo[] = []
-  // 占位符映射：占位符 → 子表格 HTML
   const placeholders: Map<string, string> = new Map()
   let i = start
 
@@ -195,7 +220,6 @@ function renderNestedTableRecursive(
       tableInfos.push(rowsTableInfo?.[i] ?? { inTable: true })
       i++
     } else if (depth > currentDepth) {
-      // 找到更深的行范围，递归渲染子表格
       const childStart = i
       while (i < end && rowsDepth[i] >= depth) {
         i++
@@ -203,7 +227,6 @@ function renderNestedTableRecursive(
       const childEnd = i
       const childHtml = renderNestedTableRecursive(rows, rowsTableInfo, rowsDepth, childStart, childEnd, depth)
 
-      // 将子表格用占位符替换，追加到父表格最后一行的最后一个单元格
       if (tableRows.length > 0 && childHtml) {
         const lastRowIdx = tableRows.length - 1
         const lastCellIdx = tableRows[lastRowIdx].length - 1
@@ -214,17 +237,14 @@ function renderNestedTableRecursive(
         }
       }
     } else {
-      // depth < currentDepth，返回到上层处理
       break
     }
   }
 
   if (tableRows.length === 0) return ''
 
-  // 渲染父表格（占位符不会被 escapeHtml 转义，因为 \x00 不在转义列表中）
-  let html = renderTableHtml(tableRows, tableInfos)
+  let html = renderTableHtml(tableRows, tableInfos, currentDepth === 1 ? headerRowCount : 0)
 
-  // 将占位符替换回实际的子表格 HTML
   for (const [ph, childHtml] of placeholders) {
     html = html.split(ph).join(childHtml)
   }
@@ -232,11 +252,10 @@ function renderNestedTableRecursive(
   return html
 }
 
-function buildCellStyle(cellInfo?: TableCellInfo): string {
-  if (!cellInfo) return ''
+function buildCellStyle(cellInfo?: TableCellInfo, useDefaultBorders?: boolean, isHeader?: boolean): string {
   const parts: string[] = []
 
-  if (cellInfo.borders) {
+  if (cellInfo?.borders) {
     const top = borderToCss(cellInfo.borders.top)
     const left = borderToCss(cellInfo.borders.left)
     const bottom = borderToCss(cellInfo.borders.bottom)
@@ -245,11 +264,23 @@ function buildCellStyle(cellInfo?: TableCellInfo): string {
     if (left) parts.push(`border-left:${left}`)
     if (bottom) parts.push(`border-bottom:${bottom}`)
     if (right) parts.push(`border-right:${right}`)
+  } else if (useDefaultBorders) {
+    parts.push('border:1px solid #000000')
   }
 
-  if (cellInfo.widthTwips && cellInfo.widthTwips > 0) {
+  if (cellInfo?.widthTwips && cellInfo.widthTwips > 0) {
     const widthPx = Math.round(cellInfo.widthTwips / 15)
     parts.push(`width:${widthPx}px`)
+  }
+
+  if (isHeader) {
+    parts.push('font-weight:bold')
+    parts.push('text-align:center')
+    parts.push('background-color:#f2f2f2')
+  }
+
+  if (useDefaultBorders || cellInfo?.borders) {
+    parts.push('padding:4px 8px')
   }
 
   return parts.join(';')
@@ -259,6 +290,7 @@ function buildTableBorderStyle(
   borders?: TableInfo['borders'],
   justification?: 'left' | 'center' | 'right',
   indentTwips?: number,
+  useDefaultBorders?: boolean,
 ): string {
   const parts: string[] = []
 
@@ -278,9 +310,11 @@ function buildTableBorderStyle(
     if (bottom) parts.push(`border-bottom:${bottom}`)
     if (left) parts.push(`border-left:${left}`)
     if (right) parts.push(`border-right:${right}`)
+  } else if (useDefaultBorders) {
+    parts.push('border-collapse:collapse')
+    parts.push('border:1px solid #000000')
   }
 
-  // Table alignment via margin: auto for center, margin-left for indent.
   if (justification === 'center') {
     parts.push('margin-left:auto', 'margin-right:auto')
   } else if (justification === 'right') {

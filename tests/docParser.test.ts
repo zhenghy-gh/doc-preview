@@ -172,7 +172,7 @@ describe('DocParser', () => {
         writeU32(entryOffset + 120, size)
       }
       writeDirEntry(dirBase + 0 * 128, 'Root Entry', 5, 0xFFFFFFFF, 0)
-      writeDirEntry(dirBase + 1 * 128, 'WordDocument', 2, 2, 256)
+      writeDirEntry(dirBase + 1 * 128, 'WordDocument', 2, 2, 512)
       writeDirEntry(dirBase + 2 * 128, options.tableStreamName, 2, 3, 64)
 
       // ---- Sector 2 (offset 1536): WordDocument stream ----
@@ -185,28 +185,27 @@ describe('DocParser', () => {
       const fFlags = (0 << 2) | (options.fWhichTblStm << 9)  // fComplex=0 (UTF-16LE)
       writeU16(10 + wdBase, fFlags)
 
-      // csw at offset 32 = 0
+      // csw at offset 32 = 0 → FibRgW97 is empty; cslw follows at offset 34.
       writeU16(32 + wdBase, 0)
-      // FibRgW: (csw+1)*2 = 2 bytes at offset 34 (zeros)
 
-      // cslw at offset 36 = 10 (need 10 dwords for full rgCcp)
-      writeU32(36 + wdBase, 10)
-      // FibRgLw: 11 dwords at offset 40
-      //   cbMac(0), reserved(0), reserved(0), ccpText(11), ccpFtn(0), ...
+      // cslw at offset 34 = 22 (spec standard). FibRgLw97 follows at offset 36
+      // with no reserved padding.
+      writeU16(34 + wdBase, 22)
+      //   cbMac(+0), reserved(+4), reserved(+8), ccpText(+12), ccpFtn(+16), ...
       const textLength = 11  // "Hello World" length
-      writeU32(40 + 12 + wdBase, textLength)  // ccpText at rgCcpStart+12
+      writeU32(36 + 12 + wdBase, textLength)  // ccpText at rgLwStart+12
 
-      // cbRgFcLcb at offset 84 = 16
-      writeU16(84 + wdBase, 16)
-      // rgFcLcbBlob at offset 86, 16 entries * 8 bytes = 128 bytes
-      // fcClx at blobStart + 14*4 = 86 + 56 = 142
-      // lcbClx at blobStart + 15*4 = 86 + 60 = 146
+      // FibRgLw97 ends at 36 + 22*4 = 124. cbRgFcLcb (PAIR count) at offset 124.
+      // Use 34 pairs so fcClx (pair 33) is in range.
+      writeU16(124 + wdBase, 34)
+      // rgFcLcbBlob starts at 126; each (fc,lcb) pair is 8 bytes.
+      // fcClx at blobStart + 33*8 = 126 + 264 = 390; lcbClx at 394.
       const clxSize = 32
-      writeU32(142 + wdBase, 0)       // fcClx = 0 (offset within table stream)
-      writeU32(146 + wdBase, clxSize) // lcbClx = 32
+      writeU32(390 + wdBase, 0)       // fcClx = 0 (offset within table stream)
+      writeU32(394 + wdBase, clxSize) // lcbClx = 32
 
-      // Text "Hello World" as UTF-16LE at offset 214 (right after FIB)
-      const textOffset = 214
+      // Text "Hello World" as UTF-16LE at offset 400 (after the rgFcLcb blob).
+      const textOffset = 400
       const text = 'Hello World'
       for (let i = 0; i < text.length; i++) {
         writeU16(textOffset + i * 2 + wdBase, text.charCodeAt(i))
@@ -351,33 +350,31 @@ describe('DocParser', () => {
       // fFlags: fComplex=0 (UTF-16LE), fWhichTblStm=0 (0Table)
       writeU16(10 + wdBase, 0)
 
-      // csw at offset 32 = 0
+      // csw at offset 32 = 0 → FibRgW97 empty; cslw at offset 34.
       writeU16(32 + wdBase, 0)
-      // cslw at offset 36 = 10
-      writeU32(36 + wdBase, 10)
-      // FibRgLw starts at offset 40 (FibRgWEnd + 4 = 36 + 4 when csw=0).
+      // cslw at offset 34 = 22. FibRgLw97 follows at offset 36 (no reserved).
+      writeU16(34 + wdBase, 22)
       // rgCcp layout relative to FibRgLw: cbMac(+0), reserved(+4), reserved(+8),
       //   ccpText(+12), ccpFtn(+16), ccpHdd(+20), ...
-      const rgCcpStart = 40
+      const rgCcpStart = 36
       writeU32(rgCcpStart + 12 + wdBase, 8)    // ccpText
       writeU32(rgCcpStart + 16 + wdBase, 15)   // ccpFtn
       writeU32(rgCcpStart + 20 + wdBase, 13)   // ccpHdd
       // ccpMcr/ccpAtn/ccpEdn/ccpTxbx/ccpHdrTxbx stay 0
 
-      // cbRgFcLcb at offset 84 = 16
-      writeU16(84 + wdBase, 16)
-      // fcClx at blobStart + 14*4 = 86 + 56 = 142
-      // lcbClx at blobStart + 15*4 = 86 + 60 = 146
+      // FibRgLw97 ends at 36 + 22*4 = 124. cbRgFcLcb (PAIR count) at 124.
+      writeU16(124 + wdBase, 34)
+      // fcClx at blobStart + 33*8 = 126 + 264 = 390; lcbClx at 394.
       const clxSize = 1 + 4 + (1 + 2 + 4 + (4 + 4 * 4 + 3 * 8))
-      writeU32(142 + wdBase, 0)         // fcClx = 0 (within 0Table)
-      writeU32(146 + wdBase, clxSize)   // lcbClx
+      writeU32(390 + wdBase, 0)         // fcClx = 0 (within 0Table)
+      writeU32(394 + wdBase, clxSize)   // lcbClx
 
       // Text: "MainText" + "FootnoteContent" + "HeaderContent" as UTF-16LE
       //   8 + 15 + 13 = 36 chars = 72 bytes
       const main = 'MainText'
       const footnote = 'FootnoteContent'
       const header = 'HeaderContent'
-      const textOffset = 214
+      const textOffset = 400
       let textOff = textOffset
       for (const s of [main, footnote, header]) {
         for (let i = 0; i < s.length; i++) {

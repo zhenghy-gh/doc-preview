@@ -579,6 +579,8 @@ export interface ChartInfo {
   objectType?: number
   /** 图表格式（如 'MSGraph.Chart.8'） */
   format?: string
+  /** 图表预览图 data URL（从 OLE Picture 流提取），无预览图时为 undefined */
+  dataUrl?: string
 }
 
 /**

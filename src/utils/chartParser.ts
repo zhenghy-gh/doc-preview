@@ -1,5 +1,6 @@
 import { logger } from './logger'
 import { DirectoryEntry, StreamData } from './oleParser'
+import { extractImagesFromStream, imagesToDataUrls } from './imageExtractor'
 
 export type ChartType = 'msgraph' | 'excel' | 'smartart' | 'oleobject' | 'chart' | 'unknown'
 
@@ -20,6 +21,8 @@ export interface ChartInfo {
   pictureSize?: number
   objectType?: number
   format?: string
+  /** Data URL of the chart preview image (from the OLE Picture stream), if available. */
+  dataUrl?: string
 }
 
 const CHART_NAME_PATTERNS: Record<string, { type: ChartType; subtype: ChartSubtype }> = {
@@ -33,13 +36,26 @@ const CHART_NAME_PATTERNS: Record<string, { type: ChartType; subtype: ChartSubty
   'SmartArt': { type: 'smartart', subtype: 'process' },
   'Microsoft.Office.SmartArt': { type: 'smartart', subtype: 'process' },
   'OrgChart': { type: 'smartart', subtype: 'orgchart' },
+  'LibreOffice.Chart': { type: 'chart', subtype: 'chart' },
+  'LibreOffice.ChartDocument': { type: 'chart', subtype: 'chart' },
 }
 
 const OBJECT_NAME_PATTERN = /^Object\.\d+/
+// LibreOffice embeds charts with numeric storage names like _2147483647
+const LIBREOFFICE_STORAGE_PATTERN = /^_\d+$/
 
 export function detectChartType(name: string): { type: ChartType; subtype: ChartSubtype } {
   const lowerName = name.toLowerCase()
   
+  // LibreOffice embedded objects (storage names like _2147483647)
+  if (LIBREOFFICE_STORAGE_PATTERN.test(name)) {
+    return { type: 'chart', subtype: 'chart' }
+  }
+  
+  if (lowerName.includes('libreoffice') && (lowerName.includes('chart') || lowerName.includes('graphic'))) {
+    return { type: 'chart', subtype: 'chart' }
+  }
+
   if (lowerName.includes('smartart')) {
     if (lowerName.includes('orgchart')) return { type: 'smartart', subtype: 'orgchart' }
     if (lowerName.includes('process')) return { type: 'smartart', subtype: 'process' }
@@ -80,16 +96,51 @@ function getDataStream(directory: DirectoryEntry[], parentName: string): Directo
   return directory.find(e => e.name === dataName && e.objectType === 2)
 }
 
+function getPictureStream(directory: DirectoryEntry[], parentName: string): DirectoryEntry | undefined {
+  const pictureName = `${parentName}\x00Picture`
+  return directory.find(e => e.name === pictureName && e.objectType === 2)
+}
+
+function extractChartPictureDataUrl(
+  directory: DirectoryEntry[],
+  parentName: string,
+  readStream?: (entry: DirectoryEntry) => StreamData | null
+): string | undefined {
+  if (!readStream) return undefined
+  const picEntry = getPictureStream(directory, parentName)
+  if (!picEntry || picEntry.size < 8) return undefined
+  try {
+    const stream = readStream(picEntry)
+    if (!stream || !stream.data || stream.data.length < 8) return undefined
+    const images = extractImagesFromStream(stream.data)
+    if (images.length > 0) {
+      const urls = imagesToDataUrls(images)
+      return urls[0]
+    }
+    return undefined
+  } catch (e) {
+    logger.warn(`提取图表 ${parentName} 预览图失败: ${e}`)
+    return undefined
+  }
+}
+
 export function extractChartsFromDirectory(
   directory: DirectoryEntry[],
-  _readStream?: (entry: DirectoryEntry) => StreamData | null
+  readStream?: (entry: DirectoryEntry) => StreamData | null
 ): ChartInfo[] {
   const charts: ChartInfo[] = []
 
+  // Filter for potential chart entries:
+  // - objectType 1 = storage (standard OLE)
+  // - objectType 0 may appear in libwv-generated files
   const chartEntries = directory.filter(e => {
-    if (e.objectType !== 1) return false
+    // Skip streams (objectType 2) and root (objectType 5)
+    if (e.objectType === 2 || e.objectType === 5) return false
+
     const name = e.name.trim()
     if (OBJECT_NAME_PATTERN.test(name)) return true
+    // LibreOffice embedded charts use numeric storage names like _2147483647
+    if (LIBREOFFICE_STORAGE_PATTERN.test(name)) return true
     for (const pattern of Object.keys(CHART_NAME_PATTERNS)) {
       if (name.includes(pattern)) return true
     }
@@ -103,6 +154,7 @@ export function extractChartsFromDirectory(
       const { type, subtype } = detectChartType(entry.name)
       const hasPic = hasPictureStream(directory, entry.name)
       const dataEntry = getDataStream(directory, entry.name)
+      const pictureDataUrl = extractChartPictureDataUrl(directory, entry.name, readStream)
 
       charts.push({
         id: charts.length + 1,
@@ -114,6 +166,7 @@ export function extractChartsFromDirectory(
         dataSize: dataEntry?.size,
         pictureSize: hasPic ? entry.size : undefined,
         objectType: entry.objectType,
+        dataUrl: pictureDataUrl,
       })
     } catch (e) {
       logger.warn(`解析图表 ${entry.name} 失败: ${e}`)

@@ -223,8 +223,10 @@ export function parseFib(data: Uint8Array): FibData | null {
     // csw at offset 32
     const csw = data[32] | (data[33] << 8)
 
-    // FibRgW: after csw (offset 34), (csw + 1) words
-    const fibRgWEnd = 34 + (csw + 1) * 2
+    // FibRgW: csw 16-bit values immediately follow csw (offset 34).
+    // Per MS-DOC, csw MUST be 0x0E, so FibRgW97 spans exactly csw * 2 bytes
+    // and cslw follows immediately at (34 + csw * 2).
+    const fibRgWEnd = 34 + csw * 2
     if (fibRgWEnd + 4 > data.length) {
       logger.warn('FIB FibRgW超出范围，仅使用fFlags标志')
       return {
@@ -241,11 +243,19 @@ export function parseFib(data: Uint8Array): FibData | null {
       }
     }
 
-    // cslw at fibRgWEnd (4 bytes: 2-byte count + 2-byte reserved)
-    const cslw = readDwordAt(data, fibRgWEnd)
+    // cslw (2-byte count of DWORDs in FibRgLw97) is at fibRgWEnd. FibRgLw97
+    // follows immediately with no reserved padding. Per MS-DOC, cslw MUST be
+    // 0x16 (22 DWORDs = 88 bytes). Guard against corrupt/non-standard values
+    // by falling back to the spec default.
+    let cslw = data[fibRgWEnd] | (data[fibRgWEnd + 1] << 8)
+    const fibRgLwStart = fibRgWEnd + 2
+    if (cslw < 1 || cslw > 200 || fibRgLwStart + cslw * 4 + 2 > data.length) {
+      logger.warn(`cslw=${cslw} 非法，回退到默认 22 DWORDs`)
+      cslw = 22
+    }
 
-    // FibRgLw: after cslw, (cslw + 1) dwords
-    const fibRgLwEnd = fibRgWEnd + 4 + (cslw + 1) * 4
+    // FibRgLw97 spans cslw DWORDs; cbRgFcLcb follows immediately after.
+    const fibRgLwEnd = fibRgLwStart + cslw * 4
     if (fibRgLwEnd + 2 > data.length) {
       logger.warn('FIB FibRgLw超出范围，仅使用fFlags标志')
       return {
@@ -262,7 +272,7 @@ export function parseFib(data: Uint8Array): FibData | null {
       }
     }
 
-    // Parse FibRgLw97's rgCcp values. Layout (relative to fibRgWEnd + 4):
+    // Parse FibRgLw97's rgCcp values. Layout (relative to fibRgLwStart):
     //   +0  cbMac
     //   +4  reserved1
     //   +8  reserved2
@@ -274,7 +284,7 @@ export function parseFib(data: Uint8Array): FibData | null {
     //   +32 ccpEdn
     //   +36 ccpTxbx
     //   +40 ccpHdrTxbx
-    const rgCcpStart = fibRgWEnd + 4
+    const rgCcpStart = fibRgLwStart
     const rgCcp: RgCcp = {
       ccpText: readDwordAt(data, rgCcpStart + 12),
       ccpFtn: readDwordAt(data, rgCcpStart + 16),
@@ -293,8 +303,10 @@ export function parseFib(data: Uint8Array): FibData | null {
     const blobStart = fibRgLwEnd + 2
     const blobSize = cbRgFcLcb * 8
 
-    if (blobStart + blobSize > data.length || cbRgFcLcb < 2) {
-      logger.warn(`FIB blob太小(cbRgFcLcb=${cbRgFcLcb})，仅使用fFlags=${fComplex}`)
+    // For libwv/non-standard files, cbRgFcLcb may be invalid (e.g., 0xFFFF)
+    // In this case, we still return the parsed rgCcp values for text extraction
+    if (blobStart + blobSize > data.length || cbRgFcLcb < 2 || cbRgFcLcb > 1000) {
+      logger.warn(`FIB blob无效(cbRgFcLcb=${cbRgFcLcb})，返回rgCcp供文本提取`)
       return {
         fcMin: 0, fcMac: 0, fcClx: 0, lcbClx: 0,
         fComplex, fWhichTblStm, isTextutil, nFib, wordVersion, fibBase: 32, rgCcp,
@@ -309,116 +321,52 @@ export function parseFib(data: Uint8Array): FibData | null {
       }
     }
 
-    // rgFcLcbBlob interleaved: [fcMin, lcbMin, fcMac, lcbMac, ..., fcClx, lcbClx, ...]
-    const fcMin = readDwordAt(data, blobStart) & 0x3FFFFFFF
-    const fcMac = readDwordAt(data, blobStart + 8) & 0x3FFFFFFF
+    // FibRgFcLcb97 is a fixed-order array of (fc, lcb) pairs, each 8 bytes
+    // (4-byte file offset + 4-byte length). cbRgFcLcb is the count of pairs.
+    // Field order is defined by MS-DOC §2.5.5. fc values are masked with
+    // 0x3FFFFFFF because the top 2 bits act as flags in some fields.
+    const fcAt = (pair: number): number =>
+      pair < cbRgFcLcb ? readDwordAt(data, blobStart + pair * 8) & 0x3FFFFFFF : 0
+    const lcbAt = (pair: number): number =>
+      pair < cbRgFcLcb ? readDwordAt(data, blobStart + pair * 8 + 4) : 0
 
-    let fcClx = 0
-    let lcbClx = 0
-    if (cbRgFcLcb >= 16) {
-      fcClx = readDwordAt(data, blobStart + 14 * 4) & 0x3FFFFFFF
-      lcbClx = readDwordAt(data, blobStart + 15 * 4)
-    }
+    // fcMin/fcMac are legacy Word 6/95 fields and are NOT part of FibRgFcLcb97.
+    // Word 97+ locates text via the piece table (Clx), so these stay 0.
+    const fcMin = 0
+    const fcMac = 0
 
-    let fcPlcfBteChpx = 0
-    let lcbPlcfBteChpx = 0
-    let fcPlcfBtePapx = 0
-    let lcbPlcfBtePapx = 0
-    let fcStshf = 0
-    let lcbStshf = 0
-    let fcSttbfFfn = 0
-    let lcbSttbfFfn = 0
-    let fcLst = 0
-    let lcbLst = 0
-    let fcPlcfLfo = 0
-    let lcbPlcfLfo = 0
-    let fcPlcfFldMom = 0
-    let lcbPlcfFldMom = 0
-    let fcDop = 0
-    let lcbDop = 0
-    let fcSttbfRMark = 0
-    let lcbSttbfRMark = 0
-    if (cbRgFcLcb >= 16) {
-      fcPlcfBteChpx = readDwordAt(data, blobStart + 28 * 4) & 0x3FFFFFFF
-      lcbPlcfBteChpx = readDwordAt(data, blobStart + 29 * 4)
-      fcPlcfBtePapx = readDwordAt(data, blobStart + 30 * 4) & 0x3FFFFFFF
-      lcbPlcfBtePapx = readDwordAt(data, blobStart + 31 * 4)
-      // fcPlcfFldMom/lcbPlcfFldMom: field positions in main text (index 10/11)
-      if (cbRgFcLcb >= 12) {
-        fcPlcfFldMom = readDwordAt(data, blobStart + 10 * 4) & 0x3FFFFFFF
-        lcbPlcfFldMom = readDwordAt(data, blobStart + 11 * 4)
-      }
-      // fcStshf/lcbStshf: stylesheet location in table stream (index 16/17)
-      if (cbRgFcLcb >= 18) {
-        fcStshf = readDwordAt(data, blobStart + 16 * 4) & 0x3FFFFFFF
-        lcbStshf = readDwordAt(data, blobStart + 17 * 4)
-      }
-      // fcSttbfFfn/lcbSttbfFfn: font table location in table stream (index 22/23)
-      if (cbRgFcLcb >= 24) {
-        fcSttbfFfn = readDwordAt(data, blobStart + 22 * 4) & 0x3FFFFFFF
-        lcbSttbfFfn = readDwordAt(data, blobStart + 23 * 4)
-      }
-      // fcLst/lcbLst: list table location in table stream (index 62/63)
-      if (cbRgFcLcb >= 64) {
-        fcLst = readDwordAt(data, blobStart + 62 * 4) & 0x3FFFFFFF
-        lcbLst = readDwordAt(data, blobStart + 63 * 4)
-      }
-      // fcPlcfLfo/lcbPlcfLfo: list format override table (index 66/67)
-      if (cbRgFcLcb >= 68) {
-        fcPlcfLfo = readDwordAt(data, blobStart + 66 * 4) & 0x3FFFFFFF
-        lcbPlcfLfo = readDwordAt(data, blobStart + 67 * 4)
-      }
-      // fcDop/lcbDop: Document Properties (DOP) in table stream.
-      // Per MS-DOC §2.5.6 FibRgFcLcb97, fcDop/lcbDop sit at 4-byte index 62/63
-      // (byte offset 248/252). When cbRgFcLcb >= 64 we can safely read this pair.
-      if (cbRgFcLcb >= 64) {
-        fcDop = readDwordAt(data, blobStart + 62 * 4) & 0x3FFFFFFF
-        lcbDop = readDwordAt(data, blobStart + 63 * 4)
-      }
-      // fcSttbfRMark/lcbSttbfRMark: revision author table (STTB) in table stream.
-      // Per MS-DOC §2.5.5 FibRgFcLcb97, sits at 4-byte index 90/91
-      // (byte offset 360/364). Read when cbRgFcLcb >= 92.
-      if (cbRgFcLcb >= 92) {
-        fcSttbfRMark = readDwordAt(data, blobStart + 90 * 4) & 0x3FFFFFFF
-        lcbSttbfRMark = readDwordAt(data, blobStart + 91 * 4)
-      }
-    }
-
-    // Bookmark tables (MS-DOC §2.5.5 FibRgFcLcb97):
-    // - PlcfBkf (bookmark starts): 4-byte index 76/77, read when cbRgFcLcb >= 78
-    // - PlcfBkl (bookmark ends): 4-byte index 78/79, read when cbRgFcLcb >= 80
-    // - SttbfBkmk (bookmark names): 4-byte index 80/81, read when cbRgFcLcb >= 82
-    let fcPlcfBkf = 0, lcbPlcfBkf = 0
-    let fcPlcfBkl = 0, lcbPlcfBkl = 0
-    let fcSttbfBkmk = 0, lcbSttbfBkmk = 0
-    if (cbRgFcLcb >= 78) {
-      fcPlcfBkf = readDwordAt(data, blobStart + 76 * 4) & 0x3FFFFFFF
-      lcbPlcfBkf = readDwordAt(data, blobStart + 77 * 4)
-    }
-    if (cbRgFcLcb >= 80) {
-      fcPlcfBkl = readDwordAt(data, blobStart + 78 * 4) & 0x3FFFFFFF
-      lcbPlcfBkl = readDwordAt(data, blobStart + 79 * 4)
-    }
-    if (cbRgFcLcb >= 82) {
-      fcSttbfBkmk = readDwordAt(data, blobStart + 80 * 4) & 0x3FFFFFFF
-      lcbSttbfBkmk = readDwordAt(data, blobStart + 81 * 4)
-    }
-    // PlcfSed (section descriptor table): 4-byte index 86/87
-    // (byte offset 344/348). Read when cbRgFcLcb >= 88.
-    let fcPlcfSed = 0, lcbPlcfSed = 0
-    if (cbRgFcLcb >= 88) {
-      fcPlcfSed = readDwordAt(data, blobStart + 86 * 4) & 0x3FFFFFFF
-      lcbPlcfSed = readDwordAt(data, blobStart + 87 * 4)
-    }
-    // PlcfHdd (header/footer position table): 4-byte index 72/73
-    // (byte offset 288/292). Read when cbRgFcLcb >= 74.
-    // Per MS-DOC §2.5.5 FibRgFcLcb97, PlcfHdd defines CP boundaries that
-    // split the ccpHdd story into per-section header/footer sub-ranges.
-    let fcPlcfHdd = 0, lcbPlcfHdd = 0
-    if (cbRgFcLcb >= 74) {
-      fcPlcfHdd = readDwordAt(data, blobStart + 72 * 4) & 0x3FFFFFFF
-      lcbPlcfHdd = readDwordAt(data, blobStart + 73 * 4)
-    }
+    // Pair indices per MS-DOC §2.5.5 FibRgFcLcb97 (matches Apache POI
+    // FIBFieldHandler constants):
+    const fcStshf = fcAt(1)
+    const lcbStshf = lcbAt(1)
+    const fcPlcfSed = fcAt(6)
+    const lcbPlcfSed = lcbAt(6)
+    const fcPlcfHdd = fcAt(11)
+    const lcbPlcfHdd = lcbAt(11)
+    const fcPlcfBteChpx = fcAt(12)
+    const lcbPlcfBteChpx = lcbAt(12)
+    const fcPlcfBtePapx = fcAt(13)
+    const lcbPlcfBtePapx = lcbAt(13)
+    const fcSttbfFfn = fcAt(15)
+    const lcbSttbfFfn = lcbAt(15)
+    const fcPlcfFldMom = fcAt(16)
+    const lcbPlcfFldMom = lcbAt(16)
+    const fcSttbfBkmk = fcAt(21)
+    const lcbSttbfBkmk = lcbAt(21)
+    const fcPlcfBkf = fcAt(22)
+    const lcbPlcfBkf = lcbAt(22)
+    const fcPlcfBkl = fcAt(23)
+    const lcbPlcfBkl = lcbAt(23)
+    const fcDop = fcAt(31)
+    const lcbDop = lcbAt(31)
+    const fcClx = fcAt(33)
+    const lcbClx = lcbAt(33)
+    const fcSttbfRMark = fcAt(51)
+    const lcbSttbfRMark = lcbAt(51)
+    const fcLst = fcAt(73)
+    const lcbLst = lcbAt(73)
+    const fcPlcfLfo = fcAt(74)
+    const lcbPlcfLfo = lcbAt(74)
 
     logger.log(
       `nFib=${data[2] | (data[3] << 8)} fComplex=${fComplex} fWhichTblStm=${fWhichTblStm} ` +

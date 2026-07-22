@@ -73,9 +73,19 @@ function findPngEnd(data: Uint8Array, start: number): number {
  * Slice a JPEG starting at `start`. JPEG begins with FFD8 (SOI) and ends
  * with FFD9 (EOI). We scan for the EOI marker; this handles the common
  * case where the JPEG is stored as a single self-contained stream.
+ *
+ * Key detail: inside the entropy-coded segment (after SOS), 0xFF00 is an
+ * *escaped* literal 0xFF byte — NOT a marker. We must skip 0xFF00 pairs
+ * so they don't confuse the marker parser.
+ *
+ * Fallback: some embedded JPEGs (especially in .doc files) are truncated
+ * and lack an EOI marker. If we reach the end of the buffer after the SOS
+ * segment without finding EOI, we return the last plausible offset.
  */
 function findJpegEnd(data: Uint8Array, start: number): number {
   let offset = start + JPEG_SOI.length
+  let sosOffset = -1   // offset of SOS marker for fallback
+
   while (offset + 1 < data.length) {
     if (data[offset] === 0xFF) {
       // Skip filler 0xFF bytes.
@@ -84,9 +94,49 @@ function findJpegEnd(data: Uint8Array, start: number): number {
         offset++
         marker = data[offset + 1]
       }
+
+      // 0xFF00 is a byte-stuffed 0xFF in scan data — skip it.
+      if (marker === 0x00) {
+        offset += 2
+        continue
+      }
+
       if (marker === 0xD9) {
         return offset + 2
       }
+
+      // SOS marker: entropy-coded data follows.
+      if (marker === 0xDA) {
+        sosOffset = offset
+        // SOS has a length field; skip it, then the scan data follows.
+        if (offset + 3 >= data.length) break
+        const segLen = (data[offset + 2] << 8) | data[offset + 3]
+        if (segLen < 2) break
+        offset += 2 + segLen
+        // Now we're in the entropy-coded segment. We scan for the next
+        // marker (0xFF followed by non-0x00 and non-0xFF).
+        while (offset + 1 < data.length) {
+          if (data[offset] === 0xFF) {
+            let next = data[offset + 1]
+            // Skip filler 0xFF
+            while (next === 0xFF && offset + 2 < data.length) {
+              offset++
+              next = data[offset + 1]
+            }
+            // 0xFF00 = escaped 0xFF byte, not a marker
+            if (next === 0x00) {
+              offset += 2
+              continue
+            }
+            // Found a real marker — break out to handle it
+            break
+          }
+          offset++
+        }
+        // Loop will re-enter the marker handling on the next iteration
+        continue
+      }
+
       // Standalone markers (no length payload).
       if (marker === 0xD0 || marker === 0xD1 || marker === 0xD2 || marker === 0xD3 ||
           marker === 0xD4 || marker === 0xD5 || marker === 0xD6 || marker === 0xD7 ||
@@ -95,14 +145,21 @@ function findJpegEnd(data: Uint8Array, start: number): number {
         continue
       }
       // Other markers carry a 2-byte length (including the length bytes).
-      if (offset + 3 >= data.length) return -1
+      if (offset + 3 >= data.length) break
       const segLen = (data[offset + 2] << 8) | data[offset + 3]
-      if (segLen < 2) return -1
+      if (segLen < 2) break
       offset += 2 + segLen
     } else {
       offset++
     }
   }
+
+  // Fallback: if we saw an SOS marker but no EOI, the JPEG is likely
+  // truncated. Return the end of the data as a best-effort extraction.
+  if (sosOffset >= 0) {
+    return data.length
+  }
+
   return -1
 }
 

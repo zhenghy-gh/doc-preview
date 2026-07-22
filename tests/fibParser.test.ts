@@ -1,6 +1,16 @@
 import { describe, it, expect } from 'vitest'
 import { parseFib } from '../src/utils/fibParser'
 
+// FibRgFcLcb97 pair indices (MS-DOC §2.5.5). Each pair is 8 bytes
+// (4-byte fc + 4-byte lcb). cbRgFcLcb is the count of pairs.
+const PAIR = {
+  stshf: 1,
+  plcfBteChpx: 12,
+  plcfBtePapx: 13,
+  dop: 31,
+  clx: 33,
+} as const
+
 function createFibData(options: {
   magic?: number
   fComplex?: number
@@ -8,8 +18,6 @@ function createFibData(options: {
   csw?: number
   cslw?: number
   cbRgFcLcb?: number
-  fcMin?: number
-  fcMac?: number
   fcClx?: number
   lcbClx?: number
   fcPlcfBteChpx?: number
@@ -29,89 +37,86 @@ function createFibData(options: {
   const magic = options.magic ?? 0xa5ec
   const fComplex = options.fComplex ?? 0
   const fWhichTblStm = options.fWhichTblStm ?? 0
-  const csw = options.csw ?? 0
-  const cslw = options.cslw ?? 0
-  const cbRgFcLcb = options.cbRgFcLcb ?? 16
+  // Spec-mandated defaults: csw=0x0E (14), cslw=0x16 (22).
+  const csw = options.csw ?? 14
+  const cslw = options.cslw ?? 22
+  // cbRgFcLcb is a PAIR count. Word97 uses 0x005D (93) pairs.
+  const cbRgFcLcb = options.cbRgFcLcb ?? 93
 
-  // FibBase: 32 bytes
-  // csw: 2 bytes
-  // FibRgW: (csw+1) * 2 bytes
-  // cslw: 4 bytes
-  // FibRgLw: (cslw+1) * 4 bytes
-  // cbRgFcLcb: 2 bytes
-  // rgFcLcbBlob: cbRgFcLcb * 8 bytes
-
-  const fibRgWSize = (csw + 1) * 2
-  const fibRgLwSize = (cslw + 1) * 4
+  // MS-DOC FIB layout:
+  //   FibBase:    32 bytes
+  //   csw:         2 bytes
+  //   FibRgW97:    csw * 2 bytes
+  //   cslw:        2 bytes
+  //   FibRgLw97:   cslw * 4 bytes
+  //   cbRgFcLcb:   2 bytes
+  //   rgFcLcbBlob: cbRgFcLcb * 8 bytes
+  const fibRgWSize = csw * 2
+  const fibRgLwSize = cslw * 4
   const blobSize = cbRgFcLcb * 8
 
-  const totalSize = 32 + 2 + fibRgWSize + 4 + fibRgLwSize + 2 + blobSize
+  const totalSize = 32 + 2 + fibRgWSize + 2 + fibRgLwSize + 2 + blobSize
   const data = new Uint8Array(totalSize)
 
-  // Set magic
+  // wIdent (magic)
   data[0] = magic & 0xff
   data[1] = (magic >> 8) & 0xff
 
-  // Set nFib (version)
+  // nFib (version)
   data[2] = 0x00
   data[3] = 0x01
 
-  // Set fFlags at byte 10-11:
-  //   bit 2 of word (mask 0x0004, byte 10 bit 2): fComplex
-  //   bit 9 of word (mask 0x0200, byte 11 bit 1): fWhichTblStm
+  // fFlags at byte 10-11:
+  //   bit 2 (mask 0x0004, byte 10 bit 2): fComplex
+  //   bit 9 (mask 0x0200, byte 11 bit 1): fWhichTblStm
   if (fComplex & 0x01) data[10] |= 0x04
   if (fWhichTblStm & 0x01) data[11] |= 0x02
 
-  // Set csw at offset 32
+  // csw at offset 32
   data[32] = csw & 0xff
   data[33] = (csw >> 8) & 0xff
 
-  // FibRgW starts at 34, filled with zeros (csw+1 words)
+  // FibRgW97 spans csw * 2 bytes starting at offset 34 (left as zeros).
 
-  // cslw at offset 34 + fibRgWSize
+  // cslw immediately follows FibRgW97 (no reserved padding).
   const cslwOffset = 34 + fibRgWSize
   data[cslwOffset] = cslw & 0xff
   data[cslwOffset + 1] = (cslw >> 8) & 0xff
-  data[cslwOffset + 2] = (cslw >> 16) & 0xff
-  data[cslwOffset + 3] = (cslw >> 24) & 0xff
 
-  // FibRgLw starts at cslwOffset + 4
-  // Layout: cbMac(4) + reserved(4) + reserved(4) + ccpText(4) + ccpFtn(4) +
-  //         ccpHdd(4) + ccpMcr(4) + ccpAtn(4) + ccpEdn(4) + ccpTxbx(4) + ccpHdrTxbx(4)
-  const rgCcpStart = cslwOffset + 4
   const setDword = (off: number, val: number) => {
     data[off] = val & 0xff
     data[off + 1] = (val >> 8) & 0xff
     data[off + 2] = (val >> 16) & 0xff
     data[off + 3] = (val >> 24) & 0xff
   }
-  if (options.ccpText !== undefined) setDword(rgCcpStart + 12, options.ccpText)
-  if (options.ccpFtn !== undefined) setDword(rgCcpStart + 16, options.ccpFtn)
-  if (options.ccpHdd !== undefined) setDword(rgCcpStart + 20, options.ccpHdd)
-  if (options.ccpAtn !== undefined) setDword(rgCcpStart + 28, options.ccpAtn)
-  if (options.ccpEdn !== undefined) setDword(rgCcpStart + 32, options.ccpEdn)
-  if (options.ccpTxbx !== undefined) setDword(rgCcpStart + 36, options.ccpTxbx)
-  if (options.ccpHdrTxbx !== undefined) setDword(rgCcpStart + 40, options.ccpHdrTxbx)
 
-  // cbRgFcLcb at offset cslwOffset + 4 + fibRgLwSize
-  const cbOffset = cslwOffset + 4 + fibRgLwSize
+  // FibRgLw97 starts immediately after cslw (2 bytes).
+  // Layout: cbMac(+0) reserved(+4) reserved(+8) ccpText(+12) ccpFtn(+16)
+  //         ccpHdd(+20) ccpMcr(+24) ccpAtn(+28) ccpEdn(+32) ccpTxbx(+36) ccpHdrTxbx(+40)
+  const rgLwStart = cslwOffset + 2
+  if (options.ccpText !== undefined) setDword(rgLwStart + 12, options.ccpText)
+  if (options.ccpFtn !== undefined) setDword(rgLwStart + 16, options.ccpFtn)
+  if (options.ccpHdd !== undefined) setDword(rgLwStart + 20, options.ccpHdd)
+  if (options.ccpAtn !== undefined) setDword(rgLwStart + 28, options.ccpAtn)
+  if (options.ccpEdn !== undefined) setDword(rgLwStart + 32, options.ccpEdn)
+  if (options.ccpTxbx !== undefined) setDword(rgLwStart + 36, options.ccpTxbx)
+  if (options.ccpHdrTxbx !== undefined) setDword(rgLwStart + 40, options.ccpHdrTxbx)
+
+  // cbRgFcLcb immediately follows FibRgLw97.
+  const cbOffset = rgLwStart + fibRgLwSize
   data[cbOffset] = cbRgFcLcb & 0xff
   data[cbOffset + 1] = (cbRgFcLcb >> 8) & 0xff
 
-  // rgFcLcbBlob at cbOffset + 2
+  // rgFcLcbBlob follows cbRgFcLcb. Each field is at pairIndex * 8.
   const blobOffset = cbOffset + 2
-
-  if (options.fcMin !== undefined) setDword(blobOffset, options.fcMin)
-  if (options.fcMac !== undefined) setDword(blobOffset + 8, options.fcMac)
-  if (options.fcClx !== undefined) setDword(blobOffset + 14 * 4, options.fcClx)
-  if (options.lcbClx !== undefined) setDword(blobOffset + 15 * 4, options.lcbClx)
-  if (options.fcPlcfBteChpx !== undefined) setDword(blobOffset + 28 * 4, options.fcPlcfBteChpx)
-  if (options.lcbPlcfBteChpx !== undefined) setDword(blobOffset + 29 * 4, options.lcbPlcfBteChpx)
-  if (options.fcPlcfBtePapx !== undefined) setDword(blobOffset + 30 * 4, options.fcPlcfBtePapx)
-  if (options.lcbPlcfBtePapx !== undefined) setDword(blobOffset + 31 * 4, options.lcbPlcfBtePapx)
-  // fcDop/lcbDop at 4-byte index 62/63 (byte offset 248/252)
-  if (options.fcDop !== undefined) setDword(blobOffset + 62 * 4, options.fcDop)
-  if (options.lcbDop !== undefined) setDword(blobOffset + 63 * 4, options.lcbDop)
+  const setPair = (pair: number, fc?: number, lcb?: number) => {
+    if (fc !== undefined) setDword(blobOffset + pair * 8, fc)
+    if (lcb !== undefined) setDword(blobOffset + pair * 8 + 4, lcb)
+  }
+  setPair(PAIR.clx, options.fcClx, options.lcbClx)
+  setPair(PAIR.plcfBteChpx, options.fcPlcfBteChpx, options.lcbPlcfBteChpx)
+  setPair(PAIR.plcfBtePapx, options.fcPlcfBtePapx, options.lcbPlcfBtePapx)
+  setPair(PAIR.dop, options.fcDop, options.lcbDop)
 
   return data
 }
@@ -127,43 +132,34 @@ describe('parseFib', () => {
   })
 
   it('should parse valid FIB with fComplex=0 (UTF-16LE)', () => {
-    const data = createFibData({
-      fComplex: 0,
-      fcMin: 0x100,
-      fcMac: 0x500,
-    })
+    const data = createFibData({ fComplex: 0 })
     const result = parseFib(data)
     expect(result).not.toBeNull()
     expect(result!.fComplex).toBe(false)
-    expect(result!.fcMin).toBe(0x100)
-    expect(result!.fcMac).toBe(0x500)
-  })
-
-  it('should parse valid FIB with fComplex=1 (8-bit)', () => {
-    const data = createFibData({
-      fComplex: 1,
-      fcMin: 0x200,
-      fcMac: 0x800,
-    })
-    const result = parseFib(data)
-    expect(result).not.toBeNull()
-    expect(result!.fComplex).toBe(true)
-    expect(result!.fcMin).toBe(0x200)
-    expect(result!.fcMac).toBe(0x800)
-  })
-
-  it('should return only fComplex when cbRgFcLcb is too small', () => {
-    const data = createFibData({ cbRgFcLcb: 1, fcMin: 0x100 })
-    const result = parseFib(data)
-    expect(result).not.toBeNull()
+    // fcMin/fcMac are legacy Word 6/95 fields, always 0 in Word 97+ parsing.
     expect(result!.fcMin).toBe(0)
     expect(result!.fcMac).toBe(0)
   })
 
-  it('should parse fcClx and lcbClx when cbRgFcLcb >= 16', () => {
+  it('should parse valid FIB with fComplex=1 (8-bit)', () => {
+    const data = createFibData({ fComplex: 1 })
+    const result = parseFib(data)
+    expect(result).not.toBeNull()
+    expect(result!.fComplex).toBe(true)
+    expect(result!.fcMin).toBe(0)
+    expect(result!.fcMac).toBe(0)
+  })
+
+  it('should return fallback (fcClx=0) when cbRgFcLcb is too small', () => {
+    const data = createFibData({ cbRgFcLcb: 1, fcClx: 0x300 })
+    const result = parseFib(data)
+    expect(result).not.toBeNull()
+    expect(result!.fcClx).toBe(0)
+    expect(result!.lcbClx).toBe(0)
+  })
+
+  it('should parse fcClx and lcbClx from pair index 33', () => {
     const data = createFibData({
-      fcMin: 0x100,
-      fcMac: 0x500,
       fcClx: 0x300,
       lcbClx: 0x50,
     })
@@ -173,22 +169,24 @@ describe('parseFib', () => {
     expect(result!.lcbClx).toBe(0x50)
   })
 
-  it('should apply 0x3FFFFFFF mask to fcMin/fcMac', () => {
-    const data = createFibData({
-      fcMin: 0xFFFFFFFF,
-      fcMac: 0xDEADBEEF,
-    })
+  it('should keep legacy fcMin/fcMac at 0 regardless of blob content', () => {
+    const data = createFibData({ fcClx: 0x300, lcbClx: 0x50 })
     const result = parseFib(data)
     expect(result).not.toBeNull()
-    expect(result!.fcMin).toBe(0xFFFFFFFF & 0x3FFFFFFF)
-    expect(result!.fcMac).toBe(0xDEADBEEF & 0x3FFFFFFF)
+    expect(result!.fcMin).toBe(0)
+    expect(result!.fcMac).toBe(0)
+  })
+
+  it('should apply 0x3FFFFFFF mask to fcClx', () => {
+    const data = createFibData({ fcClx: 0xFFFFFFFF })
+    const result = parseFib(data)
+    expect(result).not.toBeNull()
+    expect(result!.fcClx).toBe(0xFFFFFFFF & 0x3FFFFFFF)
   })
 
   it('should return only fComplex when csw leaves FibRgW out of range', () => {
-    // Create a minimal valid FIB then truncate it to make FibRgW out of range
-    const data = createFibData({ fComplex: 1, fcMin: 0x100 })
-    // Truncate buffer so FibRgW (after csw) is out of range.
-    // Our default csw=0 → FibRgW starts at 34, length 2 bytes. Truncate to 35 bytes.
+    // Default csw=14 → FibRgW ends at 34 + 28 = 62. Truncate below that.
+    const data = createFibData({ fComplex: 1 })
     const truncated = data.slice(0, 35)
     const result = parseFib(truncated)
     expect(result).not.toBeNull()
@@ -197,11 +195,8 @@ describe('parseFib', () => {
     expect(result!.fcMac).toBe(0)
   })
 
-  it('should return only fComplex when cslw leaves FibRgLw out of range', () => {
-    // cslw default is 0, so FibRgLw needs (0+1)*4 = 4 bytes.
-    // If we set cslw to something large, FibRgLw extends past the buffer.
+  it('should return only fComplex when buffer leaves FibRgLw out of range', () => {
     const data = createFibData({ cslw: 0xFFFF, fComplex: 0 })
-    // Truncate to just past cslw reading point (34 + 2 + 4 = 40 bytes)
     const truncated = data.slice(0, 40)
     const result = parseFib(truncated)
     expect(result).not.toBeNull()
@@ -216,7 +211,8 @@ describe('parseFib', () => {
     expect(parseFib(data2)).not.toBeNull()
   })
 
-  it('should default fcClx and lcbClx to 0 when cbRgFcLcb < 16', () => {
+  it('should default fcClx and lcbClx to 0 when pair index exceeds cbRgFcLcb', () => {
+    // cbRgFcLcb=8 pairs, fcClx lives at pair 33 → out of range → 0.
     const data = createFibData({ cbRgFcLcb: 8 })
     const result = parseFib(data)
     expect(result).not.toBeNull()
@@ -311,7 +307,6 @@ describe('parseFib', () => {
   describe('fcPlcfBteChpx / fcPlcfBtePapx', () => {
     it('should parse fcPlcfBteChpx and lcbPlcfBteChpx', () => {
       const data = createFibData({
-        cbRgFcLcb: 32,
         fcPlcfBteChpx: 0x1000,
         lcbPlcfBteChpx: 0x500,
       })
@@ -323,7 +318,6 @@ describe('parseFib', () => {
 
     it('should parse fcPlcfBtePapx and lcbPlcfBtePapx', () => {
       const data = createFibData({
-        cbRgFcLcb: 32,
         fcPlcfBtePapx: 0x2000,
         lcbPlcfBtePapx: 0x600,
       })
@@ -333,7 +327,7 @@ describe('parseFib', () => {
       expect(result!.lcbPlcfBtePapx).toBe(0x600)
     })
 
-    it('should default to 0 when cbRgFcLcb is too small', () => {
+    it('should default to 0 when pair index exceeds cbRgFcLcb', () => {
       const data = createFibData({
         cbRgFcLcb: 8,
         fcPlcfBteChpx: 0x1000,
@@ -349,7 +343,6 @@ describe('parseFib', () => {
 
     it('should apply 0x3FFFFFFF mask to fc fields', () => {
       const data = createFibData({
-        cbRgFcLcb: 32,
         fcPlcfBteChpx: 0xFFFFFFFF,
         fcPlcfBtePapx: 0xDEADBEEF,
       })
@@ -361,9 +354,8 @@ describe('parseFib', () => {
   })
 
   describe('fcDop / lcbDop', () => {
-    it('should parse fcDop and lcbDop when cbRgFcLcb >= 64', () => {
+    it('should parse fcDop and lcbDop from pair index 31', () => {
       const data = createFibData({
-        cbRgFcLcb: 64,
         fcDop: 0x4000,
         lcbDop: 0xC4,
       })
@@ -373,9 +365,9 @@ describe('parseFib', () => {
       expect(result!.lcbDop).toBe(0xC4)
     })
 
-    it('should default fcDop and lcbDop to 0 when cbRgFcLcb < 64', () => {
+    it('should default fcDop and lcbDop to 0 when pair index exceeds cbRgFcLcb', () => {
       const data = createFibData({
-        cbRgFcLcb: 32,
+        cbRgFcLcb: 16,
         fcDop: 0x4000,
         lcbDop: 0xC4,
       })
@@ -386,10 +378,7 @@ describe('parseFib', () => {
     })
 
     it('should apply 0x3FFFFFFF mask to fcDop', () => {
-      const data = createFibData({
-        cbRgFcLcb: 64,
-        fcDop: 0xFFFFFFFF,
-      })
+      const data = createFibData({ fcDop: 0xFFFFFFFF })
       const result = parseFib(data)
       expect(result).not.toBeNull()
       expect(result!.fcDop).toBe(0xFFFFFFFF & 0x3FFFFFFF)

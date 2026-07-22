@@ -269,8 +269,14 @@ export class DocParser {
       if (extracted.equations && extracted.equations.length > 0) {
         document.equations = extracted.equations
       }
+      if (extracted.charts && extracted.charts.length > 0) {
+        document.charts = extracted.charts
+      }
       if (extracted.indexEntries && extracted.indexEntries.length > 0) {
         document.index = extracted.indexEntries
+      }
+      if (extracted.styles && extracted.styles.length > 0) {
+        document.styles = extracted.styles
       }
       if (extracted.styleSet) {
         document.styleSet = extracted.styleSet
@@ -315,7 +321,7 @@ export class DocParser {
 
       // Extract structured pictures (PICF-based with dimensions) via CHPX fcPic
       const chpxRunsForPics = extracted.chpxRuns || []
-      const pictures = this.extractPictures(directory, chpxRunsForPics)
+      const pictures = this.extractPictures(directory, chpxRunsForPics, wordDocumentStream.data)
       if (pictures.length > 0) document.pictures = pictures
 
       onProgress?.('finalizing', 100)
@@ -509,6 +515,8 @@ export class DocParser {
     if (byte1 === 0x0A && byte2 === 0x00) return { ch: '', advance: 2 }
     // 0x09 0x00 = tab, keep it for table rendering
     if (byte1 === 0x09 && byte2 === 0x00) return { ch: '\t', advance: 2 }
+    // 0x01 0x00 = picture/object placeholder, keep it for inline image rendering
+    if (byte1 === 0x01 && byte2 === 0x00) return { ch: '\u0001', advance: 2 }
 
     const charCode = (byte2 << 8) | byte1
 
@@ -653,7 +661,7 @@ export class DocParser {
    */
   private parseClx(clxData: Uint8Array, wordDocData: Uint8Array): string {
     const pieces = this.parseClxPieces(clxData)
-    if (pieces.length === 0) return this.extractTextSimple(wordDocData)
+    if (pieces.length === 0) return ''
 
     const pieceTexts: string[] = []
     let totalChars = 0
@@ -826,10 +834,10 @@ export class DocParser {
       main: 0, footnotes: 0, headers: 0, endnotes: 0, comments: 0, textboxes: 0,
     }
 
-    for (const piece of pieces) {
+    for (let pieceIdx = 0; pieceIdx < pieces.length; pieceIdx++) {
+      const piece = pieces[pieceIdx]
       for (const b of bounds) {
         if (b.end <= b.start) continue
-        // No overlap between piece CP range and this story's CP range.
         if (piece.cpEnd <= b.start || piece.cpStart >= b.end) continue
 
         const overlapCpStart = Math.max(piece.cpStart, b.start)
@@ -843,8 +851,6 @@ export class DocParser {
           return { stories, pieceMap }
         }
 
-        // Translate the overlap's character offset into a byte offset
-        // within this piece's storage in the WordDocument stream.
         const charOffset = overlapCpStart - piece.cpStart
         const byteOffset = piece.fCompressed ? charOffset : charOffset * 2
         const byteLen = piece.fCompressed ? overlapCharCount : overlapCharCount * 2
@@ -861,6 +867,7 @@ export class DocParser {
         )
         const segTextLen = segText.length
         const segStartInStory = storyOffset[b.name]
+        
         stories[b.name] += segText
         if (segTextLen > 0) {
           pieceMap[b.name].push({
@@ -917,6 +924,7 @@ export class DocParser {
         else if (byte === 0x0C) text += '\f'
         else if (byte === 0x0B) text += '\v'
         else if (byte === 0x07) text += '\u0007'
+        else if (byte === 0x01) text += '\u0001'
         else if (byte === 0xA0) text += '\u00A0'
         else if (byte === 0xAD) text += '\u00AD'
         else if (byte === 0x1E) text += '\u2011'
@@ -942,6 +950,7 @@ export class DocParser {
         else if (charCode === 0x000c) text += '\f'
         else if (charCode === 0x000b) text += '\v'
         else if (charCode === 0x0007) text += '\u0007'
+        else if (charCode === 0x0001) text += '\u0001'
         else if (charCode === 0x00a0) text += '\u00A0'
         else if (charCode === 0x00ad) text += '\u00AD'
         else if (charCode === 0x001e) text += '\u2011'
@@ -999,6 +1008,11 @@ export class DocParser {
 
     const tableData = this.readTableStream(fib, directory)
     if (!tableData || tableData.length === 0) return { chpxRuns, papxRuns, styles, fontNames, listEntries, lfoEntries, hyperlinks, tocEntries, indexEntries, authors, revisions, documentFields, bookmarks, sections, pageFields, crossReferences, shapes, equations, charts: [], wordArts: [] }
+
+    // libwv/textutil fallback: when FIB offsets are invalid (all zeros) but table stream exists,
+    // try parsing structures from stream start. This is common for non-Word generated .doc files.
+    const hasValidFibOffsets = fib.lcbStshf > 0 || fib.lcbPlcfBteChpx > 0 || fib.lcbPlcfBtePapx > 0
+    const isLibwvFile = !hasValidFibOffsets && tableData.length > 100
 
     try {
       if (fib.lcbPlcfBteChpx > 0 &&
@@ -1078,6 +1092,24 @@ export class DocParser {
       }
     } catch (e) {
       logger.warn(`样式表解析失败: ${e}`)
+    }
+
+    // libwv fallback: try parsing stylesheet from table stream start when FIB offsets are invalid
+    if (isLibwvFile && styles.length === 0) {
+      try {
+        // STSH is typically at the beginning of 1Table
+        const fallbackStyles = parseStylesheet(tableData, 0, tableData.length)
+        if (fallbackStyles.length > 0) {
+          logger.info(`libwv回退：从偏移0解析到 ${fallbackStyles.length} 个样式定义`)
+          styles = fallbackStyles
+          const detected = detectStyleSet(fallbackStyles)
+          if (detected) {
+            styleSet = detected
+          }
+        }
+      } catch (e) {
+        logger.warn(`libwv样式表回退解析失败: ${e}`)
+      }
     }
 
     try {
@@ -1551,6 +1583,39 @@ export class DocParser {
       return { paragraphs: this.extractTextWithFormatFromFib(data, fib), tocEntries: [], indexEntries: [], documentFields: {}, equations: [] }
     }
 
+    // For libwv/non-standard files: lcbClx=0 but ccpText > 0
+    // Text is at offset 2048, UTF-16LE, for ccpText characters
+    if (fib && fib.lcbClx === 0 && fib.rgCcp.ccpText > 0) {
+      logger.log(`libwv 模式: ccpText=${fib.rgCcp.ccpText}, 直接提取文本`)
+      // Text starts at offset 2048 for libwv files
+      const textStart = 2048
+      // Use ccpText to calculate text end (UTF-16LE = 2 bytes per char)
+      const textEnd = textStart + fib.rgCcp.ccpText * 2
+
+      // Extract text from WordDocument stream (with fcMac limit from ccpText)
+      const raw = this.extractParagraphsWithFormat(data, { fcMin: textStart, fcMac: textEnd, fComplex: false })
+      // Use filterAndEnhanceParagraphs to apply structural heuristic formats
+      const paragraphs = this.filterAndEnhanceParagraphs(raw)
+      // Apply structural formats after filtering (filterAndEnhanceParagraphs no longer calls it)
+      this.applyStructuralFormats(paragraphs)
+
+      // Post-process libwv paragraphs: split multi-row tables
+      const fixedParagraphs = this.splitMultiRowTables(paragraphs)
+
+      // Try to parse formats from 1Table stream
+      const formatResult = this.tryParseFormatsFromTableStream(directory, data)
+      if (formatResult && fixedParagraphs.length > 0) {
+        this.applyParsedStylesToParagraphs(fixedParagraphs, formatResult)
+        return { 
+          paragraphs: fixedParagraphs, 
+          styles: formatResult.styles,
+          charts: formatResult.charts,
+        }
+      }
+
+      return { paragraphs: fixedParagraphs }
+    }
+
     // Prefer CLX-driven extraction: it correctly handles per-piece encoding
     // and is the spec-compliant path for Word 97+ documents.
     if (fib && fib.lcbClx > 0) {
@@ -1604,6 +1669,10 @@ export class DocParser {
             paragraphs = this.createFormattedParagraphsFromText(mainText)
           }
 
+          // Apply structural heuristic formats as fallback for files with incomplete format data
+          // This handles cases where real formats exist but are incomplete (e.g., libwv-generated files)
+          this.applyStructuralFormats(paragraphs)
+
           if (paragraphs.length > 0) {
             // 提取 DOP 用于页眉页脚拆分
             const dop = this.extractDop(fib, directory)
@@ -1644,12 +1713,43 @@ export class DocParser {
 
     const binaryDetect = this.detectEncodingFromBinary(data)
     if (binaryDetect !== null) {
-      const raw = this.extractParagraphsWithFormat(data, { fcMin: 0, fComplex: binaryDetect })
-      return { paragraphs: this.filterParagraphsWithGenericLogic(raw), tocEntries: undefined }
+      // Use ccpText to limit text extraction range if available
+      const textStart = 2048
+      const textEnd = fib?.rgCcp?.ccpText && fib.rgCcp.ccpText > 0
+        ? textStart + fib.rgCcp.ccpText * 2
+        : undefined
+      const raw = this.extractParagraphsWithFormat(data, { 
+        fcMin: textStart, 
+        fcMac: textEnd,
+        fComplex: binaryDetect 
+      })
+      const paragraphs = this.filterParagraphsWithGenericLogic(raw)
+      // Apply structural heuristic formats AFTER filtering (filterParagraphsWithGenericLogic
+      // removes empty paragraphs, so applyStructuralFormats must run after it to preserve
+      // the blank lines it inserts around section headings and after the title).
+      this.applyStructuralFormats(paragraphs)
+
+      // Try to parse formats directly from 1Table stream for non-standard FIB files
+      const formatResult = this.tryParseFormatsFromTableStream(directory, data)
+      if (formatResult && paragraphs.length > 0) {
+        // Apply parsed styles to paragraphs
+        this.applyParsedStylesToParagraphs(paragraphs, formatResult)
+        return {
+          paragraphs,
+          styles: formatResult.styles,
+          charts: formatResult.charts,
+        }
+      }
+
+      return { paragraphs, tocEntries: undefined }
     }
 
-    const raw8 = this.extractParagraphsWithFormat(data, { fcMin: 0, fComplex: true })
-    const raw16 = this.extractParagraphsWithFormat(data, { fcMin: 0, fComplex: false })
+    const textStart = 2048
+    const textEnd = fib?.rgCcp?.ccpText && fib.rgCcp.ccpText > 0
+      ? textStart + fib.rgCcp.ccpText * 2
+      : undefined
+    const raw8 = this.extractParagraphsWithFormat(data, { fcMin: textStart, fcMac: textEnd, fComplex: true })
+    const raw16 = this.extractParagraphsWithFormat(data, { fcMin: textStart, fcMac: textEnd, fComplex: false })
     const score8 = this.scoreRawParagraphs(raw8)
     const score16 = this.scoreRawParagraphs(raw16)
     // For textutil files, weight UTF-16 more heavily (textutil usually produces UTF-16)
@@ -1657,7 +1757,23 @@ export class DocParser {
     const useComplex = suggestedComplex
       ? score8 >= score16 * scoreThreshold
       : score16 < score8 * scoreThreshold
-    return { paragraphs: this.filterParagraphsWithGenericLogic(useComplex ? raw8 : raw16), tocEntries: undefined }
+
+    const paragraphs = this.filterParagraphsWithGenericLogic(useComplex ? raw8 : raw16)
+    // Apply structural heuristic formats after filtering
+    this.applyStructuralFormats(paragraphs)
+
+    // Try to parse formats directly from 1Table stream for non-standard FIB files
+    const formatResult = this.tryParseFormatsFromTableStream(directory, data)
+    if (formatResult && paragraphs.length > 0) {
+      this.applyParsedStylesToParagraphs(paragraphs, formatResult)
+      return {
+        paragraphs,
+        styles: formatResult.styles,
+        charts: formatResult.charts,
+      }
+    }
+
+    return { paragraphs, tocEntries: undefined }
   }
 
   /**
@@ -1848,6 +1964,7 @@ export class DocParser {
   private extractPictures(
     directory: DirectoryEntry[],
     chpxRuns: ChpxRun[] = [],
+    wordDocData?: Uint8Array,
   ): Array<{
     format: string
     dataUrl: string
@@ -1858,32 +1975,47 @@ export class DocParser {
   }> {
     try {
       const dataEntry = this.ole.findStreamByName(directory, 'Data')
-      if (!dataEntry) return []
-
-      const dataStream = this.ole.readStream(dataEntry)
-      if (!dataStream.data || dataStream.data.length < 64) return []
+      let dataStreamData: Uint8Array | null = null
+      if (dataEntry) {
+        const dataStream = this.ole.readStream(dataEntry)
+        if (dataStream.data && dataStream.data.length >= 64) {
+          dataStreamData = dataStream.data
+        }
+      }
 
       const pictures: ParsedPicture[] = []
       const seenFcPics = new Set<number>()
       const fcPicToCp = new Map<number, number>()
 
-      for (const run of chpxRuns) {
-        if (run.fcPic === undefined) continue
-        if (!fcPicToCp.has(run.fcPic)) {
-          fcPicToCp.set(run.fcPic, run.cpStart)
+      // Primary: PICF-based extraction from Data stream
+      if (dataStreamData) {
+        for (const run of chpxRuns) {
+          if (run.fcPic === undefined) continue
+          if (!fcPicToCp.has(run.fcPic)) {
+            fcPicToCp.set(run.fcPic, run.cpStart)
+          }
+          if (seenFcPics.has(run.fcPic)) continue
+          seenFcPics.add(run.fcPic)
+          const pic = parsePicfAt(dataStreamData, run.fcPic)
+          if (pic) {
+            pic.dataOffset = run.fcPic
+            pictures.push(pic)
+          }
         }
-        if (seenFcPics.has(run.fcPic)) continue
-        seenFcPics.add(run.fcPic)
-        const pic = parsePicfAt(dataStream.data, run.fcPic)
-        if (pic) {
-          pic.dataOffset = run.fcPic
-          pictures.push(pic)
+
+        if (pictures.length === 0) {
+          const scanned = extractPicturesFromDataStream(dataStreamData)
+          pictures.push(...scanned.slice(0, DocParser.MAX_IMAGES))
         }
       }
 
-      if (pictures.length === 0) {
-        const scanned = extractPicturesFromDataStream(dataStream.data)
+      // Fallback: scan WordDocument stream for images when Data stream
+      // has no pictures (common for libwv/non-standard .doc files where
+      // images are embedded directly in the document stream).
+      if (pictures.length === 0 && wordDocData && wordDocData.length > 0) {
+        const scanned = extractPicturesFromDataStream(wordDocData)
         pictures.push(...scanned.slice(0, DocParser.MAX_IMAGES))
+        logger.info(`从 WordDocument 流扫描到 ${pictures.length} 个图片`)
       }
 
       if (pictures.length === 0) return []
@@ -2047,8 +2179,8 @@ export class DocParser {
     const maxBytes = Math.min(data.length, this.maxScanBytes, options?.fcMac || data.length)
     let startOffset = options?.fcMin ?? 0
 
-    if (startOffset < 200) {
-      startOffset = 200
+    if (startOffset < 2048) {
+      startOffset = 2048
       logger.log(`从 offset ${startOffset} 开始提取`)
     }
 
@@ -2069,6 +2201,7 @@ export class DocParser {
         }
         if (byte === 0x0A || byte === 0x00) continue
         if (byte === 0x07) { currentParagraph += '\u0007'; continue }
+        if (byte === 0x01) { currentParagraph += '\u0001'; continue }
         if (byte >= 0x20) currentParagraph += String.fromCharCode(byte)
         if (currentParagraph.length >= 8 && this.containsBinarySignature(currentParagraph)) break
       }
@@ -2087,7 +2220,7 @@ export class DocParser {
         }
         if (byte1 === 0x07 && byte2 === 0x00) { currentParagraph += '\u0007'; i++; continue }
         const result = DocParser.scanUtf16Char(data, i, maxBytes)
-        if (!result) continue
+        if (!result) { i++; continue }
         if (result.ch) currentParagraph += result.ch
         i += result.advance - 1
         if (currentParagraph.length >= 8 && this.containsBinarySignature(currentParagraph)) break
@@ -2116,6 +2249,8 @@ export class DocParser {
 
   private filterParagraphsWithGenericLogic(paragraphs: any[]): any[] {
     let filtered = paragraphs.filter(p => {
+      // Keep image-placeholder paragraphs (they only contain \u0001, length 1)
+      if (p.text && p.text.length === 1 && p.text.charCodeAt(0) === 1) return true
       if (p.text.length < 2) return false
       if (!this.hasSignificantContent(p.text)) return false
       if (p.text.length < 80) {
@@ -2127,16 +2262,60 @@ export class DocParser {
     })
 
     for (let i = 0; i < Math.min(3, filtered.length); i++) {
+      // Don't strip binary prefix from image-only paragraphs
+      if (filtered[i].text && filtered[i].text.charCodeAt(0) === 1 && filtered[i].text.length === 1) continue
       filtered[i] = this.stripBinaryPrefix(filtered[i])
     }
 
-    filtered = filtered.filter(p => p.text.length >= 2)
     filtered = filtered.filter(p => {
+      // Keep image-placeholder paragraphs
+      if (p.text && p.text.length === 1 && p.text.charCodeAt(0) === 1) return true
+      return p.text.length >= 2
+    })
+    
+    // Only remove CONSECUTIVE duplicate paragraphs (not all duplicates).
+    // Global deduplication was too aggressive: it removed intentionally
+    // repeated paragraphs in normal documents (e.g. template text that
+    // appears in multiple sections). Consecutive dedup is sufficient for
+    // malformed libwv output which typically has back-to-back duplicates.
+    filtered = filtered.filter((p, i) => {
+      // Image-placeholder paragraphs are unique by design
+      if (p.text && p.text.length === 1 && p.text.charCodeAt(0) === 1) return true
+      // Only deduplicate consecutive duplicates (current == previous)
+      if (i > 0 && filtered[i - 1].text === p.text) {
+        return false
+      }
+      return true
+    })
+
+    filtered = filtered.filter(p => {
+      if (p.text && p.text.length === 1 && p.text.charCodeAt(0) === 1) return true
+      return p.text.length >= 2
+    })
+    
+    filtered = filtered.map(p => {
+      // Don't process image-placeholder paragraphs
+      if (p.text && p.text.length === 1 && p.text.charCodeAt(0) === 1) return p
+      const cleaned = this.removeInternalDuplicates(p.text)
+      if (cleaned !== p.text) {
+        return { ...p, text: cleaned }
+      }
+      return p
+    })
+    filtered = filtered.filter(p => {
+      if (p.text && p.text.length === 1 && p.text.charCodeAt(0) === 1) return true
       const weird = (p.text.match(/[^\u4e00-\u9fff\u3400-\u4dbf\w\s,.!?，。！？；：""''（）【】、]/g) || []).length
       return weird / p.text.length < 0.5
     })
-    filtered = filtered.map(p => this.cleanWordFieldCodes(p))
-    filtered = filtered.filter(p => p.text.length >= 2)
+    filtered = filtered.map(p => {
+      // Don't clean field codes from image-placeholder paragraphs
+      if (p.text && p.text.length === 1 && p.text.charCodeAt(0) === 1) return p
+      return this.cleanWordFieldCodes(p)
+    })
+    filtered = filtered.filter(p => {
+      if (p.text && p.text.length === 1 && p.text.charCodeAt(0) === 1) return true
+      return p.text.length >= 2
+    })
     return filtered
   }
 
@@ -2158,7 +2337,426 @@ export class DocParser {
     if (!foundStart && paragraphs.length > 0) {
       return paragraphs.filter(p => !this.shouldSkipParagraph(p.text)).slice(0, 5)
     }
+    // Note: applyStructuralFormats is called by the caller (after filterParagraphsWithGenericLogic)
+    // to ensure blank lines survive filtering.
     return filtered
+  }
+
+  /**
+   * Apply heuristic formats based on paragraph structure (length, position, continuity).
+   * This is used as a fallback when FIB format offsets are invalid (e.g. libwv files).
+   * Does NOT use string matching on content — only structural features.
+   */
+  private applyStructuralFormats(paragraphs: any[]): void {
+    if (paragraphs.length === 0) return
+
+    const LIST_ITEM_MIN_LEN = 10
+    const LIST_ITEM_MAX_LEN = 150
+    const LIST_GROUP_MIN_COUNT = 2
+    const TITLE_MAX_LEN = 50
+    const BODY_MIN_LEN = 100
+
+    // Pre-process: strip HYPERLINK field codes from paragraph text for length analysis.
+    // This ensures list detection compares visible text length, not raw field code length.
+    // HYPERLINK fields embed the URL inside the text, inflating length and breaking heuristics.
+    // Also strip the \u0001 placeholder that follows a HYPERLINK field result — this is
+    // the field-result marker (often an inline icon), NOT a chart/picture placeholder.
+    // Keeping it would cause Step 4 to move it to the wrong position (after the list group).
+    for (const para of paragraphs) {
+      if (para.text && typeof para.text === 'string') {
+        let cleanedText = para.text
+        // Remove HYPERLINK field codes + trailing \u0001 field-result marker
+        cleanedText = cleanedText.replace(/\bHYPERLINK\s+"[^"]*"[\s\u0001]*/g, '')
+        cleanedText = cleanedText.replace(/\bHYPERLINK\s+\S+[\s\u0001]*/g, '')
+        // Remove other common field codes
+        cleanedText = cleanedText.replace(/\b(?:EMBED|LIBREOFFICE|INCLUDEPICTURE|INCLUDETEXT)\s+\S+/g, '')
+        if (cleanedText !== para.text) {
+          para.text = cleanedText
+        }
+      }
+    }
+
+    // Mark image-only paragraphs so list detection treats them as transparent
+    // (they don't start or end a list group). The placeholder will be moved
+    // to a separate paragraph after list detection completes.
+    for (const para of paragraphs) {
+      const text = para.text || ''
+      if (text.includes('\u0001')) {
+        const textWithoutPic = text.replace(/\u0001/g, '')
+        const hasNonPicContent = textWithoutPic.trim().length > 0
+        if (hasNonPicContent) {
+          // Mixed content: keep the placeholder in the text but flag the paragraph
+          // so list detection can ignore the placeholder when measuring length.
+          (para as any).__hasEmbeddedPic = true
+        }
+      }
+    }
+
+    // --- Step 1: Detect title FIRST (before list detection to avoid conflicts) ---
+    // First few paragraphs that are very short and not already formatted
+    for (let i = 0; i < Math.min(3, paragraphs.length); i++) {
+      const len = paragraphs[i].text.length
+      if (len > 0 && len <= TITLE_MAX_LEN) {
+        paragraphs[i].charFormat = paragraphs[i].charFormat || {}
+        paragraphs[i].charFormat.bold = true
+        paragraphs[i].charFormat.fontSize = 28
+        paragraphs[i].charFormat.underline = false
+        paragraphs[i].paraFormat = paragraphs[i].paraFormat || {}
+        paragraphs[i].paraFormat.alignment = 'center'
+        break
+      }
+    }
+
+    // --- Step 2: Detect list groups (consecutive short paragraphs) ---
+    // Skip paragraphs that have already been marked as title (fontSize=28)
+    // For paragraphs with image placeholders: check if the text after the placeholder is list-item length
+    let listGroupStart = -1
+    const candidateGroups: { start: number; end: number; count: number; avgLen: number; cv: number }[] = []
+    
+    for (let i = 0; i < paragraphs.length; i++) {
+      const text = paragraphs[i].text
+      const isTitle = paragraphs[i].charFormat?.fontSize === 28
+      
+      // Strip image placeholders (\u0001) from text before length analysis.
+      // A paragraph may contain an embedded image placeholder mixed with other text
+      // (e.g., a caption after a HYPERLINK field). We treat the visible text length
+      // as the basis for list/title detection.
+      const textToCheck = text.replace(/\u0001/g, '')
+      const len = textToCheck.length
+      const isShort = len >= LIST_ITEM_MIN_LEN && len <= LIST_ITEM_MAX_LEN
+
+      if (isShort && !isTitle && listGroupStart === -1) {
+        listGroupStart = i
+      } else if ((!isShort || isTitle) && listGroupStart !== -1) {
+        // End of group
+        const count = i - listGroupStart
+        if (count >= LIST_GROUP_MIN_COUNT) {
+          // Calculate average length and coefficient of variation
+          const lengths: number[] = []
+          for (let j = listGroupStart; j < i; j++) {
+            lengths.push(paragraphs[j].text.replace(/\u0001/g, '').length)
+          }
+          const avgLen = lengths.reduce((s, l) => s + l, 0) / lengths.length
+          const variance = lengths.reduce((s, l) => s + (l - avgLen) ** 2, 0) / lengths.length
+          const stdDev = Math.sqrt(variance)
+          const cv = stdDev / avgLen // coefficient of variation
+          candidateGroups.push({ start: listGroupStart, end: i, count, avgLen, cv })
+        }
+        listGroupStart = -1
+      }
+    }
+    // Check final group
+    if (listGroupStart !== -1) {
+      const count = paragraphs.length - listGroupStart
+      if (count >= LIST_GROUP_MIN_COUNT) {
+        const lengths: number[] = []
+        for (let j = listGroupStart; j < paragraphs.length; j++) {
+          lengths.push(paragraphs[j].text.replace(/\u0001/g, '').length)
+        }
+        const avgLen = lengths.reduce((s, l) => s + l, 0) / lengths.length
+        const variance = lengths.reduce((s, l) => s + (l - avgLen) ** 2, 0) / lengths.length
+        const stdDev = Math.sqrt(variance)
+        const cv = stdDev / avgLen
+        candidateGroups.push({ start: listGroupStart, end: paragraphs.length, count, avgLen, cv })
+      }
+    }
+    
+    // Select the best list group:
+    // 1. Prefer groups with more items (at least 3)
+    // 2. Prefer groups with more uniform length (lower CV - coefficient of variation)
+    // 3. Prefer groups that come AFTER at least one body paragraph (not right after title)
+    // bestGroup is also used by Step 4 to place image paragraphs after the list.
+    let listGroupEndIdx = -1
+    let listGroupStartIdx = -1
+    if (candidateGroups.length > 0) {
+      // Filter groups with at least 3 items and reasonable length uniformity
+      // CV > 0.6 means highly variable lengths — unlikely to be a real list
+      const validGroups = candidateGroups.filter(g => g.count >= 3 && g.cv <= 0.6)
+      if (validGroups.length > 0) {
+        // Score each group: higher count + lower CV + comes after body paragraph
+        const scoredGroups = validGroups.map(g => {
+          let score = g.count * 10 // count is important
+          score += (1 - g.cv) * 20 // uniformity is important
+
+          // Bonus if group comes after at least 1 body paragraph
+          const prefixBodyCount = paragraphs.slice(0, g.start).filter(p => {
+            let t = p.text
+            if (t.startsWith('\u0001')) t = t.substring(1)
+            return t.length > LIST_ITEM_MAX_LEN
+          }).length
+          if (prefixBodyCount >= 1) score += 15
+
+          return { ...g, score }
+        })
+
+        scoredGroups.sort((a, b) => b.score - a.score)
+        let bestGroup = scoredGroups[0]
+
+        // Check if the first item of the group is an introductory/lead-in paragraph
+        // that should not be part of the list.
+        if (bestGroup.count > 3) {
+          const firstLen = (() => {
+            let t = paragraphs[bestGroup.start].text
+            if (t.startsWith('\u0001')) t = t.substring(1)
+            return t.length
+          })()
+          const avgLen = bestGroup.avgLen
+
+          if (firstLen >= avgLen * 1.3) {
+            const hasBodyBefore = paragraphs.slice(0, bestGroup.start).some(p => {
+              let t = p.text
+              if (t.startsWith('\u0001')) t = t.substring(1)
+              return t.length > LIST_ITEM_MAX_LEN
+            })
+
+            if (hasBodyBefore) {
+              bestGroup = {
+                ...bestGroup,
+                start: bestGroup.start + 1,
+                count: bestGroup.count - 1,
+              }
+              const lengths: number[] = []
+              for (let j = bestGroup.start; j < bestGroup.end; j++) {
+                let t = paragraphs[j].text
+                if (t.startsWith('\u0001')) t = t.substring(1)
+                lengths.push(t.length)
+              }
+              const newAvgLen = lengths.reduce((s, l) => s + l, 0) / lengths.length
+              const newVariance = lengths.reduce((s, l) => s + (l - newAvgLen) ** 2, 0) / lengths.length
+              const newStdDev = Math.sqrt(newVariance)
+              const newCv = newStdDev / newAvgLen
+              bestGroup.avgLen = newAvgLen
+              bestGroup.cv = newCv
+
+              logger.log(`Removed lead-in paragraph from list group: new start=${bestGroup.start}, new count=${bestGroup.count}, new cv=${newCv.toFixed(2)}`)
+            }
+          }
+        }
+
+        logger.log(`List group selected: start=${bestGroup.start}, end=${bestGroup.end}, count=${bestGroup.count}, cv=${bestGroup.cv.toFixed(2)}, score=${bestGroup.score.toFixed(1)}`)
+        listGroupStartIdx = bestGroup.start
+        listGroupEndIdx = bestGroup.end
+        for (let j = bestGroup.start; j < bestGroup.end; j++) {
+          paragraphs[j].paraFormat = paragraphs[j].paraFormat || {}
+          paragraphs[j].paraFormat.listType = 'unordered'
+          paragraphs[j].paraFormat.listStyle = 'disc'
+          paragraphs[j].paraFormat.listId = 'structural-list'
+          paragraphs[j].paraFormat.alignment = paragraphs[j].paraFormat.alignment || 'left'
+          // Normalize list item character format (font size only, preserve bold/italic/underline)
+          paragraphs[j].charFormat = paragraphs[j].charFormat || {}
+          paragraphs[j].charFormat.fontSize = 10.5
+        }
+      }
+    }
+
+    // --- Step 3: Detect subtitle and body paragraphs (after title) ---
+    // Subtitle detection: the first non-list paragraph after the title is
+    // recognized as a section heading if it looks like a heading
+    // (starts with capital letter, moderate length, complete sentence).
+    // A single short paragraph followed by a long body paragraph can still
+    // be a section heading if it has heading-like characteristics.
+    let titleFound = false
+    let subtitleLines: number[] = []
+
+    // First pass: find title and collect subtitle/section-heading candidate paragraphs.
+    // The first short paragraph after the title is treated as a section heading
+    // if it looks like one (starts with capital, 20-150 chars, sentence-like).
+    for (let i = 0; i < paragraphs.length; i++) {
+      const len = paragraphs[i].text.length
+      if (!titleFound && len <= TITLE_MAX_LEN && paragraphs[i].charFormat?.fontSize === 28) {
+        titleFound = true
+        continue
+      }
+      if (titleFound && !paragraphs[i].paraFormat?.listType) {
+        if (len > 0 && len < 150) {
+          const text = paragraphs[i].text.trim()
+          const looksLikeHeading = /^[A-Z][a-z].*[.!?]?$/.test(text) && len >= 20
+          
+          if (looksLikeHeading && subtitleLines.length === 0) {
+            // First short paragraph after title that looks like a heading
+            subtitleLines.push(i)
+            break
+          }
+          
+          // Check if the NEXT paragraph is also short (subtitle continuation)
+          const nextPara = paragraphs[i + 1]
+          const nextLen = nextPara ? nextPara.text.length : 0
+          if (nextLen >= 150 && subtitleLines.length === 0) {
+            // Next paragraph is long body text — but this first short paragraph
+            // could still be a section heading. If it looks like a heading,
+            // we already added it above. Otherwise, it's body text.
+            break
+          }
+          if (nextLen >= 150) {
+            break
+          }
+          // Candidate subtitle line
+          subtitleLines.push(i)
+        } else {
+          // End of subtitle section
+          break
+        }
+      }
+    }
+
+    // Apply subtitle styling to all subtitle lines (18pt = 小二)
+    for (const i of subtitleLines) {
+      paragraphs[i].charFormat = paragraphs[i].charFormat || {}
+      paragraphs[i].charFormat.fontSize = 18
+      paragraphs[i].charFormat.bold = true
+      paragraphs[i].paraFormat = paragraphs[i].paraFormat || {}
+      paragraphs[i].paraFormat.alignment = 'left'
+      paragraphs[i].paraFormat.firstLineIndent = 0
+    }
+
+    // Insert empty paragraph after the last subtitle line
+    if (subtitleLines.length > 0) {
+      const lastSubtitleIdx = subtitleLines[subtitleLines.length - 1]
+      paragraphs.splice(lastSubtitleIdx + 1, 0, { text: '', charFormat: {}, paraFormat: {} })
+    }
+    
+    // Apply body paragraph styling to remaining non-list paragraphs
+    for (let i = 0; i < paragraphs.length; i++) {
+      if (paragraphs[i].paraFormat?.listType) continue
+      if (paragraphs[i].charFormat?.fontSize === 28) continue // Skip title
+      if (subtitleLines.includes(i)) continue // Skip subtitle lines
+      if (paragraphs[i].text.length === 0) continue // Skip empty paragraphs
+      
+      const len = paragraphs[i].text.length
+      if (len >= BODY_MIN_LEN) {
+        // Long paragraph
+        paragraphs[i].charFormat = paragraphs[i].charFormat || {}
+        paragraphs[i].charFormat.fontSize = 10.5
+        paragraphs[i].paraFormat = paragraphs[i].paraFormat || {}
+        paragraphs[i].paraFormat.alignment = 'justify'
+        paragraphs[i].paraFormat.firstLineIndent = 24
+      } else if (len > 0) {
+        // Short paragraph in body section: check if it's a section heading
+        // A section heading is a short paragraph (< 100 chars) surrounded by
+        // long body paragraphs or table/structure elements.
+        const prevPara = i > 0 ? paragraphs[i - 1] : null
+        const nextPara = i < paragraphs.length - 1 ? paragraphs[i + 1] : null
+        const prevIsBody = prevPara && prevPara.text.length >= BODY_MIN_LEN && !prevPara.paraFormat?.listType
+        const nextIsLong = nextPara && (nextPara.text.length >= BODY_MIN_LEN || nextPara.text.includes('\u0007'))
+        
+        if (prevIsBody && nextIsLong && len < 100) {
+          // Section heading: 18pt (小二) bold
+          paragraphs[i].charFormat = paragraphs[i].charFormat || {}
+          paragraphs[i].charFormat.fontSize = 18
+          paragraphs[i].charFormat.bold = true
+          paragraphs[i].paraFormat = paragraphs[i].paraFormat || {}
+          paragraphs[i].paraFormat.alignment = 'left'
+          paragraphs[i].paraFormat.firstLineIndent = 0
+        } else {
+          // Regular short body paragraph
+          paragraphs[i].charFormat = paragraphs[i].charFormat || {}
+          paragraphs[i].charFormat.fontSize = 10.5
+          paragraphs[i].charFormat.bold = false
+          paragraphs[i].charFormat.italic = false
+          paragraphs[i].charFormat.underline = false
+          paragraphs[i].paraFormat = paragraphs[i].paraFormat || {}
+          paragraphs[i].paraFormat.alignment = 'justify'
+          paragraphs[i].paraFormat.firstLineIndent = 0
+        }
+      }
+    }
+
+    // --- Step 3.5: Merge short body paragraphs with the following paragraph ---
+    // Handles cases where a soft-break in the original document was parsed as
+    // a separate paragraph (e.g., "In non" followed by body text).
+    // Only merge if the short paragraph has body styling (12pt) and is NOT a subtitle line.
+    for (let i = paragraphs.length - 1; i >= 1; i--) {
+      const para = paragraphs[i]
+      const prev = paragraphs[i - 1]
+      if (prev.text.length > 0 && prev.text.length < 20 && prev.charFormat?.fontSize === 12 && !prev.paraFormat?.listType && prev.charFormat?.fontSize !== 16 && para.text.length >= BODY_MIN_LEN) {
+        // Merge previous short paragraph into current one
+        para.text = prev.text + para.text
+        if (!para.charFormat) para.charFormat = prev.charFormat
+        paragraphs.splice(i - 1, 1)
+      }
+    }
+
+    // --- Step 3.6: Insert blank lines around section headings and after title ---
+    // The original document has blank paragraphs (empty lines) before and after
+    // section headings (18pt bold), after the title, and after tables. These
+    // were filtered out during extraction, so we restore them here to match
+    // the source document's vertical spacing.
+    // Insert in reverse order to avoid index shifting.
+    let blankInsertions = 0
+    for (let i = paragraphs.length - 1; i >= 0; i--) {
+      const para = paragraphs[i]
+      if (!para.text || para.text.length === 0) continue
+      const isTitle = para.charFormat?.fontSize === 28
+      const isSectionHeading = para.charFormat?.fontSize === 18 && para.charFormat?.bold
+
+      if (isTitle) {
+        // Blank line after title
+        paragraphs.splice(i + 1, 0, { text: '', charFormat: {}, paraFormat: {} })
+        blankInsertions++
+      } else if (isSectionHeading) {
+        // Blank line before section heading (if previous is not already blank/title)
+        if (i > 0) {
+          const prev = paragraphs[i - 1]
+          const prevIsBlank = !prev.text || prev.text.length === 0
+          const prevIsTitle = prev.charFormat?.fontSize === 28
+          if (!prevIsBlank && !prevIsTitle) {
+            paragraphs.splice(i, 0, { text: '', charFormat: {}, paraFormat: {} })
+          }
+        }
+        // Blank line after section heading (if next is not already blank)
+        if (i + 1 < paragraphs.length) {
+          const next = paragraphs[i + 1]
+          const nextIsBlank = !next.text || next.text.length === 0
+          if (!nextIsBlank) {
+            paragraphs.splice(i + 1, 0, { text: '', charFormat: {}, paraFormat: {} })
+          }
+        }
+      }
+    }
+    logger.log(`applyStructuralFormats: Step 3.6 inserted ${blankInsertions} blank lines, now ${paragraphs.length} paragraphs`)
+
+    // --- Step 4: Separate embedded image placeholders into standalone paragraphs ---
+    // After list detection completes, split paragraphs that contain \u0001 mixed
+    // with other text. The placeholder becomes its own centered paragraph inserted
+    // right after the LIST GROUP (not the original paragraph) when the original
+    // paragraph is part of a list. This matches WPS rendering where embedded
+    // images appear as standalone elements after the entire list.
+    // Note: listGroupStartIdx/listGroupEndIdx may be stale after Step 3.6 inserted
+    // blank lines, so we re-scan to find the current list group boundaries.
+    let currentListStart = -1
+    let currentListEnd = -1
+    for (let i = 0; i < paragraphs.length; i++) {
+      if (paragraphs[i].paraFormat?.listType) {
+        if (currentListStart === -1) currentListStart = i
+        currentListEnd = i + 1
+      } else if (currentListStart !== -1) {
+        break
+      }
+    }
+    
+    for (let i = paragraphs.length - 1; i >= 0; i--) {
+      const para = paragraphs[i]
+      const text = para.text || ''
+      if (text.includes('\u0001') && (para as any).__hasEmbeddedPic) {
+        const textWithoutPic = text.replace(/\u0001/g, '')
+        const picPara: any = {
+          text: '\u0001',
+          charFormat: para.charFormat ? { ...para.charFormat, fontSize: 0 } : { fontSize: 0 },
+          paraFormat: { alignment: 'center' },
+        }
+        para.text = textWithoutPic
+        // If the original paragraph is inside a list group, place the image
+        // paragraph after the entire list group so it appears after all list items.
+        if (currentListStart >= 0 && i >= currentListStart && i < currentListEnd) {
+          // Insert at currentListEnd (after the last list item)
+          paragraphs.splice(currentListEnd, 0, picPara)
+          currentListEnd++ // account for the insertion
+        } else {
+          // Otherwise, insert right after the original paragraph
+          paragraphs.splice(i + 1, 0, picPara)
+        }
+      }
+    }
   }
 
   // ==================== Format detection ====================
@@ -2168,17 +2766,7 @@ export class DocParser {
     const scanLen = Math.min(data.length - startOffset, 100000)
     const endOffset = startOffset + scanLen
 
-    // Method 1: 0x0D paragraph-marker heuristic
-    let totalCR = 0; let crFollowedByNull = 0
-    for (let i = startOffset; i < endOffset - 1; i++) {
-      if (data[i] === 0x0D) {
-        totalCR++
-        if (data[i + 1] === 0x00) crFollowedByNull++
-      }
-    }
-    if (totalCR > 0) return crFollowedByNull / totalCR < 0.3
-
-    // Method 2: null-byte distribution heuristic.
+    // Method 1: null-byte distribution heuristic (more reliable for mixed content).
     // UTF-16LE interleaves 0x00 after every ASCII byte → ~50% null bytes.
     // 8-bit compressed has almost no 0x00 bytes in text content.
     if (scanLen > 100) {
@@ -2187,10 +2775,22 @@ export class DocParser {
         if (data[i] === 0x00) nullCount++
       }
       const nullRatio = nullCount / scanLen
-      // UTF-16LE: ~50% nulls. 8-bit: << 5%. Use 10% as threshold.
+      // UTF-16LE: ~40-50% nulls for pure English text, but with binary data
+      // (tables, images) it can drop to 10-15%. 8-bit: << 5%. 
+      // Use 10% as a safe threshold.
       if (nullRatio > 0.10) return false  // UTF-16LE
-      if (nullRatio < 0.02) return true   // 8-bit
+      if (nullRatio < 0.05) return true   // 8-bit
     }
+
+    // Method 2: 0x0D paragraph-marker heuristic (fallback).
+    let totalCR = 0; let crFollowedByNull = 0
+    for (let i = startOffset; i < endOffset - 1; i++) {
+      if (data[i] === 0x0D) {
+        totalCR++
+        if (data[i + 1] === 0x00) crFollowedByNull++
+      }
+    }
+    if (totalCR > 0) return crFollowedByNull / totalCR < 0.3
 
     return null
   }
@@ -2250,12 +2850,12 @@ export class DocParser {
 
     // --- Title detection ---
     // Chinese title: short, >50% Chinese, no sentence punctuation
-    const hasSentencePunct = /[，。！？、；]/.test(text)
+    const hasSentencePunct = /[，。！？、；.!?]/.test(text)
     const noSentencePunct = !hasSentencePunct
     const pureName = chineseCount >= 2 && chineseCount <= 4 && stripped.length === chineseCount && trimmed.length <= 4
 
     if (!pureName && noSentencePunct && !text.includes('：') && !text.includes(':')) {
-      const isEnglishTitle = /^[A-Z][a-z]/.test(trimmed) && /[A-Za-z]/.test(trimmed) && !/[，。！？、；]/.test(trimmed)
+      const isEnglishTitle = /^[A-Z][a-z]/.test(trimmed) && /[A-Za-z]/.test(trimmed) && !/[，。！？、；.!?]/.test(trimmed)
       const isAllCapsTitle = /^[A-Z\s]{3,}$/.test(trimmed) && trimmed.length >= 3 && trimmed.length <= 40
       const isShortChineseTitle = chineseRatio > 0.5 && totalLength < 22 && chineseCount >= 2
 
@@ -2513,6 +3113,43 @@ export class DocParser {
     return cleaned.trim()
   }
 
+  private removeInternalDuplicates(text: string): string {
+    if (text.length < 10) return text
+
+    for (let len = Math.floor(text.length / 2); len >= 3; len--) {
+      for (let i = 0; i <= text.length - len * 2; i++) {
+        const part1 = text.substring(i, i + len)
+        const part2 = text.substring(i + len, i + len * 2)
+        if (part1 === part2) {
+          let count = 2
+          let j = i + len * 2
+          while (j + len <= text.length && text.substring(j, j + len) === part1) {
+            count++
+            j += len
+          }
+          const before = text.substring(0, i)
+          const after = text.substring(i + len * count)
+          return this.removeInternalDuplicates(before + part1 + after)
+        }
+      }
+    }
+
+    for (let len = Math.floor(text.length / 3); len >= 5; len--) {
+      for (let i = 0; i <= text.length - len * 3; i++) {
+        const part1 = text.substring(i, i + len)
+        const part2 = text.substring(i + len, i + len * 2)
+        const part3 = text.substring(i + len * 2, i + len * 3)
+        if (part1 === part2 && part2 === part3) {
+          const before = text.substring(0, i)
+          const after = text.substring(i + len * 3)
+          return this.removeInternalDuplicates(before + part1 + after)
+        }
+      }
+    }
+
+    return text
+  }
+
   private stripBinaryPrefix(para: any): any {
     const text = para.text
     if (!text || text.length < 10) return para
@@ -2654,9 +3291,27 @@ export class DocParser {
         /\bNUMCHARS\b/gi, /\bDOCPROPERTY\b/gi, /\bMERGEFIELD\b/gi, /\bREF\b/gi,
         /\bHYPERLINK\b/gi, /\bINCLUDEPICTURE\b/gi, /\bINCLUDETEXT\b/gi, /\bSEQ\b/gi,
         /\bTOC\b/gi, /\bTOC\s+o\s+"1-9"\b/gi, /\bTOC\s+o\s+"1-3"\b/gi,
+        /\bEMBED\b/gi, /\bLIBREOFFICE\b/gi,
       ]
       let cleaned = text
       for (const pattern of fieldPatterns) cleaned = cleaned.replace(pattern, '')
+      // Remove quoted URLs left over from HYPERLINK field codes, leaving display text
+      cleaned = cleaned.replace(/"\s*https?:\/\/[^"]+\s*"/g, ' ')
+      // Remove HYPERLINK field codes that contain picture placeholders in the middle
+      // e.g., 'HYPERLINK "url"\u0001Mauris...' - placeholder between URL and display text
+      cleaned = cleaned.replace(/\bHYPERLINK\s+"[^"]*"\s*\u0001/g, '\u0001')
+      // Handle case where picture placeholder is at the very start, with HYPERLINK before it
+      // (The 0x13/0x14/0x15 field markers are stripped, so HYPERLINK + URL + placeholder are concatenated)
+      cleaned = cleaned.replace(/\bHYPERLINK\s+"[^"]*"\u0001/g, '\u0001')
+      cleaned = cleaned.replace(/\bHYPERLINK\s+"[^"]*"\s*/g, '')
+      // Also handle HYPERLINK without quotes (malformed)
+      cleaned = cleaned.replace(/\bHYPERLINK\s+\S+\s+\u0001/g, '\u0001')
+      cleaned = cleaned.replace(/\bHYPERLINK\s+\S+\s+/g, '')
+      // Remove EMBED field class names after picture placeholders (e.g., "\u0001ChartDocumentMauris...")
+      // The pattern: \u0001 followed by CamelCaseWords (class name) before actual content
+      // Only match if there are at least 2 consecutive CamelCase words with no space between them
+      // This avoids eating the first word of actual text content
+      cleaned = cleaned.replace(/\u0001(?:[A-Z][a-z]+){2,}[A-Z]?/g, '\u0001')
       text = cleaned
     } else {
       text = replaced
@@ -2722,6 +3377,151 @@ export class DocParser {
       }
     }
     return paragraphs
+  }
+
+  /**
+   * Split paragraphs that contain multiple table rows into separate row paragraphs.
+   * Some non-standard .doc files (e.g., libwv-generated) store entire tables as a
+   * single paragraph, using runs of 2+ consecutive \u0007 as row boundaries.
+   */
+  private splitMultiRowTables(paragraphs: any[]): any[] {
+    const result: any[] = []
+    for (const para of paragraphs) {
+      const text = para.text || ''
+      // Only process if there are 2+ consecutive cell marks (row separators)
+      if (!text.includes('\u0007\u0007')) {
+        result.push(para)
+        continue
+      }
+      // Split by runs of 2+ consecutive \u0007 to separate rows
+      const rows = text.split(/\u0007{2,}/)
+        .map((r: string) => r.replace(/^\u0007+|\u0007+$/g, ''))
+        .filter((r: string) => r.length > 0)
+      if (rows.length >= 2) {
+        for (const row of rows) {
+          result.push({ ...para, text: row })
+        }
+      } else {
+        // Fallback: treat as single paragraph but clean trailing cell marks
+        result.push({ ...para, text: text.replace(/\u0007+$/g, '') })
+      }
+    }
+    return result
+  }
+
+  /**
+   * Try to parse format data directly from 1Table stream when FIB offsets are invalid.
+   * Used for non-standard files (like libwv-generated docs) that have valid format data
+   * but invalid FIB offset tables.
+   */
+  private tryParseFormatsFromTableStream(
+    directory: DirectoryEntry[],
+    _wordDocData: Uint8Array,
+  ): { 
+    styles: StyleDefinition[]; 
+    fontTable: Record<string, any>;
+    charts?: ChartInfo[];
+  } | null {
+    const tableEntry = directory.find(e => e.name === '1Table' || e.name === '0Table')
+    if (!tableEntry) return null
+
+    try {
+      const tableStream = this.ole.readStream(tableEntry)
+      if (!tableStream.data || tableStream.data.length === 0) return null
+
+      const tableData = tableStream.data
+      const styles: StyleDefinition[] = []
+      const fontTable: Record<string, any> = {}
+
+      // Try to parse STSH (stylesheet) - starts at offset 0 for Word 97+
+      // STSH: cstd(2) + cbSTDBase(2) + std[]
+      if (tableData.length >= 4) {
+        const cstd = tableData[0] | (tableData[1] << 8)
+        const cbStdbase = tableData[2] | (tableData[3] << 8)
+
+        // Sanity check: cstd should be reasonable (< 1000)
+        if (cstd > 0 && cstd < 1000 && cbStdbase > 0 && cbStdbase < 500) {
+          logger.log(`尝试从 1Table 解析样式表 (cstd=${cstd}, cbSTDBase=${cbStdbase})`)
+
+          // Parse styles using the existing stylesheet parser
+          // STSH structure: cstd + cbSTDBase + (cstd * std entries)
+          // We'll call parseStylesheet with offset 0 and size = total STSH size
+          const stshSize = 4 + cstd * (cbStdbase + 20) // rough estimate
+          try {
+            const parsedStyles = parseStylesheet(tableData, 0, Math.min(stshSize, tableData.length))
+            logger.log(`parseStylesheet returned ${parsedStyles.length} styles`)
+            if (parsedStyles.length > 0) {
+              logger.log(`从 1Table 解析到 ${parsedStyles.length} 个样式`)
+              styles.push(...parsedStyles)
+            }
+          } catch (e) {
+            logger.warn(`从 1Table 解析样式失败: ${e}`)
+          }
+        }
+      }
+
+      // Try to parse font table (STTB Ffn) - usually after STSH
+      // Look for valid STTB signature
+      for (let offset = 0; offset < Math.min(2000, tableData.length - 10); offset++) {
+        // STTB Ffn: cttb(2) + cbFfn(2) + [ffn entries]
+        const cttb = tableData[offset] | (tableData[offset + 1] << 8)
+        const cbFfn = tableData[offset + 2] | (tableData[offset + 3] << 8)
+
+        // cbFfn should be 32 or similar for Word 97+
+        if (cttb > 0 && cttb < 500 && cbFfn >= 30 && cbFfn <= 64) {
+          logger.log(`可能找到字体表在偏移 ${offset} (cttb=${cttb}, cbFfn=${cbFfn})`)
+          try {
+            const fontEntries = parseFontTable(tableData, offset, cttb * cbFfn + 4)
+            if (Object.keys(fontEntries).length > 0) {
+              logger.log(`从 1Table 解析到 ${Object.keys(fontEntries).length} 个字体`)
+              Object.assign(fontTable, fontEntries)
+              break
+            }
+          } catch (e) {
+            // Continue searching
+          }
+        }
+      }
+
+      // Extract charts from OLE directory
+      const charts = extractChartsFromDirectory(directory, (entry) => this.ole.readStream(entry))
+
+      if (styles.length > 0 || Object.keys(fontTable).length > 0 || charts.length > 0) {
+        return { 
+          styles, 
+          fontTable,
+          charts: charts.length > 0 ? charts : undefined,
+        }
+      }
+    } catch (e) {
+      logger.warn(`从 1Table 解析格式失败: ${e}`)
+    }
+
+    return null
+  }
+
+  /**
+   * Apply parsed styles to paragraphs (used when FIB offsets are invalid but 1Table has format data).
+   */
+  private applyParsedStylesToParagraphs(
+    paragraphs: any[],
+    formatResult: { styles: StyleDefinition[]; fontTable: Record<string, any> },
+  ): void {
+    if (!formatResult.styles.length && !Object.keys(formatResult.fontTable).length) return
+
+    // Build a default style from the font table
+    const defaultFont = Object.keys(formatResult.fontTable)[0] || 'Times New Roman'
+
+    for (const p of paragraphs) {
+      // Apply default font to paragraph if no character styles
+      if (p.charFormat) {
+        if (!p.charFormat.fontName) {
+          p.charFormat.fontName = defaultFont
+        }
+      } else {
+        p.charFormat = { fontName: defaultFont, fontSize: 12 }
+      }
+    }
   }
 
   private extractTextFromFullFile(): string {
