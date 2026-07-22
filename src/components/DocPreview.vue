@@ -10,7 +10,7 @@ import { applyRevisionsToText } from '../utils/revisionRender'
 import type { RevisionMode } from '../utils/revisionRender'
 import { WORD_VERSION_LABELS, type WordVersion } from '../utils/fibParser'
 import { t } from '../utils/locale'
-import DocStatsPanel from './DocStatsPanel.vue'
+// import DocStatsPanel from './DocStatsPanel.vue'
 import ShortcutsPanel from './ShortcutsPanel.vue'
 import LoadingOverlay from './LoadingOverlay.vue'
 import ErrorDisplay from './ErrorDisplay.vue'
@@ -215,35 +215,35 @@ const previewRef = ref<HTMLElement | null>(null)
 const showShortcuts = ref(false)
 
 // --- Document stats ---
-const showStats = ref(false)
-const docStats = computed(() => {
-  const paragraphs = lastParseResult.value?.paragraphs || []
-  const pCount = paragraphs.length
-  const imgCount = pictures.value.length + images.value.length
-  const pageCount = pages.value.length
-  const tableCount = (htmlContent.value.match(/<table[\s>]/gi) || []).length
-
-  let charCount = 0
-  let wordCount = 0
-  let cjkCount = 0
-  for (const p of paragraphs) {
-    const text = p.text || ''
-    charCount += text.length
-    cjkCount += (text.match(/[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/g) || []).length
-    const words = text.match(/[a-zA-Z]+/g)
-    if (words) wordCount += words.length
-  }
-  wordCount += cjkCount
-
-  return {
-    wordCount,
-    charCount,
-    paragraphCount: pCount,
-    pageCount,
-    imageCount: imgCount,
-    tableCount,
-  }
-})
+// const showStats = ref(false)
+// const docStats = computed(() => {
+//   const paragraphs = lastParseResult.value?.paragraphs || []
+//   const pCount = paragraphs.length
+//   const imgCount = pictures.value.length + images.value.length
+//   const pageCount = pages.value.length
+//   const tableCount = (htmlContent.value.match(/<table[\s>]/gi) || []).length
+//
+//   let charCount = 0
+//   let wordCount = 0
+//   let cjkCount = 0
+//   for (const p of paragraphs) {
+//     const text = p.text || ''
+//     charCount += text.length
+//     cjkCount += (text.match(/[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/g) || []).length
+//     const words = text.match(/[a-zA-Z]+/g)
+//     if (words) wordCount += words.length
+//   }
+//   wordCount += cjkCount
+//
+//   return {
+//     wordCount,
+//     charCount,
+//     paragraphCount: pCount,
+//     pageCount,
+//     imageCount: imgCount,
+//     tableCount,
+//   }
+// })
 
 // --- Zoom ---
 const zoomLevel = ref(100)
@@ -355,7 +355,7 @@ const showStories = ref(false)
 // --- Embedded images extracted from the Data stream ---
 const images = ref<string[]>([])
 const pictures = ref<PictureInfo[]>([])
-const showImages = ref(false)
+// const showImages = ref(false)
 
 // --- Hyperlinks extracted from PlcfFld ---
 const hyperlinks = ref<HyperlinkRange[]>([])
@@ -411,7 +411,7 @@ const showEquations = ref(false)
 
 // --- Charts (MSGraph/Excel/SmartArt OLE objects) ---
 const charts = ref<ChartInfo[]>([])
-const showCharts = ref(false)
+// const showCharts = ref(false)
 
 // --- WordArt (Office Art Drawing WordArt objects) ---
 const wordArts = ref<WordArtInfo[]>([])
@@ -953,7 +953,7 @@ const renderResult = (result: ParserOutput) => {
     applyFormattedPages(result.document.paragraphs, hyperlinks.value, revisions.value)
     stories.value = result.document.stories || null
     showStories.value = false
-    showImages.value = false
+    // showImages.value = false
     currentPage.value = 1
     updatePageHeight()
     updateTotalPages()
@@ -986,7 +986,7 @@ const renderResult = (result: ParserOutput) => {
     showStories.value = false
     images.value = []
     pictures.value = []
-    showImages.value = false
+    // showImages.value = false
     loadWebFonts()
   } else {
     error.value = '⚠️ 文档内容为空或无法提取文本\n\n可能原因：\n• 文件格式不受支持\n• 文件已损坏\n• 文档内容为空'
