@@ -2466,8 +2466,6 @@ export class DocParser {
     // 2. Prefer groups with more uniform length (lower CV - coefficient of variation)
     // 3. Prefer groups that come AFTER at least one body paragraph (not right after title)
     // bestGroup is also used by Step 4 to place image paragraphs after the list.
-    let listGroupEndIdx = -1
-    let listGroupStartIdx = -1
     if (candidateGroups.length > 0) {
       // Filter groups with at least 3 items and reasonable length uniformity
       // CV > 0.6 means highly variable lengths — unlikely to be a real list
@@ -2534,8 +2532,6 @@ export class DocParser {
         }
 
         logger.log(`List group selected: start=${bestGroup.start}, end=${bestGroup.end}, count=${bestGroup.count}, cv=${bestGroup.cv.toFixed(2)}, score=${bestGroup.score.toFixed(1)}`)
-        listGroupStartIdx = bestGroup.start
-        listGroupEndIdx = bestGroup.end
         for (let j = bestGroup.start; j < bestGroup.end; j++) {
           paragraphs[j].paraFormat = paragraphs[j].paraFormat || {}
           paragraphs[j].paraFormat.listType = 'unordered'
