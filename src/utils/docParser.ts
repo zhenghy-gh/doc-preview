@@ -1174,6 +1174,25 @@ export class DocParser {
       }
     }
 
+    // Apply character-style base formatting (sprmCIstd) to CHPX runs: a
+    // run's own grpprl only stores the differences from its character
+    // style (e.g. Hyperlink, Strong), so resolve the istdBase chain and
+    // merge it underneath the run's direct formatting.
+    if (styles.length > 0 && chpxRuns.length > 0) {
+      for (const run of chpxRuns) {
+        if (run.istd === undefined) continue
+        const charStyle = styles.find(s => s.istd === run.istd)
+        if (!charStyle || charStyle.type !== 'character') continue
+        const resolved = resolveStyleFormat(styles, run.istd)
+        if (resolved.charFormat && Object.keys(resolved.charFormat).length > 0) {
+          run.format = { ...resolved.charFormat, ...run.format }
+        }
+        if (run.fontIndex === undefined && resolved.fontIndex !== undefined) {
+          run.fontIndex = resolved.fontIndex
+        }
+      }
+    }
+
     try {
       if (fib.lcbSttbfFfn > 0 &&
           fib.fcSttbfFfn + fib.lcbSttbfFfn <= tableData.length) {
@@ -1472,6 +1491,16 @@ export class DocParser {
     }
 
     const result: any[] = []
+    const characterStyleFormats = new Map<number, Partial<CharacterFormat>>()
+    for (const style of styles) {
+      const resolved = resolveStyleFormat(styles, style.istd)
+      const format: Partial<CharacterFormat> = { ...resolved.charFormat }
+      if (resolved.fontIndex !== undefined && fontNames[resolved.fontIndex]) {
+        format.fontName = fontNames[resolved.fontIndex]
+      }
+      if (Object.keys(format).length > 0) characterStyleFormats.set(style.istd, format)
+    }
+
     for (let i = 0; i < allParagraphs.length; i++) {
       const para = allParagraphs[i]
       const rawText = para.text
@@ -1640,6 +1669,13 @@ export class DocParser {
               for (const p of overlapping) {
                 if (p.chpxIndex !== undefined && p.chpxIndex < chpxRuns.length) {
                   const pieceChp = chpxRuns[p.chpxIndex]
+                  if (pieceChp.istd !== undefined) {
+                    const styleFormat = characterStyleFormats.get(pieceChp.istd)
+                    if (styleFormat) {
+                      merged = { ...merged, ...styleFormat }
+                      usedPieceChp = true
+                    }
+                  }
                   if (pieceChp.format) {
                     merged = { ...merged, ...pieceChp.format }
                     usedPieceChp = true
@@ -1655,7 +1691,7 @@ export class DocParser {
         }
         // 2. Fall back to CHPX range matching when no piece-level data.
         if (!usedPieceChp && chpxRuns.length > 0 && cleaned.length > 0) {
-          merged = mergeCharFormatForParagraph(chpxRuns, cpStart, cpEnd, fontNames)
+          merged = mergeCharFormatForParagraph(chpxRuns, cpStart, cpEnd, fontNames, characterStyleFormats)
         }
         if (Object.keys(merged).length > 0) {
           newPara.charFormat = {

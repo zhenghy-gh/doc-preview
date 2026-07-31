@@ -28,7 +28,7 @@ const SPRM_CF_RMARK = 0x0801       // Toggle: fRMark — 修订插入标记
 const SPRM_C_IBST_RMARK = 0x4804   // 2-byte: 插入修订作者索引 (SttbfRMark)
 const SPRM_C_DTTM_RMARK = 0x6805   // 4-byte DTTM: 插入修订时间戳
 const SPRM_C_HIGHLIGHT = 0x2A0C    // 1-byte: highlight color index
-const SPRM_C_ISTD = 0x4A30         // 2-byte: character style index (consumed, unused)
+const SPRM_C_ISTD = 0x4A30         // 2-byte: character style index
 const SPRM_CF_BOLD = 0x0835        // Toggle: bold
 const SPRM_CF_ITALIC = 0x0836      // Toggle: italic
 const SPRM_CF_STRIKE = 0x0837      // Toggle: strikethrough
@@ -189,6 +189,8 @@ export interface ChpxRun {
   format: Partial<CharacterFormat>
   /** Font index (reference to font table), from sprmCRgFtc0/1/2 (ASCII first). */
   fontIndex?: number
+  /** Character style index from sprmCIstd (e.g. Hyperlink, Strong). */
+  istd?: number
   /**
    * 修订标记（来自 sprmCFRMark / sprmCFRMarkDel / sprmCIbstRMark(Del) / sprmCDttmRMark(Del)）。
    * 无修订时为 undefined。type 为 'insert'/'delete'/'format'，
@@ -283,10 +285,11 @@ export function parseChpxRuns(data: Uint8Array, fc: number, lcb: number): ChpxRu
     }
 
     const cbOffset = readUint16(data, pcbOffset)
-    const { format, fontIndex, revision, isSpecial, fcPic } = parseChpxGrpprlWithFont(data, pcbOffset + 2, cbOffset - 2)
+    const { format, fontIndex, revision, isSpecial, fcPic, istd } = parseChpxGrpprlWithFont(data, pcbOffset + 2, cbOffset - 2)
     const run: ChpxRun = { cpStart, cpEnd, format, fontIndex, revision }
     if (isSpecial) run.isSpecial = true
     if (fcPic !== undefined) run.fcPic = fcPic
+    if (istd !== undefined) run.istd = istd
     runs.push(run)
     pcbOffset += cbOffset || 2
   }
@@ -298,7 +301,7 @@ export function parseChpxRuns(data: Uint8Array, fc: number, lcb: number): ChpxRu
  * Parse a grpprl (array of Prl) from a CHPX and return format + font index.
  * Only properties relevant to DocPreview rendering are extracted.
  */
-export function parseChpxGrpprlWithFont(data: Uint8Array, offset: number, size: number): { format: Partial<CharacterFormat>; fontIndex?: number; revision?: { type: RevisionType; authorIndex?: number; timestamp?: number }; isSpecial?: boolean; fcPic?: number } {
+export function parseChpxGrpprlWithFont(data: Uint8Array, offset: number, size: number): { format: Partial<CharacterFormat>; fontIndex?: number; revision?: { type: RevisionType; authorIndex?: number; timestamp?: number }; isSpecial?: boolean; fcPic?: number; istd?: number } {
   const fmt: Partial<CharacterFormat> = {}
   let ftc0: number | undefined
   let ftc1: number | undefined
@@ -306,6 +309,7 @@ export function parseChpxGrpprlWithFont(data: Uint8Array, offset: number, size: 
   let revision: { type: RevisionType; authorIndex?: number; timestamp?: number } | undefined = undefined
   let isSpecial = false
   let fcPic: number | undefined = undefined
+  let istd: number | undefined = undefined
   let pos = 0
 
   while (pos + 2 <= size) {
@@ -429,7 +433,9 @@ export function parseChpxGrpprlWithFont(data: Uint8Array, offset: number, size: 
         ftc2 = readUint16(data, operandOffset)
         break
       case SPRM_C_ISTD:
-        // Character style index — consumed for alignment; style chain not applied here.
+        // Character style index — the caller resolves the style chain
+        // (formatParser must not depend on styleParser).
+        istd = readUint16(data, operandOffset)
         break
       case SPRM_CF_RMARK: {
         // sprmCFRMark — Toggle: 标记字符为"修订插入"
@@ -501,9 +507,10 @@ export function parseChpxGrpprlWithFont(data: Uint8Array, offset: number, size: 
   // ASCII font takes priority, then East Asian, then "other".
   const fontIndex = ftc0 ?? ftc1 ?? ftc2
 
-  const result: { format: Partial<CharacterFormat>; fontIndex?: number; revision?: { type: RevisionType; authorIndex?: number; timestamp?: number }; isSpecial?: boolean; fcPic?: number } = { format: fmt, fontIndex, revision }
+  const result: { format: Partial<CharacterFormat>; fontIndex?: number; revision?: { type: RevisionType; authorIndex?: number; timestamp?: number }; isSpecial?: boolean; fcPic?: number; istd?: number } = { format: fmt, fontIndex, revision }
   if (isSpecial) result.isSpecial = true
   if (fcPic !== undefined) result.fcPic = fcPic
+  if (istd !== undefined) result.istd = istd
   return result
 }
 
@@ -1031,6 +1038,7 @@ export function mergeCharFormatForParagraph(
   cpStart: number,
   cpEnd: number,
   fontNames?: string[],
+  styleFormats?: ReadonlyMap<number, Partial<CharacterFormat>>,
 ): Partial<CharacterFormat> {
   const totalChars = cpEnd - cpStart
   if (totalChars <= 0 || runs.length === 0) return {}
@@ -1068,25 +1076,28 @@ export function mergeCharFormatForParagraph(
     const overlapEnd = run.cpEnd < cpEnd ? run.cpEnd : cpEnd
     if (overlapEnd <= overlapStart) continue
     const len = overlapEnd - overlapStart
-    if (run.format.bold) boldCount += len
-    if (run.format.italic) italicCount += len
-    if (run.format.underline) underlineCount += len
-    if (run.format.strikethrough) strikethroughCount += len
-    if (run.format.superscript) superscriptCount += len
-    if (run.format.subscript) subscriptCount += len
-    if (run.format.smallCaps) smallCapsCount += len
-    if (run.format.allCaps) allCapsCount += len
-    if (run.format.fontSize !== undefined) {
-      fontSizeSum += run.format.fontSize * len
+    const styleFormat = run.istd !== undefined ? styleFormats?.get(run.istd) : undefined
+    const format = styleFormat ? { ...styleFormat, ...run.format } : run.format
+    if (format.bold) boldCount += len
+    if (format.italic) italicCount += len
+    if (format.underline) underlineCount += len
+    if (format.strikethrough) strikethroughCount += len
+    if (format.superscript) superscriptCount += len
+    if (format.subscript) subscriptCount += len
+    if (format.smallCaps) smallCapsCount += len
+    if (format.allCaps) allCapsCount += len
+    if (format.fontSize !== undefined) {
+      fontSizeSum += format.fontSize * len
       fontSizeCount += len
     }
-    if (run.format.color && !firstColor) firstColor = run.format.color
-    if (run.format.highlight && !firstHighlight) firstHighlight = run.format.highlight
+    if (format.color && !firstColor) firstColor = format.color
+    if (format.highlight && !firstHighlight) firstHighlight = format.highlight
     // Font name from font index
     if (run.fontIndex !== undefined && fontNames && !firstFontName) {
       const fontName = fontNames[run.fontIndex]
       if (fontName) firstFontName = fontName
     }
+    if (!firstFontName && format.fontName) firstFontName = format.fontName
   }
 
   const result: Partial<CharacterFormat> = {}
@@ -1228,15 +1239,16 @@ export function parseChpxRunsFromFkp(
       const cb = wordDocData[chpxOffset]
       if (cb === 0 || chpxOffset + 1 + cb > base + 512) continue
 
-      const { format, fontIndex, revision, isSpecial, fcPic } =
+      const { format, fontIndex, revision, isSpecial, fcPic, istd } =
         parseChpxGrpprlWithFont(wordDocData, chpxOffset + 1, cb)
       if (Object.keys(format).length === 0 && fontIndex === undefined &&
-          !revision && !isSpecial && fcPic === undefined) continue
+          !revision && !isSpecial && fcPic === undefined && istd === undefined) continue
 
       for (const cpRange of fcRangeToCpRanges(fcStart, fcEnd, pieces)) {
         const run: ChpxRun = { cpStart: cpRange.cpStart, cpEnd: cpRange.cpEnd, format, fontIndex, revision }
         if (isSpecial) run.isSpecial = true
         if (fcPic !== undefined) run.fcPic = fcPic
+        if (istd !== undefined) run.istd = istd
         runs.push(run)
       }
     }

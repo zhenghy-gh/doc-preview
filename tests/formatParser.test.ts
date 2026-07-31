@@ -8,12 +8,16 @@ import { parseChpxRuns, parsePapxRuns, mergeCharFormatForParagraph } from '../sr
  *   aCP: (n+1) * 4 bytes
  *   aPcb: n * CHPX entries (each: cbOffset(2) + grpprl)
  */
-function buildPlcfBteChpx(entries: Array<{ cpStart: number; bold?: boolean; italic?: boolean; fontSize?: number; underline?: boolean }>): Uint8Array {
+function buildPlcfBteChpx(entries: Array<{ cpStart: number; bold?: boolean; italic?: boolean; fontSize?: number; underline?: boolean; istd?: number }>): Uint8Array {
   const n = entries.length
   // Build the aPcb bytes first so we know offsets.
   const aPcbParts: Uint8Array[] = []
   for (const entry of entries) {
     const prls: number[] = []
+    if (entry.istd !== undefined) {
+      // sprmCIstd = 0x4A30, 2-byte character style index
+      prls.push(0x30, 0x4A, entry.istd & 0xFF, (entry.istd >> 8) & 0xFF)
+    }
     if (entry.bold !== undefined) {
       // sprmCFBold = 0x0835, ToggleOperand(1 byte)
       prls.push(0x35, 0x08, entry.bold ? 0x01 : 0x00)
@@ -217,6 +221,34 @@ describe('formatParser', () => {
       expect(runs.length).toBe(2)
       expect(runs[0].format.bold).toBe(true)
       expect(runs[1].format.italic).toBe(true)
+    })
+
+    it('should capture the character style index (sprmCIstd)', () => {
+      const data = buildPlcfBteChpx([
+        { cpStart: 0, istd: 37, underline: true }, // Hyperlink style + own underline
+        { cpStart: 10, bold: true },               // no istd
+      ])
+      const runs = parseChpxRuns(data, 0, data.length)
+      expect(runs.length).toBe(2)
+      expect(runs[0].istd).toBe(37)
+      expect(runs[0].format.underline).toBe(true)
+      expect(runs[1].istd).toBeUndefined()
+      expect(runs[1].format.bold).toBe(true)
+    })
+  })
+
+  describe('mergeCharFormatForParagraph', () => {
+    it('should apply a resolved character style before direct CHPX overrides', () => {
+      const styleFormats = new Map([
+        [105, { bold: true, italic: true, color: '#336699' }],
+      ])
+      const merged = mergeCharFormatForParagraph([
+        { cpStart: 0, cpEnd: 10, istd: 105, format: { italic: false } },
+      ], 0, 10, undefined, styleFormats)
+
+      expect(merged.bold).toBe(true)
+      expect(merged.italic).toBeUndefined()
+      expect(merged.color).toBe('#336699')
     })
   })
 
