@@ -245,8 +245,16 @@ export class OleParser {
 
     let currentSector = header.firstDirectorySector
     let sectorIndex = 0
+    const visited = new Set<number>()
+    const declaredSectors = header.directorySectorsCount > 0 ? header.directorySectorsCount : fat.length
+    const maxIterations = Math.min(fat.length + 8, declaredSectors + 8)
 
-    while (currentSector >= 0 && currentSector < fat.length && fat[currentSector] !== FREESECT && sectorIndex < 1000) {
+    while (currentSector >= 0 && currentSector < fat.length && fat[currentSector] !== FREESECT && sectorIndex < maxIterations) {
+      if (visited.has(currentSector)) {
+        logger.warn(`目录 FAT 链检测到循环: sector=${currentSector}`)
+        break
+      }
+      visited.add(currentSector)
       sectorIndex++
       const offset = this.sectorToOffset(currentSector, header)
 

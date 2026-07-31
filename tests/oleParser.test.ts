@@ -390,6 +390,55 @@ describe('OleParser', () => {
 
       expect(dirs[0].size).toBe(buf.byteLength)
     })
+
+    it('should read directory chains spanning more than 1000 sectors', () => {
+      const sectorSize = 512
+      const entriesPerFatSector = sectorSize / 4
+      const fatSectorCount = 8
+      const dirStart = fatSectorCount
+      const dirSectorCount = 1002
+      const totalSectors = fatSectorCount + dirSectorCount
+      const buf = new ArrayBuffer((totalSectors + 1) * sectorSize)
+      const view = new Uint8Array(buf)
+      const setU32 = (off: number, value: number) => {
+        view[off] = value & 0xff
+        view[off + 1] = (value >> 8) & 0xff
+        view[off + 2] = (value >> 16) & 0xff
+        view[off + 3] = (value >> 24) & 0xff
+      }
+      const setFat = (idx: number, value: number) => {
+        const fatSectorK = Math.floor(idx / entriesPerFatSector)
+        const off = (fatSectorK + 1) * sectorSize + (idx % entriesPerFatSector) * 4
+        setU32(off, value)
+      }
+
+      view[0] = 0xD0; view[1] = 0xCF; view[2] = 0x11; view[3] = 0xE0
+      view[4] = 0xA1; view[5] = 0xB1; view[6] = 0x1A; view[7] = 0xE1
+      view[26] = 0x03
+      view[30] = 0x09
+      setU32(44, fatSectorCount)
+      setU32(48, dirStart)
+      setU32(68, 0xFFFFFFFF)
+      setU32(72, 0)
+      for (let i = 0; i < fatSectorCount; i++) setU32(76 + i * 4, i)
+      setU32(76 + fatSectorCount * 4, 0xFFFFFFFE)
+
+      for (let i = 0; i < fatSectorCount; i++) setFat(i, 0xFFFFFFFF)
+      for (let sector = dirStart; sector < dirStart + dirSectorCount - 1; sector++) {
+        setFat(sector, sector + 1)
+      }
+      setFat(dirStart + dirSectorCount - 1, 0xFFFFFFFF)
+
+      const lastDirOffset = (dirStart + dirSectorCount) * sectorSize
+      writeDirectoryEntry(view, lastDirOffset, 'WordDocument', 2, 0, 512)
+
+      const parser = new OleParser(buf)
+      const header = parser.parseHeader()
+      const fat = parser.getFatSectors(header)
+      const dirs = parser.getDirectorySectors(header, fat)
+
+      expect(dirs.some(entry => entry.name === 'WordDocument')).toBe(true)
+    })
   })
 
   describe('mini stream support', () => {
