@@ -471,10 +471,15 @@ export class OleParser {
 
     const sectorSize = this.getSectorSize(header)
     const entriesPerSector = sectorSize / 4
-    const miniFatEntryCount = header.miniFatSectorsCount * entriesPerSector
+    const miniFatSectorCount = Math.min(header.miniFatSectorsCount, fat.length)
+    const miniFatEntryCount = miniFatSectorCount * entriesPerSector
     const miniFat = new Array(miniFatEntryCount).fill(FREESECT)
 
-    if (header.miniFatSectorsCount <= 0 || header.firstMiniFatSector < 0) {
+    if (miniFatSectorCount !== header.miniFatSectorsCount) {
+      logger.warn(`MiniFAT 声明扇区数 ${header.miniFatSectorsCount} 超出文件容量，截断为 ${miniFatSectorCount}`)
+    }
+
+    if (miniFatSectorCount <= 0 || header.firstMiniFatSector < 0) {
       this._miniFat = miniFat
       return miniFat
     }
@@ -482,7 +487,7 @@ export class OleParser {
     let currentSector = header.firstMiniFatSector
     let sectorIndex = 0
     const visited = new Set<number>()
-    while (currentSector >= 0 && currentSector < fat.length && fat[currentSector] !== FREESECT && sectorIndex < header.miniFatSectorsCount) {
+    while (currentSector >= 0 && currentSector < fat.length && fat[currentSector] !== FREESECT && sectorIndex < miniFatSectorCount) {
       if (visited.has(currentSector)) {
         logger.warn(`MiniFAT 链检测到循环: sector=${currentSector}`)
         break

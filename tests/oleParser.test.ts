@@ -501,6 +501,23 @@ describe('OleParser', () => {
   })
 
   describe('mini stream support', () => {
+    it('should cap a malicious MiniFAT sector count to the physical file capacity', () => {
+      const sectorSize = 512
+      const buf = new ArrayBuffer(sectorSize * 2)
+      const view = new DataView(buf)
+      view.setUint16(26, 3, true)
+      view.setUint16(30, 9, true)
+      view.setUint16(32, 6, true)
+      view.setInt32(60, 0, true)
+      view.setUint32(64, 0xFFFFFFFF, true)
+
+      const parser = new OleParser(buf)
+      const header = parser.parseHeader()
+      const miniFat = parser.getMiniFatSectors(header, [-2])
+
+      expect(miniFat).toHaveLength(128)
+    })
+
     it('should retain every entry described by a MiniFAT sector', () => {
       const sectorSize = 512
       const buf = new ArrayBuffer(sectorSize * 3)
