@@ -9,6 +9,8 @@
  * Reference: MS-DOC §2.8.3 (LST), §2.8.5 (LVLF), §2.8.9 (LFO)
  */
 
+import { getSprmOperandSize } from './formatParser'
+
 /** Numbering format type (mappings from MS-DOC §2.8.5 lvlf.nfc) */
 export type NumberingFormat =
   | 'decimal'           // 0
@@ -140,20 +142,20 @@ function parseLvlf(data: Uint8Array, offset: number, endBound: number): ListLeve
     const papxEnd = papxStart + cbGrpprlPapx
     if (papxEnd <= endBound) {
       let ppos = papxStart
-      while (ppos + 4 <= papxEnd) {
+      while (ppos + 2 <= papxEnd) {
         const sprm = readUint16(data, ppos)
-        // sprmPDxaLeft = 0x2402, sprmPDxaLeft1 (first line) = 0x2403
-        // But in the LVLF context, SPRM codes may differ.
-        // We'll look for indent SPRMs by their common codes.
-        if (sprm === 0x2402 && ppos + 4 <= papxEnd) {
-          dxaIndent = readInt16(data, ppos + 2)
-          ppos += 4
-        } else if (sprm === 0x2403 && ppos + 4 <= papxEnd) {
-          dxaFirstLine = readInt16(data, ppos + 2)
-          ppos += 4
-        } else {
-          ppos += 2 // skip the SPRM code; can't determine operand size easily
+        const operandOffset = ppos + 2
+        const operandSize = getSprmOperandSize(sprm, data, operandOffset)
+        if (operandSize <= 0 || operandOffset + operandSize > papxEnd) break
+        // sprmPDxaLeft (0x840F) → level indent; sprmPDxaLeft1 (0x8411) →
+        // first-line/hanging indent. Other SPRMs (tabs, spacing) are skipped
+        // by their spec operand size so the walk stays aligned.
+        if (sprm === 0x840F) {
+          dxaIndent = readInt16(data, operandOffset)
+        } else if (sprm === 0x8411) {
+          dxaFirstLine = readInt16(data, operandOffset)
         }
+        ppos = operandOffset + operandSize
       }
     }
 

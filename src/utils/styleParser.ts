@@ -22,6 +22,7 @@
  */
 
 import type { CharacterFormat, ParagraphFormat } from './docFormat'
+import { parseChpxGrpprlWithFont, parsePapxGrpprl } from './formatParser'
 
 export interface StyleDefinition {
   istd: number
@@ -109,17 +110,6 @@ function readUint16(data: Uint8Array, offset: number): number {
   return data[offset] | (data[offset + 1] << 8)
 }
 
-function readInt16(data: Uint8Array, offset: number): number {
-  const v = readUint16(data, offset)
-  return v > 0x7FFF ? v - 0x10000 : v
-}
-
-function readUint32(data: Uint8Array, offset: number): number {
-  if (offset < 0 || offset + 4 > data.length) return 0
-  return (data[offset] | (data[offset + 1] << 8) |
-          (data[offset + 2] << 16) | (data[offset + 3] << 24)) >>> 0
-}
-
 function readUtf16leString(data: Uint8Array, offset: number, byteLength: number): string {
   if (offset < 0 || offset + byteLength > data.length) return ''
   let result = ''
@@ -129,146 +119,6 @@ function readUtf16leString(data: Uint8Array, offset: number, byteLength: number)
     result += String.fromCharCode(code)
   }
   return result
-}
-
-// ---- Inline SPRM parser for style grpprl ----
-// Minimal version of formatParser's SPRM logic for extracting format from STD grpprl.
-
-function getSprmOperandSize(sprm: number): number {
-  const spra = (sprm >> 13) & 0x7
-  switch (spra) {
-    case 0: return 1  // Toggle
-    case 1: return 1
-    case 2: return 2
-    case 3: return 4
-    case 4: return 2
-    case 5: return 2
-    case 7: return 3
-    case 6: return -1 // Variable — caller must handle
-    default: return 0
-  }
-}
-
-function parseStyleChpxGrpprl(data: Uint8Array, offset: number, size: number): { format: Partial<CharacterFormat>; fontIndex?: number } {
-  const fmt: Partial<CharacterFormat> = {}
-  let fontIndex: number | undefined
-  let pos = 0
-
-  while (pos + 2 <= size) {
-    const sprm = readUint16(data, offset + pos)
-    const operandOffset = offset + pos + 2
-    const operandSize = getSprmOperandSize(sprm)
-    if (operandSize <= 0 || pos + 2 + operandSize > size) break
-
-    switch (sprm) {
-      case 0x0801: fmt.bold = data[operandOffset] === 1; break
-      case 0x0802: fmt.italic = data[operandOffset] === 1; break
-      case 0x0803: fmt.strikethrough = data[operandOffset] === 1; break
-      case 0x0806: fmt.smallCaps = data[operandOffset] === 1; break
-      case 0x0807: fmt.allCaps = data[operandOffset] === 1; break
-      case 0x0814: case 0x0815: fmt.underline = data[operandOffset] !== 0; break
-      case 0x0816: {
-        const hps = readUint16(data, operandOffset)
-        if (hps > 0) fmt.fontSize = hps / 2
-        break
-      }
-      case 0x0817: {
-        const dxasPos = readInt16(data, operandOffset)
-        if (dxasPos > 0) fmt.superscript = true
-        else if (dxasPos < 0) fmt.subscript = true
-        break
-      }
-      case 0x081B: {
-        const cv = readUint32(data, operandOffset)
-        if ((cv & 0x80000000) === 0) {
-          const b = cv & 0xFF
-          const g = (cv >> 8) & 0xFF
-          const r = (cv >> 16) & 0xFF
-          fmt.color = `rgb(${r}, ${g}, ${b})`
-        }
-        break
-      }
-      case 0x081C: {
-        const hl = data[operandOffset]
-        if (hl !== 0) fmt.highlight = highlightColor(hl)
-        break
-      }
-      case 0x4A30: {
-        fontIndex = readUint16(data, operandOffset)
-        break
-      }
-    }
-    pos += 2 + operandSize
-  }
-
-  return { format: fmt, fontIndex }
-}
-
-function parseStylePapxGrpprl(data: Uint8Array, offset: number, size: number): Partial<ParagraphFormat> {
-  const fmt: Partial<ParagraphFormat> = {}
-  let pos = 0
-
-  while (pos + 2 <= size) {
-    const sprm = readUint16(data, offset + pos)
-    const operandOffset = offset + pos + 2
-    const operandSize = getSprmOperandSize(sprm)
-    if (operandSize <= 0 || pos + 2 + operandSize > size) break
-
-    switch (sprm) {
-      case 0x2401: {
-        const jc = data[operandOffset]
-        if (jc === 0) fmt.alignment = 'left'
-        else if (jc === 1) fmt.alignment = 'center'
-        else if (jc === 2) fmt.alignment = 'right'
-        else if (jc === 3 || jc === 4) fmt.alignment = 'justify'
-        break
-      }
-      case 0x2402: fmt.indent = twipsToPt(readInt16(data, operandOffset)); break
-      case 0x2403: fmt.rightIndent = twipsToPt(readInt16(data, operandOffset)); break
-      case 0x2404: fmt.firstLineIndent = twipsToPt(readInt16(data, operandOffset)); break
-      case 0x2406: fmt.spaceBefore = twipsToPt(readInt16(data, operandOffset)); break
-      case 0x2407: fmt.spaceAfter = twipsToPt(readInt16(data, operandOffset)); break
-      case 0x2409: {
-        const line = readInt16(data, operandOffset)
-        if (line < 0) fmt.lineSpacing = Math.abs(line) / 240
-        else if (line > 0) fmt.lineSpacing = twipsToPt(line)
-        break
-      }
-      case 0x2420: {
-        const lvl = data[operandOffset]
-        if (lvl >= 0 && lvl <= 8) fmt.outlineLevel = lvl
-        break
-      }
-    }
-    pos += 2 + operandSize
-  }
-
-  return fmt
-}
-
-function twipsToPt(twips: number): number {
-  return Math.round((twips / 20) * 100) / 100
-}
-
-function highlightColor(code: number): string {
-  switch (code) {
-    case 1: return '#FFFF00'
-    case 2: return '#00FF00'
-    case 3: return '#00FFFF'
-    case 4: return '#FF00FF'
-    case 5: return '#0000FF'
-    case 6: return '#FF0000'
-    case 7: return '#000080'
-    case 8: return '#008080'
-    case 9: return '#008000'
-    case 10: return '#800080'
-    case 11: return '#800000'
-    case 12: return '#808000'
-    case 13: return '#808080'
-    case 14: return '#C0C0C0'
-    case 15: return '#000000'
-    default: return '#FFFF00'
-  }
 }
 
 /**
@@ -415,7 +265,7 @@ export function parseStylesheet(data: Uint8Array, fc: number, lcb: number): Styl
               // Parse PAPX grpprl (skip istd at offset 2)
               const papxGrpprlSize = papxCb - 4
               if (papxGrpprlSize > 0) {
-                paraFormat = parseStylePapxGrpprl(data, upxPos + 4, papxGrpprlSize)
+                paraFormat = parsePapxGrpprl(data, upxPos + 4, papxGrpprlSize).format
               }
               upxPos += papxCb
             } else {
@@ -429,7 +279,7 @@ export function parseStylesheet(data: Uint8Array, fc: number, lcb: number): Styl
             if (chpxCb >= 2 && chpxCb <= 1024 && upxPos + chpxCb <= upxEnd) {
               const chpxGrpprlSize = chpxCb - 2
               if (chpxGrpprlSize > 0) {
-                const result = parseStyleChpxGrpprl(data, upxPos + 2, chpxGrpprlSize)
+                const result = parseChpxGrpprlWithFont(data, upxPos + 2, chpxGrpprlSize)
                 charFormat = result.format
                 fontIndex = result.fontIndex
               }
@@ -455,7 +305,7 @@ export function parseStylesheet(data: Uint8Array, fc: number, lcb: number): Styl
             if (chpxCb >= 2 && chpxCb <= 1024 && upxPos + chpxCb <= upxEnd) {
               const chpxGrpprlSize = chpxCb - 2
               if (chpxGrpprlSize > 0) {
-                const result = parseStyleChpxGrpprl(data, upxPos + 2, chpxGrpprlSize)
+                const result = parseChpxGrpprlWithFont(data, upxPos + 2, chpxGrpprlSize)
                 charFormat = result.format
                 fontIndex = result.fontIndex
               }

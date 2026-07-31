@@ -210,8 +210,8 @@ describe('listParser', () => {
 
     it('should parse LVLF with indent SPRMs in grpprlPapx', () => {
       const papxSprms = [
-        { sprm: 0x2402, value: 720 },  // sprmPDxaLeft = 720 twips (0.5 inch)
-        { sprm: 0x2403, value: -360 },  // sprmPDxaLeft1 = -360 twips (hanging indent)
+        { sprm: 0x840F, value: 720 },  // sprmPDxaLeft = 720 twips (0.5 inch)
+        { sprm: 0x8411, value: -360 },  // sprmPDxaLeft1 = -360 twips (hanging indent)
       ]
       const entry = buildSimpleLstEntry(0x00000004, 0, 1, '', papxSprms)
       const data = new Uint8Array(entry.length)

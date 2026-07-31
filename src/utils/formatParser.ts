@@ -146,7 +146,7 @@ function readUint32(data: Uint8Array, offset: number): number {
  * exceed 255 bytes), and the legacy 0x4410 table-depth code encodes spra=2
  * while its actual operand is a single byte.
  */
-function getSprmOperandSize(sprm: number, data: Uint8Array, operandOffset: number): number {
+export function getSprmOperandSize(sprm: number, data: Uint8Array, operandOffset: number): number {
   // sprmTDefTable (0xD608): 2-byte cb, defined as "bytes following, plus 1".
   // Total operand length = 2 (cb field) + (cb - 1) payload bytes.
   if (sprm === SPRM_T_DEF_TABLE) {
@@ -298,7 +298,7 @@ export function parseChpxRuns(data: Uint8Array, fc: number, lcb: number): ChpxRu
  * Parse a grpprl (array of Prl) from a CHPX and return format + font index.
  * Only properties relevant to DocPreview rendering are extracted.
  */
-function parseChpxGrpprlWithFont(data: Uint8Array, offset: number, size: number): { format: Partial<CharacterFormat>; fontIndex?: number; revision?: { type: RevisionType; authorIndex?: number; timestamp?: number }; isSpecial?: boolean; fcPic?: number } {
+export function parseChpxGrpprlWithFont(data: Uint8Array, offset: number, size: number): { format: Partial<CharacterFormat>; fontIndex?: number; revision?: { type: RevisionType; authorIndex?: number; timestamp?: number }; isSpecial?: boolean; fcPic?: number } {
   const fmt: Partial<CharacterFormat> = {}
   let ftc0: number | undefined
   let ftc1: number | undefined
@@ -636,7 +636,7 @@ export function parsePapxRuns(data: Uint8Array, fc: number, lcb: number): PapxRu
  * Parse a grpprl from a PAPX and return a ParagraphFormat.
  * Only properties relevant to DocPreview rendering are extracted.
  */
-function parsePapxGrpprl(data: Uint8Array, offset: number, size: number): { format: Partial<ParagraphFormat>; ilvl?: number; ilst?: number; ilfo?: number; table?: TableInfo } {
+export function parsePapxGrpprl(data: Uint8Array, offset: number, size: number): { format: Partial<ParagraphFormat>; ilvl?: number; ilst?: number; ilfo?: number; table?: TableInfo } {
   const fmt: Partial<ParagraphFormat> = {}
   let ilvl: number | undefined
   let ilst: number | undefined
