@@ -453,8 +453,8 @@ export class OleParser {
 
     const sectorSize = this.getSectorSize(header)
     const entriesPerSector = sectorSize / 4
-    const totalSectors = Math.ceil(this.buffer.byteLength / sectorSize)
-    const miniFat = new Array(totalSectors).fill(FREESECT)
+    const miniFatEntryCount = header.miniFatSectorsCount * entriesPerSector
+    const miniFat = new Array(miniFatEntryCount).fill(FREESECT)
 
     if (header.miniFatSectorsCount <= 0 || header.firstMiniFatSector < 0) {
       this._miniFat = miniFat
@@ -463,7 +463,13 @@ export class OleParser {
 
     let currentSector = header.firstMiniFatSector
     let sectorIndex = 0
-    while (currentSector >= 0 && currentSector < fat.length && fat[currentSector] !== FREESECT && sectorIndex < 1000) {
+    const visited = new Set<number>()
+    while (currentSector >= 0 && currentSector < fat.length && fat[currentSector] !== FREESECT && sectorIndex < header.miniFatSectorsCount) {
+      if (visited.has(currentSector)) {
+        logger.warn(`MiniFAT 链检测到循环: sector=${currentSector}`)
+        break
+      }
+      visited.add(currentSector)
       sectorIndex++
       const offset = this.sectorToOffset(currentSector, header)
       if (offset + sectorSize > this.buffer.byteLength) {
@@ -474,7 +480,7 @@ export class OleParser {
       const baseSector = (sectorIndex - 1) * entriesPerSector
       for (let i = 0; i < entriesPerSector; i++) {
         const miniSector = baseSector + i
-        if (miniSector >= totalSectors) break
+        if (miniSector >= miniFatEntryCount) break
         const entryOffset = offset + i * 4
         if (entryOffset + 4 > this.buffer.byteLength) break
         miniFat[miniSector] = this.safeReadInt32(entryOffset)

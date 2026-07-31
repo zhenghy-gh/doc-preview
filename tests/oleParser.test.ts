@@ -472,6 +472,37 @@ describe('OleParser', () => {
   })
 
   describe('mini stream support', () => {
+    it('should retain every entry described by a MiniFAT sector', () => {
+      const sectorSize = 512
+      const buf = new ArrayBuffer(sectorSize * 3)
+      const view = new Uint8Array(buf)
+      const setU32 = (off: number, value: number) => {
+        view[off] = value & 0xff
+        view[off + 1] = (value >> 8) & 0xff
+        view[off + 2] = (value >> 16) & 0xff
+        view[off + 3] = (value >> 24) & 0xff
+      }
+
+      view[0] = 0xD0; view[1] = 0xCF; view[2] = 0x11; view[3] = 0xE0
+      view[4] = 0xA1; view[5] = 0xB1; view[6] = 0x1A; view[7] = 0xE1
+      view[26] = 0x03
+      view[30] = 0x09
+      view[32] = 0x06
+      setU32(60, 1)
+      setU32(64, 1)
+
+      const miniFatOffset = sectorSize * 2
+      setU32(miniFatOffset + 10 * 4, 77)
+
+      const parser = new OleParser(buf)
+      const header = parser.parseHeader()
+      const fat = [-1, -1]
+      const miniFat = parser.getMiniFatSectors(header, fat)
+
+      expect(miniFat).toHaveLength(128)
+      expect(miniFat[10]).toBe(77)
+    })
+
     it('should read WordDocument from mini-stream when the stream is smaller than the cutoff', () => {
       const sectorSize = 512
       const buf = new ArrayBuffer(sectorSize * 6)
