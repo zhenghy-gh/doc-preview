@@ -248,6 +248,44 @@ describe('OleParser', () => {
       expect(fat[1]).toBe(2)    // next sector
       expect(fat[2]).toBe(-1)   // ENDOFCHAIN
     })
+
+    it('should read additional FAT sectors from the DIFAT sector chain', () => {
+      const sectorSize = 512
+      const totalSectors = 140
+      const buf = new ArrayBuffer((totalSectors + 1) * sectorSize)
+      const view = new Uint8Array(buf)
+      const setU32 = (off: number, value: number) => {
+        view[off] = value & 0xff
+        view[off + 1] = (value >> 8) & 0xff
+        view[off + 2] = (value >> 16) & 0xff
+        view[off + 3] = (value >> 24) & 0xff
+      }
+
+      view[0] = 0xD0; view[1] = 0xCF; view[2] = 0x11; view[3] = 0xE0
+      view[4] = 0xA1; view[5] = 0xB1; view[6] = 0x1A; view[7] = 0xE1
+      view[26] = 0x03
+      view[30] = 0x09
+      setU32(44, 2)          // two FAT sectors total
+      setU32(68, 2)          // first DIFAT sector is sector 2
+      setU32(72, 1)          // one DIFAT sector
+      setU32(76, 0)          // header DIFAT[0] -> FAT sector 0
+      setU32(80, 0xFFFFFFFE) // header DIFAT terminator
+
+      const fat1Offset = (1 + 1) * sectorSize
+      setU32(fat1Offset + 2 * 4, 7) // FAT entry for sector 130 (128 + 2)
+
+      const difatOffset = (2 + 1) * sectorSize
+      setU32(difatOffset, 1) // extended DIFAT -> FAT sector 1
+      setU32(difatOffset + 4, 0xFFFFFFFE)
+      setU32(difatOffset + (sectorSize / 4 - 1) * 4, 0xFFFFFFFF)
+
+      const parser = new OleParser(buf)
+      const header = parser.parseHeader()
+      const fat = parser.getFatSectors(header)
+
+      expect(header.difat).toEqual([0, 1])
+      expect(fat[130]).toBe(7)
+    })
   })
 
   describe('getDirectorySectors', () => {

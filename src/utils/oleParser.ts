@@ -175,10 +175,11 @@ export class OleParser {
       miniStreamCutoffSize: this.safeReadUint32(56, true, 4096),
       firstMiniFatSector: this.safeReadUint32(60),
       miniFatSectorsCount: this.safeReadUint32(64),
-      firstDifatSector: this.safeReadUint32(68),
+      firstDifatSector: this.safeReadInt32(68),
       difatSectorsCount: this.safeReadUint32(72),
       difat: this._getDifat(76, 109),
     }
+    header.difat.push(...this._getExtendedDifat(header))
 
     logger.log(`版本: ${header.majorVersion}.${header.minorVersion}, 字节序: ${header.byteOrder}`)
     logger.log(`扇区大小: ${Math.pow(2, header.sectorSizePower)} bytes`)
@@ -545,6 +546,32 @@ export class OleParser {
         break
       }
       difat.push(sector)
+    }
+
+    return difat
+  }
+
+  private _getExtendedDifat(header: OleHeader): number[] {
+    const difat: number[] = []
+    const sectorSize = this.getSectorSize(header)
+    const entriesPerDifatSector = sectorSize / 4 - 1
+    let currentSector = header.firstDifatSector
+
+    for (let i = 0; i < header.difatSectorsCount; i++) {
+      if (currentSector < 0 || currentSector === FREESECT || currentSector === ENDOFCHAIN) break
+      const offset = this.sectorToOffset(currentSector, header)
+      if (offset < 0 || offset + sectorSize > this.buffer.byteLength) {
+        logger.warn(`DIFAT 扇区 ${currentSector} 越界`)
+        break
+      }
+
+      for (let j = 0; j < entriesPerDifatSector; j++) {
+        const fatSector = this.safeReadInt32(offset + j * 4)
+        if (fatSector === FREESECT || fatSector === ENDOFCHAIN || fatSector < 0) break
+        difat.push(fatSector)
+      }
+
+      currentSector = this.safeReadInt32(offset + entriesPerDifatSector * 4)
     }
 
     return difat
