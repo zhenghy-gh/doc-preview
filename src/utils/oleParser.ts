@@ -407,7 +407,11 @@ export class OleParser {
 
   private readRegularStream(entry: DirectoryEntry, header: OleHeader, fat: number[]): StreamData {
     const sectorSize = this.getSectorSize(header)
-    const data: number[] = []
+    // A stream cannot contain more bytes than the compound file itself. This
+    // cap also prevents a corrupt v3 directory size from causing a huge
+    // allocation before any sector has been validated.
+    const targetSize = Math.min(entry.size, this.buffer.byteLength)
+    const data = new Uint8Array(targetSize)
 
     let currentSector = entry.startSector
     let bytesRead = 0
@@ -419,8 +423,14 @@ export class OleParser {
     const expectedSectors = Math.ceil(entry.size / sectorSize) + 8
     const maxIterations = Math.min(fat.length + 8, expectedSectors)
     let iterations = 0
+    const visited = new Set<number>()
 
-    while (currentSector >= 0 && currentSector < fat.length && fat[currentSector] !== FREESECT && bytesRead < entry.size && iterations < maxIterations) {
+    while (currentSector >= 0 && currentSector < fat.length && fat[currentSector] !== FREESECT && bytesRead < targetSize && iterations < maxIterations) {
+      if (visited.has(currentSector)) {
+        logger.warn(`流 FAT 链检测到循环: sector=${currentSector}`)
+        break
+      }
+      visited.add(currentSector)
       iterations++
       const offset = this.sectorToOffset(currentSector, header)
 
@@ -429,23 +439,15 @@ export class OleParser {
         break
       }
 
-      const bytesToRead = Math.min(sectorSize, entry.size - bytesRead)
-      for (let i = 0; i < bytesToRead; i++) {
-        const byteOffset = offset + i
-        if (byteOffset < this.buffer.byteLength) {
-          data.push(this.safeReadUint8(byteOffset))
-        } else {
-          logger.warn(`字节读取越界: ${byteOffset}`)
-          break
-        }
-      }
+      const bytesToRead = Math.min(sectorSize, targetSize - bytesRead, this.buffer.byteLength - offset)
+      data.set(new Uint8Array(this.buffer, offset, bytesToRead), bytesRead)
 
       bytesRead += bytesToRead
       currentSector = fat[currentSector]
     }
 
-    logger.info(`流读取完成: ${data.length} bytes`)
-    return { data: new Uint8Array(data), size: data.length }
+    logger.info(`流读取完成: ${bytesRead} bytes`)
+    return { data: data.subarray(0, bytesRead), size: bytesRead }
   }
 
   getMiniFatSectors(header: OleHeader, fat: number[]): number[] {

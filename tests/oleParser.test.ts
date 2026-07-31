@@ -572,6 +572,44 @@ describe('OleParser', () => {
   })
 
   describe('large regular stream reads', () => {
+    it('should stop a cyclic FAT stream without duplicating sector contents', () => {
+      const sectorSize = 512
+      const buf = new ArrayBuffer(sectorSize * 4)
+      const view = new Uint8Array(buf)
+      const setU32 = (off: number, value: number) => {
+        view[off] = value & 0xff
+        view[off + 1] = (value >> 8) & 0xff
+        view[off + 2] = (value >> 16) & 0xff
+        view[off + 3] = (value >> 24) & 0xff
+      }
+
+      view[0] = 0xD0; view[1] = 0xCF; view[2] = 0x11; view[3] = 0xE0
+      view[4] = 0xA1; view[5] = 0xB1; view[6] = 0x1A; view[7] = 0xE1
+      view[26] = 0x03
+      view[30] = 0x09
+      setU32(48, 1)
+      setU32(56, 4096)
+      setU32(60, 0xFFFFFFFF)
+      setU32(76, 0)
+
+      const fatOffset = sectorSize
+      setU32(fatOffset, 0xFFFFFFFF)
+      setU32(fatOffset + 4, 0xFFFFFFFF)
+      setU32(fatOffset + 8, 2)
+
+      const dirOffset = sectorSize * 2
+      writeDirectoryEntry(view, dirOffset, 'WordDocument', 2, 2, 1024)
+      view.fill(0x41, sectorSize * 3, sectorSize * 4)
+
+      const parser = new OleParser(buf)
+      const header = parser.parseHeader()
+      const dirs = parser.getDirectorySectors(header, parser.getFatSectors(header))
+      const stream = parser.findWordDocumentStream(dirs)
+
+      expect(stream?.size).toBe(512)
+      expect(stream?.data.every(byte => byte === 0x41)).toBe(true)
+    })
+
     it('reads a stream spanning more than 1000 sectors without truncating', () => {
       // Regression guard: readRegularStream once capped iterations at a fixed
       // 1000, silently truncating any stream larger than 1000 sectors
