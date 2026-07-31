@@ -28,13 +28,22 @@ export interface StyleDefinition {
   istd: number
   name: string
   type: 'paragraph' | 'character' | 'table' | 'numbering' | 'unknown'
-  /** Base style index for inheritance (istdNext). */
+  /** Base style index for inheritance (StdfBase.istdBase; 0x0FFF = none). */
+  istdBase?: number
+  /** Next style index selected after a paragraph break (StdfBase.istdNext). */
   istdNext?: number
   /** Default character format from style's grpprlChpxInSTD. */
   charFormat?: Partial<CharacterFormat>
   /** Default paragraph format from style's grpprlPapxInSTD. */
   paraFormat?: Partial<ParagraphFormat>
   /** Font index from style's CHPX grpprl. */
+  fontIndex?: number
+}
+
+/** Fully-resolved style formatting after walking the istdBase chain. */
+export interface ResolvedStyleFormat {
+  charFormat?: Partial<CharacterFormat>
+  paraFormat?: Partial<ParagraphFormat>
   fontIndex?: number
 }
 
@@ -297,7 +306,7 @@ function parseSpecStds(
       type: styleType,
     }
     if (istdBase !== 0x0FFF && istdBase !== i) {
-      styleDef.istdNext = istdBase
+      styleDef.istdBase = istdBase
     }
     if (charFormat && Object.keys(charFormat).length > 0) {
       styleDef.charFormat = charFormat

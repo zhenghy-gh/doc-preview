@@ -603,6 +603,14 @@ export class OleParser {
         return null
       }
 
+      // MS-CFB DirectoryEntry.name is a fixed 64-byte UTF-16 field. Reject
+      // malformed lengths instead of reading into the entry metadata that
+      // follows it (object type, tree links, CLSID, and stream location).
+      if (nameLength > 64 || nameLength % 2 !== 0) {
+        logger.warn(`无效的目录名称长度: ${nameLength}，跳过此条目`)
+        return null
+      }
+
       let name = ''
       for (let i = 0; i < nameLength && offset + i + 1 < this.buffer.byteLength; i += 2) {
         const char = this.safeReadUint16(offset + i)

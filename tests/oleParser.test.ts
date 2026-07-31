@@ -360,6 +360,36 @@ describe('OleParser', () => {
       expect(entry.size).toBe(1024)
     })
 
+    it('should skip directory entries whose name length exceeds the 64-byte field', () => {
+      const sectorSize = 512
+      const buf = new ArrayBuffer(sectorSize * 3)
+      const view = new Uint8Array(buf)
+      view[0] = 0xD0; view[1] = 0xCF; view[2] = 0x11; view[3] = 0xE0
+      view[4] = 0xA1; view[5] = 0xB1; view[6] = 0x1A; view[7] = 0xE1
+      view[26] = 0x03
+      view[30] = 0x09
+      view[48] = 0x01
+      view[76] = 0x00
+      view[sectorSize] = 0xFF
+      view[sectorSize + 1] = 0xFF
+      view[sectorSize + 2] = 0xFF
+      view[sectorSize + 3] = 0xFF
+      view[sectorSize + 4] = 0xFF
+      view[sectorSize + 5] = 0xFF
+      view[sectorSize + 6] = 0xFF
+      view[sectorSize + 7] = 0xFF
+
+      const dirOffset = sectorSize * 2
+      writeDirectoryEntry(view, dirOffset, 'WordDocument', 2, 2, 32)
+      view[dirOffset + 64] = 66
+
+      const parser = new OleParser(buf)
+      const header = parser.parseHeader()
+      const dirs = parser.getDirectorySectors(header, parser.getFatSectors(header))
+
+      expect(dirs).toEqual([])
+    })
+
     it('should read v4 directory stream sizes as 64-bit values with a safe cap', () => {
       const sectorSize = 4096
       const buf = new ArrayBuffer(sectorSize * 3)
