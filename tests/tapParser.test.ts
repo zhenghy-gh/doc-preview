@@ -7,11 +7,11 @@ import { parsePapxRuns } from '../src/utils/formatParser'
  * Each entry can carry:
  *   - cpStart: paragraph CP start
  *   - istd: style index
- *   - inTable: if true, emit sprmPFInTable (0x240C) = 1
- *   - tableDepth: if set, emit sprmPTableDepth (0x4410) = depth
- *   - cells: TableCellInfo[] → emit sprmTDefTable (0xD608) with rgtc[]
+ *   - inTable: if true, emit sprmPFInTable (0x2416) = 1
+ *   - tableDepth: if set, emit legacy table depth (0x4410) = depth
+ *   - cells: TableCellInfo[] → emit sprmTDefTable (0xD608) with rgtc[] (TC80)
  *       each cell: { verticalMerge: 'none' | 'restart' | 'continue' }
- *   - borders: TableBorders → emit sprmTTableBorders (0xD612) with 6 Brc
+ *   - borders: TableBorders → emit sprmTTableBorders80 (0xD605) with 6 BRC80
  */
 function buildPlcfBtePapxWithTable(entries: Array<{
   cpStart: number
@@ -35,25 +35,26 @@ function buildPlcfBtePapxWithTable(entries: Array<{
     const prls: number[] = []
 
     if (entry.inTable) {
-      // sprmPFInTable = 0x240C, toggle (1 byte)
-      prls.push(0x0C, 0x24, 0x01)
+      // sprmPFInTable = 0x2416, toggle (1 byte)
+      prls.push(0x16, 0x24, 0x01)
     }
     if (entry.tableDepth !== undefined) {
-      // sprmPTableDepth = 0x4410, 1 byte
+      // legacy table depth = 0x4410, 1 byte
       prls.push(0x10, 0x44, entry.tableDepth & 0xFF)
     }
     if (entry.cells && entry.cells.length > 0) {
-      // sprmTDefTable = 0xD608, variable length (spra=6)
+      // sprmTDefTable = 0xD608, 2-byte cb (= payload length + 1)
       // Layout:
-      //   byte 0: cb (后续数据长度，不含此字节)
-      //   byte 1: itcMac
-      //   bytes 2..: rgdxaCenter[itcMac+1] (每个 2 字节)
-      //   bytes 后: rgtc[itcMac] (每个 20 字节)
+      //   bytes 0-1: cb
+      //   byte 2   : itcMac
+      //   bytes 3..: rgdxaCenter[itcMac+1] (每个 2 字节)
+      //   bytes 后 : rgtc[itcMac] (TC80, 每个 20 字节)
       const itcMac = entry.cells.length
       const rgdxaSize = (itcMac + 1) * 2
       const rgtcSize = itcMac * 20
       const payloadSize = 1 + rgdxaSize + rgtcSize
-      prls.push(0x08, 0xD6, payloadSize & 0xFF)
+      const cb16 = payloadSize + 1
+      prls.push(0x08, 0xD6, cb16 & 0xFF, (cb16 >> 8) & 0xFF)
       // itcMac
       prls.push(itcMac & 0xFF)
       // rgdxaCenter: 简单递增的列边界（每个 1000 缇）
@@ -61,24 +62,26 @@ function buildPlcfBtePapxWithTable(entries: Array<{
         const dxa = i * 1000
         prls.push(dxa & 0xFF, (dxa >> 8) & 0xFF)
       }
-      // rgtc: 每个 TC 20 字节，前 4 字节是位域，bits 0-2 = fVertMerge
+      // rgtc: TC80 每个 20 字节
+      //   grfTc(2): bit5 fVertMerge, bit6 fVertRestart
+      //   wWidth(2) + 4 × BRC80(4)
       for (const cell of entry.cells) {
-        const fVertMerge = cell.verticalMerge === 'none' ? 0
-          : cell.verticalMerge === 'continue' ? 1
-            : 2
-        // TC 的前 4 字节（位域），其余 16 字节填 0
-        prls.push(fVertMerge & 0x07, 0x00, 0x00, 0x00)
-        for (let j = 0; j < 16; j++) prls.push(0x00)
+        const grfTc = cell.verticalMerge === 'none' ? 0x00
+          : cell.verticalMerge === 'continue' ? 0x20
+            : 0x60 // restart: fVertRestart + fVertMerge
+        prls.push(grfTc, 0x00)          // grfTc
+        prls.push(0x00, 0x00)           // wWidth
+        for (let j = 0; j < 16; j++) prls.push(0x00) // 4 × BRC80 = 无边框
       }
     }
     if (entry.borders) {
-      // sprmTTableBorders = 0xD612, variable length (spra=6)
+      // sprmTTableBorders80 = 0xD605, variable length (spra=6)
       // Layout:
       //   byte 0: cb (后续长度 = 6 * 4 = 24)
-      //   之后: 6 个 Brc (每个 4 字节): top, left, bottom, right, insideH, insideV
+      //   之后: 6 个 BRC80: top, left, bottom, right, insideH, insideV
       const order = ['top', 'left', 'bottom', 'right', 'insideH', 'insideV'] as const
       const payloadSize = 6 * 4
-      prls.push(0x12, 0xD6, payloadSize & 0xFF)
+      prls.push(0x05, 0xD6, payloadSize & 0xFF)
       for (const key of order) {
         const b = entry.borders[key]
         if (!b) {
@@ -86,15 +89,15 @@ function buildPlcfBtePapxWithTable(entries: Array<{
           prls.push(0x00, 0x00, 0x00, 0x00)
           continue
         }
-        // Brc 4 字节:
-        //   bits 0-7: dptLineWidth (1/8 pt)
-        //   bits 8-11: brcType
-        //   bits 12-15: ico (colorIndex)
+        // BRC80 4 字节:
+        //   byte 0: dptLineWidth (1/8 pt)
+        //   byte 1: brcType
+        //   byte 2: ico (colorIndex)
+        //   byte 3: dptSpace/flags
         const lineWidth = b.lineWidth ?? 0
         const borderType = b.borderType ?? 0
         const colorIndex = b.colorIndex ?? 0
-        const dword = (lineWidth & 0xFF) | ((borderType & 0x0F) << 8) | ((colorIndex & 0x0F) << 12)
-        prls.push(dword & 0xFF, (dword >> 8) & 0xFF, (dword >> 16) & 0xFF, (dword >> 24) & 0xFF)
+        prls.push(lineWidth & 0xFF, borderType & 0xFF, colorIndex & 0xFF, 0x00)
       }
     }
 
@@ -150,7 +153,7 @@ describe('TAP SPRM parsing (sprmPFInTable / sprmTDefTable / sprmTTableBorders)',
     expect(runs[0].table).toBeUndefined()
   })
 
-  it('should parse sprmPFInTable (0x240C) toggle', () => {
+  it('should parse sprmPFInTable (0x2416) toggle', () => {
     const data = buildPlcfBtePapxWithTable([
       { cpStart: 0, inTable: true },
     ])
@@ -320,9 +323,9 @@ describe('TAP SPRM parsing (sprmPFInTable / sprmTDefTable / sprmTTableBorders)',
     // Manually craft a PAPX with sprmTDefTable whose itcMac = 0.
     const prls: number[] = []
     // sprmPFInTable
-    prls.push(0x0C, 0x24, 0x01)
-    // sprmTDefTable = 0xD608, cb=1, itcMac=0
-    prls.push(0x08, 0xD6, 0x01, 0x00)
+    prls.push(0x16, 0x24, 0x01)
+    // sprmTDefTable = 0xD608, cb16=2 (payload = itcMac only), itcMac=0
+    prls.push(0x08, 0xD6, 0x02, 0x00, 0x00)
     const grpprlSize = prls.length
     const cbOffset = 4 + grpprlSize
     const papx = new Uint8Array(cbOffset)
@@ -352,9 +355,9 @@ describe('TAP SPRM parsing (sprmPFInTable / sprmTDefTable / sprmTTableBorders)',
   it('should not crash on malformed sprmTTableBorders (truncated payload)', () => {
     // Craft a PAPX with sprmTTableBorders whose payload is too short.
     const prls: number[] = []
-    prls.push(0x0C, 0x24, 0x01) // sprmPFInTable
-    // sprmTTableBorders = 0xD612, cb=4 (too short, need 24)
-    prls.push(0x12, 0xD6, 0x04, 0x00, 0x00, 0x00, 0x00)
+    prls.push(0x16, 0x24, 0x01) // sprmPFInTable
+    // sprmTTableBorders80 = 0xD605, cb=4 (too short, need 24)
+    prls.push(0x05, 0xD6, 0x04, 0x00, 0x00, 0x00, 0x00)
     const grpprlSize = prls.length
     const cbOffset = 4 + grpprlSize
     const papx = new Uint8Array(cbOffset)

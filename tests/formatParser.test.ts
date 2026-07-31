@@ -15,20 +15,21 @@ function buildPlcfBteChpx(entries: Array<{ cpStart: number; bold?: boolean; ital
   for (const entry of entries) {
     const prls: number[] = []
     if (entry.bold !== undefined) {
-      // sprmCFBold = 0x0801, ToggleOperand(1 byte)
-      prls.push(0x01, 0x08, entry.bold ? 0x01 : 0x00)
+      // sprmCFBold = 0x0835, ToggleOperand(1 byte)
+      prls.push(0x35, 0x08, entry.bold ? 0x01 : 0x00)
     }
     if (entry.italic !== undefined) {
-      prls.push(0x02, 0x08, entry.italic ? 0x01 : 0x00)
+      // sprmCFItalic = 0x0836
+      prls.push(0x36, 0x08, entry.italic ? 0x01 : 0x00)
     }
     if (entry.underline !== undefined) {
-      // sprmCFUnderline = 0x0815, 1-byte operand
-      prls.push(0x15, 0x08, entry.underline ? 0x01 : 0x00)
+      // sprmCKul = 0x2A3E, 1-byte underline style (0 = none, 1 = single)
+      prls.push(0x3E, 0x2A, entry.underline ? 0x01 : 0x00)
     }
     if (entry.fontSize !== undefined) {
-      // sprmHps = 0x0816, 2-byte operand (half-points)
+      // sprmCHps = 0x4A43, 2-byte operand (half-points)
       const hps = entry.fontSize * 2
-      prls.push(0x16, 0x08, hps & 0xFF, (hps >> 8) & 0xFF)
+      prls.push(0x43, 0x4A, hps & 0xFF, (hps >> 8) & 0xFF)
     }
     const grpprlSize = prls.length
     const cbOffset = 2 + grpprlSize
@@ -83,30 +84,31 @@ function buildPlcfBtePapx(entries: Array<{ cpStart: number; alignment?: 'left' |
   for (const entry of entries) {
     const prls: number[] = []
     if (entry.alignment !== undefined) {
-      // sprmPJc = 0x2401, 1-byte operand
+      // sprmPJc80 = 0x2403, 1-byte operand
       const jc = entry.alignment === 'left' ? 0
         : entry.alignment === 'center' ? 1
           : entry.alignment === 'right' ? 2
             : 3
-      prls.push(0x01, 0x24, jc)
+      prls.push(0x03, 0x24, jc)
     }
     if (entry.indent !== undefined) {
-      // sprmPDxaLeft = 0x2402, 2-byte signed operand (twips)
+      // sprmPDxaLeft = 0x840F, 2-byte signed operand (twips)
       const twips = Math.round(entry.indent * 20)
-      prls.push(0x02, 0x24, twips & 0xFF, (twips >> 8) & 0xFF)
+      prls.push(0x0F, 0x84, twips & 0xFF, (twips >> 8) & 0xFF)
     }
     if (entry.tabs !== undefined && entry.tabs.length > 0) {
-      // sprmPDxaTab = 0x2417, variable-length (spra=6)
-      // Format: first byte = length of remaining data (excluding first byte)
-      // Each tab: dxaTab(2) + jcTab(1) + tlc(1) = 4 bytes
+      // sprmPChgTabsPapx = 0xC60D, variable-length (spra=6)
+      // PChgTabsPapxOperand: cb + cTabsDel(1) + rgdxaDel + cTabsAdd(1) + rgdxaAdd(2×a) + rgtbdAdd(1×a)
       const tabCount = entry.tabs.length
-      const tabDataSize = tabCount * 4
-      const lengthByte = tabDataSize // This is the first byte value (length of rest)
-      prls.push(0x17, 0x24, lengthByte) // SPRM + length indicator
+      const cb = 1 + 1 + tabCount * 2 + tabCount // cTabsDel + cTabsAdd + rgdxaAdd + rgtbdAdd
+      prls.push(0x0D, 0xC6, cb)
+      prls.push(0x00) // cTabsDel = 0
+      prls.push(tabCount & 0xFF) // cTabsAdd
       for (const tabPt of entry.tabs) {
         const twips = Math.round(tabPt * 20)
-        prls.push(twips & 0xFF, (twips >> 8) & 0xFF, 0x00, 0x00) // dxaTab + jcTab(0) + tlc(0)
+        prls.push(twips & 0xFF, (twips >> 8) & 0xFF) // rgdxaAdd
       }
+      for (let i = 0; i < tabCount; i++) prls.push(0x00) // rgtbdAdd (left/none)
     }
     const grpprlSize = prls.length
     const istd = entry.istd ?? 0

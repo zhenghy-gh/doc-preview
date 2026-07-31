@@ -13,69 +13,82 @@
  */
 
 import type { CharacterFormat, ParagraphFormat, TableInfo, TableCellInfo, TableBorders, TableBorderStyle, TableJustification, RevisionType } from './docFormat'
-import { parseRmrk } from './revisionParser'
 
-// ---- SPRM operation codes ----
+// ---- SPRM operation codes (MS-DOC §2.6.1/§2.6.2/§2.6.3 — Word 97+ spec codes) ----
+//
+// NOTE: these are the on-disk two-byte SPRM opcodes that real Word 97-2003
+// binaries emit inside CHPX/PAPX grpprls. An earlier revision of this module
+// used a project-invented code table that only matched our synthetic test
+// fixtures; real documents silently lost all character formatting (and some
+// codes collided with spec semantics — e.g. 0x0801 is sprmCFRMark, not bold).
 
-const SPRM_CF_BOLD = 0x0801
-const SPRM_CF_ITALIC = 0x0802
-const SPRM_CF_STRIKE = 0x0803
-const SPRM_CF_OUTLINE = 0x0804   // Character border
-const SPRM_CF_SHADOW = 0x0805    // Character shadow
-const SPRM_CF_SMALL_CAPS = 0x0806  // Small caps
-const SPRM_CF_CAPS = 0x0807        // All caps
-const SPRM_CF_VANISH = 0x0808      // Hidden text (vanish)
-const SPRM_CF_STRIKE_BIDI = 0x080B // Double strikethrough
-const SPRM_CF_KUL = 0x0814
-const SPRM_CF_UNDERLINE = 0x0815
-const SPRM_HPS = 0x0816
-const SPRM_DXAS_POS = 0x0817
-const SPRM_CV = 0x081B
-const SPRM_CH_HIGHLIGHT = 0x081C
-const SPRM_KERN = 0x081E          // Kern (字间距调整，半磅)
-const SPRM_DXA_SPACE = 0x081F     // DxaSpace (字符间距，缇)
-// ---- Revision mark SPRMs (track changes) ----
-const SPRM_CF_RMARK = 0x0809         // Toggle (1 byte): fRMark — 修订插入标记
-const SPRM_CF_RMARK_DEL = 0x080A     // Toggle (1 byte): fRMarkDel — 修订删除标记
-const SPRM_C_RMARK = 0x0830          // 6-byte RMRK: ibstRMark(2) + DTTM(4) — 插入修订元数据
-const SPRM_C_RMARK_DEL = 0x0834      // 6-byte RMRK: ibstRMark(2) + DTTM(4) — 删除修订元数据
-const SPRM_CF_FONT = 0x4A30  // Font index (reference to font table)
-// ---- Picture / shape SPRMs ----
-const SPRM_CF_SPEC = 0x083A     // Toggle (1 byte): fSpec — special character (picture anchor, etc.)
-const SPRM_C_PIC_LOCATION = 0x6805 // 4-byte fcPic: offset into Data stream of PICF structure
+// -- CHP (character) SPRMs --
+const SPRM_CF_RMARK_DEL = 0x0800   // Toggle: fRMarkDel — 修订删除标记
+const SPRM_CF_RMARK = 0x0801       // Toggle: fRMark — 修订插入标记
+const SPRM_C_IBST_RMARK = 0x4804   // 2-byte: 插入修订作者索引 (SttbfRMark)
+const SPRM_C_DTTM_RMARK = 0x6805   // 4-byte DTTM: 插入修订时间戳
+const SPRM_C_HIGHLIGHT = 0x2A0C    // 1-byte: highlight color index
+const SPRM_C_ISTD = 0x4A30         // 2-byte: character style index (consumed, unused)
+const SPRM_CF_BOLD = 0x0835        // Toggle: bold
+const SPRM_CF_ITALIC = 0x0836      // Toggle: italic
+const SPRM_CF_STRIKE = 0x0837      // Toggle: strikethrough
+const SPRM_CF_OUTLINE = 0x0838     // Toggle: outline
+const SPRM_CF_SHADOW = 0x0839      // Toggle: shadow
+const SPRM_CF_SMALL_CAPS = 0x083A  // Toggle: small caps
+const SPRM_CF_CAPS = 0x083B        // Toggle: all caps
+const SPRM_CF_VANISH = 0x083C      // Toggle: hidden text
+const SPRM_C_KUL = 0x2A3E          // 1-byte: underline style (0 = none)
+const SPRM_C_DXA_SPACE = 0x8840    // 2-byte signed: 字符间距（缇）
+const SPRM_C_ICO = 0x2A42          // 1-byte: text color index (ICO palette)
+const SPRM_C_HPS = 0x4A43          // 2-byte: font size (half-points)
+const SPRM_C_HPS_POS = 0x4845      // 2-byte signed: raised/lowered position (half-points)
+const SPRM_C_ISS = 0x2A48          // 1-byte: 0=normal, 1=superscript, 2=subscript
+const SPRM_C_KERN = 0x484B         // 2-byte: kerning threshold (half-points)
+const SPRM_C_FTC0 = 0x4A4F         // 2-byte: font index — ASCII characters
+const SPRM_C_FTC1 = 0x4A50         // 2-byte: font index — East Asian characters
+const SPRM_C_FTC2 = 0x4A51         // 2-byte: font index — other characters
+const SPRM_C_DSTRIKE = 0x2A53      // 1-byte: double strikethrough
+const SPRM_CF_SPEC = 0x0855        // Toggle: fSpec — special char (picture anchor, field, …)
+const SPRM_C_IBST_RMARK_DEL = 0x4863 // 2-byte: 删除修订作者索引
+const SPRM_C_DTTM_RMARK_DEL = 0x6864 // 4-byte DTTM: 删除修订时间戳
+const SPRM_C_CV = 0x6870           // 4-byte COLORREF: r,g,b,fAuto (Word 2000+)
+const SPRM_C_PIC_LOCATION = 0x6A03 // 4-byte fcPic: Data 流中 PICF 结构偏移
 
-const SPRM_P_JC = 0x2401
-const SPRM_P_DXA_LEFT = 0x2402    // Left indent (twips, signed)
-const SPRM_P_DXA_RIGHT = 0x2403   // Right indent (twips, signed)
-const SPRM_P_DXA_INDENT = 0x2404  // First line indent (twips, signed)
-const SPRM_P_DYA_BEFORE = 0x2406
-const SPRM_P_DYA_AFTER = 0x2407
-const SPRM_P_LINE = 0x2409
-const SPRM_P_BRC_TOP = 0x2410     // Paragraph top border (Brc structure)
-const SPRM_P_BRC_LEFT = 0x2411    // Paragraph left border (Brc structure)
-const SPRM_P_BRC_BOTTOM = 0x2412  // Paragraph bottom border (Brc structure)
-const SPRM_P_BRC_RIGHT = 0x2413   // Paragraph right border (Brc structure)
-const SPRM_P_SHD = 0x2414         // Paragraph shading (variable length)
-const SPRM_P_DXA_TAB = 0x2417     // Tab stop position (variable length)
-const SPRM_P_CHG_TABS = 0x2418    // Change tab stops (variable length)
-const SPRM_P_OUTLINE_LVL = 0x2420 // Outline level (1 byte)
-const SPRM_P_ILVL = 0x460D  // List level (0-based index into LST levels array)
-const SPRM_P_ILST = 0x460E  // List index (reference to LST table)
-const SPRM_P_ILFO = 0x460F  // List Format Override index
+// -- PAP (paragraph) SPRMs --
+const SPRM_P_ISTD = 0x4600           // 2-byte: paragraph style index (consumed, unused)
+const SPRM_P_JC = 0x2403             // sprmPJc80: 1-byte alignment
+const SPRM_P_PAGE_BREAK_BEFORE = 0x2407 // Toggle: page break before paragraph
+const SPRM_P_ILVL = 0x260A           // 1-byte: list level
+const SPRM_P_ILFO = 0x460B           // 2-byte: list format override index
+const SPRM_P_CHG_TABS_PAPX = 0xC60D  // Variable: PChgTabsPapxOperand (tab stops)
+const SPRM_P_DXA_RIGHT = 0x840E      // 2-byte signed: right indent (twips)
+const SPRM_P_DXA_LEFT = 0x840F       // 2-byte signed: left indent (twips)
+const SPRM_P_DXA_LEFT1 = 0x8411      // 2-byte signed: first line indent (twips)
+const SPRM_P_DYA_LINE = 0x6412       // 4-byte LSPD: dyaLine + fMultLinespace
+const SPRM_P_DYA_BEFORE = 0xA413     // 2-byte: space before (twips)
+const SPRM_P_DYA_AFTER = 0xA414      // 2-byte: space after (twips)
+const SPRM_P_CHG_TABS = 0xC615       // Variable: PChgTabsOperand (tab stops)
+const SPRM_P_BRC_TOP = 0x6424        // 4-byte BRC80: paragraph top border
+const SPRM_P_BRC_LEFT = 0x6425      // 4-byte BRC80: paragraph left border
+const SPRM_P_BRC_BOTTOM = 0x6426    // 4-byte BRC80: paragraph bottom border
+const SPRM_P_BRC_RIGHT = 0x6427     // 4-byte BRC80: paragraph right border
+const SPRM_P_SHD = 0x442D           // sprmPShd80: 2-byte SHD80 paragraph shading
+const SPRM_P_OUTLINE_LVL = 0x2640   // 1-byte: outline level (0-8; 9 = body text)
+// Legacy list codes produced by older exporters (no spec collision).
+const SPRM_P_ILVL_LEGACY = 0x460D
+const SPRM_P_ILST_LEGACY = 0x460E  // list index; the spec drives lists via ilfo only
+const SPRM_P_ILFO_LEGACY = 0x460F
 
-// Table SPRMs (TAP — Table Properties)
-// Per MS-DOC §2.6.8 / §2.4.4: these attach to the paragraph that begins a table row.
-const SPRM_P_F_IN_TABLE = 0x240C    // Toggle (1 byte): paragraph is inside a table
-// sprmPTableDepth: spec lists as 1-byte operand. Two codes are seen in the wild:
-//   0x2410 — spec-compliant (spra=1, 1-byte unsigned)
-//   0x4410 — legacy/POI encoding (spra=2, but operand is actually 1 byte)
-// We accept both and force 1-byte operand for 0x4410 in getSprmOperandSize.
-const SPRM_P_TABLE_DEPTH_SPEC = 0x2410
+// -- Table SPRMs (TAP — attach to the paragraph/row-end mark of a table row) --
+const SPRM_P_F_IN_TABLE = 0x2416    // Toggle: paragraph is inside a table
+const SPRM_P_F_TTP = 0x2417         // Toggle: paragraph is a table row-end (TTP) mark
+const SPRM_P_ITAP = 0x6649          // 4-byte: nested table depth (1 = top level)
+// Legacy/POI table depth encoding (spra bits say 2 bytes, operand is 1 byte).
 const SPRM_P_TABLE_DEPTH_LEGACY = 0x4410
-const SPRM_T_DEF_TABLE = 0xD608     // Variable length: rgdxaCenter[] + rgtc[]
-const SPRM_T_TABLE_BORDERS = 0xD612 // Variable length: 6 Brc (4 bytes each)
-const SPRM_T_JTABLE = 0xD632       // 1 byte: table justification (0=left, 1=center, 2=right)
-const SPRM_T_DXA_TABLE_INDENT = 0xD609 // 2 bytes: table indent from left margin (twips)
+const SPRM_T_JC90 = 0x5400          // 2-byte: table justification (0=left,1=center,2=right)
+const SPRM_T_TABLE_BORDERS = 0xD605 // sprmTTableBorders80: cb + 6 × BRC80
+const SPRM_T_DEF_TABLE = 0xD608     // 2-byte cb + itcMac + rgdxaCenter[] + rgtc[] (TC80)
+const SPRM_T_DEF_TABLE_SHD = 0xD609 // sprmTDefTableShd80: cell shading (consumed, unused)
 
 /**
  * Shd color index to CSS color mapping.
@@ -129,37 +142,26 @@ function readUint32(data: Uint8Array, offset: number): number {
  *   bits 10-12: sgc (property group)
  *   bits 13-15: spra (operand size type)
  *
- * Special cases: sprmPDxaTab (0x2417) and sprmPChgTabs (0x2418) are documented
- * as spra=6 (variable length), but their actual encoding yields spra=2 via bit fields.
- * We override these to use variable-length format.
+ * Special cases: sprmTDefTable (0xD608) carries a 2-byte cb (its payload can
+ * exceed 255 bytes), and the legacy 0x4410 table-depth code encodes spra=2
+ * while its actual operand is a single byte.
  */
 function getSprmOperandSize(sprm: number, data: Uint8Array, operandOffset: number): number {
-  // Special handling for tab-related SPRMs
-  if (sprm === SPRM_P_DXA_TAB || sprm === SPRM_P_CHG_TABS) {
-    // Variable length: first byte is the length of the rest
-    if (operandOffset >= data.length) return 0
-    return 1 + data[operandOffset]
+  // sprmTDefTable (0xD608): 2-byte cb, defined as "bytes following, plus 1".
+  // Total operand length = 2 (cb field) + (cb - 1) payload bytes.
+  if (sprm === SPRM_T_DEF_TABLE) {
+    if (operandOffset + 2 > data.length) return 0
+    const cb16 = readUint16(data, operandOffset)
+    return 2 + Math.max(cb16 - 1, 0)
   }
 
-  // Special handling for legacy sprmPTableDepth (0x4410):
+  // Legacy sprmPTableDepth (0x4410) as emitted by POI-era exporters:
   // spra bits encode 2 (2-byte), but the actual operand is 1 byte.
-  // We force 1-byte here so the parser doesn't over-read and misalign
+  // Force 1-byte here so the parser doesn't over-read and misalign
   // subsequent SPRMs in the grpprl.
   if (sprm === SPRM_P_TABLE_DEPTH_LEGACY) {
     return 1
   }
-
-  // sprmCRMark (0x0830) / sprmCRMarkDel (0x0834) carry a 6-byte RMRK structure
-  // (ibstRMark + DTTM), but their spra bits encode 0 (Toggle, 1 byte).
-  if (sprm === SPRM_C_RMARK || sprm === SPRM_C_RMARK_DEL) {
-    return 6
-  }
-
-  // sprmTJTable (0xD632) and sprmTDxaTableIndent (0xD609) have spra=6
-  // (variable length), but the payload is a fixed 1-byte / 2-byte value
-  // preceded by a cb byte. Standard variable-length handling (1 + cb)
-  // works correctly because cb already encodes the payload size.
-  // No special case needed — fall through to the spra=6 branch below.
 
   const spra = (sprm >> 13) & 0x7
   switch (spra) {
@@ -185,12 +187,12 @@ export interface ChpxRun {
   cpStart: number
   cpEnd: number
   format: Partial<CharacterFormat>
-  /** Font index (reference to font table), if sprmCFFont was present. */
+  /** Font index (reference to font table), from sprmCRgFtc0/1/2 (ASCII first). */
   fontIndex?: number
   /**
-   * 修订标记（来自 sprmCFRMark / sprmCFRMarkDel / sprmCRMark / sprmCRMarkDel）。
+   * 修订标记（来自 sprmCFRMark / sprmCFRMarkDel / sprmCIbstRMark(Del) / sprmCDttmRMark(Del)）。
    * 无修订时为 undefined。type 为 'insert'/'delete'/'format'，
-   * authorIndex/timestamp 来自 RMRK 结构（可能缺失）。
+   * authorIndex/timestamp 可能缺失。
    */
   revision?: {
     type: RevisionType
@@ -298,7 +300,9 @@ export function parseChpxRuns(data: Uint8Array, fc: number, lcb: number): ChpxRu
  */
 function parseChpxGrpprlWithFont(data: Uint8Array, offset: number, size: number): { format: Partial<CharacterFormat>; fontIndex?: number; revision?: { type: RevisionType; authorIndex?: number; timestamp?: number }; isSpecial?: boolean; fcPic?: number } {
   const fmt: Partial<CharacterFormat> = {}
-  let fontIndex: number | undefined = undefined
+  let ftc0: number | undefined
+  let ftc1: number | undefined
+  let ftc2: number | undefined
   let revision: { type: RevisionType; authorIndex?: number; timestamp?: number } | undefined = undefined
   let isSpecial = false
   let fcPic: number | undefined = undefined
@@ -311,136 +315,183 @@ function parseChpxGrpprlWithFont(data: Uint8Array, offset: number, size: number)
     // Guard against malformed SPRMs.
     if (operandSize <= 0 || pos + 2 + operandSize > size) break
 
+    // Toggle operands: 0 = off, 1 = on, 0x80/0x81 = "match/invert style"
+    // (we can't resolve those without the style chain, so leave undefined).
+    const toggle = data[operandOffset]
+
     switch (sprm) {
       case SPRM_CF_BOLD:
-        fmt.bold = data[operandOffset] === 1
+        if (toggle === 1) fmt.bold = true
+        else if (toggle === 0) fmt.bold = false
         break
       case SPRM_CF_ITALIC:
-        fmt.italic = data[operandOffset] === 1
+        if (toggle === 1) fmt.italic = true
+        else if (toggle === 0) fmt.italic = false
         break
       case SPRM_CF_STRIKE:
-        fmt.strikethrough = data[operandOffset] === 1
+        if (toggle === 1) fmt.strikethrough = true
+        else if (toggle === 0) fmt.strikethrough = false
+        break
+      case SPRM_C_DSTRIKE:
+        // Double strikethrough — rendered as plain strikethrough.
+        if (toggle !== 0) fmt.strikethrough = true
         break
       case SPRM_CF_OUTLINE:
-        fmt.outline = data[operandOffset] === 1
+        if (toggle === 1) fmt.outline = true
+        else if (toggle === 0) fmt.outline = false
         break
       case SPRM_CF_SHADOW:
-        fmt.shadow = data[operandOffset] === 1
+        if (toggle === 1) fmt.shadow = true
+        else if (toggle === 0) fmt.shadow = false
         break
       case SPRM_CF_SMALL_CAPS:
-        fmt.smallCaps = data[operandOffset] === 1
+        if (toggle === 1) fmt.smallCaps = true
+        else if (toggle === 0) fmt.smallCaps = false
         break
       case SPRM_CF_CAPS:
-        fmt.allCaps = data[operandOffset] === 1
+        if (toggle === 1) fmt.allCaps = true
+        else if (toggle === 0) fmt.allCaps = false
         break
       case SPRM_CF_VANISH:
-        fmt.hidden = data[operandOffset] === 1
+        if (toggle === 1) fmt.hidden = true
+        else if (toggle === 0) fmt.hidden = false
         break
-      case SPRM_CF_STRIKE_BIDI:
-        // Double strikethrough — also set strikethrough flag
-        if (data[operandOffset] === 1) {
-          fmt.strikethrough = true
-        }
+      case SPRM_C_KUL:
+        // sprmCKul — underline style code; 0 = none, anything else underlined.
+        fmt.underline = toggle !== 0
         break
-      case SPRM_CF_UNDERLINE:
-      case SPRM_CF_KUL:
-        fmt.underline = data[operandOffset] !== 0
-        break
-      case SPRM_HPS: {
+      case SPRM_C_HPS: {
         const hps = readUint16(data, operandOffset)
         if (hps > 0) fmt.fontSize = hps / 2  // half-points → points
         break
       }
-      case SPRM_DXAS_POS: {
-        const dxasPos = readInt16(data, operandOffset)
-        if (dxasPos > 0) fmt.superscript = true
-        else if (dxasPos < 0) fmt.subscript = true
+      case SPRM_C_HPS_POS: {
+        // sprmCHpsPos — raised (>0) / lowered (<0) text in half-points.
+        const hpsPos = readInt16(data, operandOffset)
+        if (hpsPos > 0) fmt.superscript = true
+        else if (hpsPos < 0) fmt.subscript = true
         break
       }
-      case SPRM_CV: {
-        const cv = readUint32(data, operandOffset)
-        if ((cv & 0x80000000) === 0) {
-          const b = cv & 0xFF
-          const g = (cv >> 8) & 0xFF
-          const r = (cv >> 16) & 0xFF
+      case SPRM_C_ISS: {
+        // sprmCIss — 0 = normal, 1 = superscript, 2 = subscript.
+        const iss = data[operandOffset]
+        if (iss === 1) fmt.superscript = true
+        else if (iss === 2) fmt.subscript = true
+        break
+      }
+      case SPRM_C_ICO: {
+        // sprmCIco — classic 16-color palette index (same table as SHD).
+        const ico = data[operandOffset]
+        if (ico >= 1 && ico <= 16) fmt.color = SHD_COLOR_MAP[ico]
+        break
+      }
+      case SPRM_C_CV: {
+        // sprmCCv (Word 2000+) — COLORREF bytes: red, green, blue, fAuto.
+        const r = data[operandOffset]
+        const g = data[operandOffset + 1]
+        const b = data[operandOffset + 2]
+        if (data[operandOffset + 3] !== 0xFF) {
           fmt.color = `rgb(${r}, ${g}, ${b})`
         }
         break
       }
-      case SPRM_CH_HIGHLIGHT: {
+      case SPRM_C_HIGHLIGHT: {
         const hl = data[operandOffset]
         if (hl !== 0) {
           fmt.highlight = highlightColor(hl)
         }
         break
       }
-      case SPRM_KERN: {
-        // sprmKern: 字间距调整（半磅） → 实际磅数 = kern / 2
+      case SPRM_C_KERN: {
+        // sprmCHpsKern — kerning threshold（半磅） → 实际磅数 = kern / 2
         const kern = readUint16(data, operandOffset)
         if (kern > 0) {
           fmt.letterSpacing = kern / 2
         }
         break
       }
-      case SPRM_DXA_SPACE: {
-        // sprmDxaSpace: 字符间距（缇） → 实际磅数 = dxaSpace / 20
+      case SPRM_C_DXA_SPACE: {
+        // sprmCDxaSpace: 字符间距（缇） → 实际磅数 = dxaSpace / 20
         const dxaSpace = readInt16(data, operandOffset)
         if (dxaSpace !== 0) {
           fmt.letterSpacing = twipsToPt(dxaSpace)
         }
         break
       }
-      case SPRM_CF_FONT: {
-        // sprmCFFont: 2-byte font index (reference to STTB Ffn)
-        fontIndex = readUint16(data, operandOffset)
+      case SPRM_C_FTC0:
+        // sprmCRgFtc0 — font index for ASCII characters (STTB Ffn).
+        ftc0 = readUint16(data, operandOffset)
         break
-      }
+      case SPRM_C_FTC1:
+        // sprmCRgFtc1 — font index for East Asian characters.
+        ftc1 = readUint16(data, operandOffset)
+        break
+      case SPRM_C_FTC2:
+        // sprmCRgFtc2 — font index for other characters.
+        ftc2 = readUint16(data, operandOffset)
+        break
+      case SPRM_C_ISTD:
+        // Character style index — consumed for alignment; style chain not applied here.
+        break
       case SPRM_CF_RMARK: {
-        // sprmCFRMark (0x0809) — Toggle: 标记字符为"修订插入"
-        if (data[operandOffset] === 1) {
+        // sprmCFRMark — Toggle: 标记字符为"修订插入"
+        if (toggle === 1) {
           if (!revision) revision = { type: 'insert' }
           else if (revision.type === 'format') revision.type = 'insert'
         }
         break
       }
       case SPRM_CF_RMARK_DEL: {
-        // sprmCFRMarkDel (0x080A) — Toggle: 标记字符为"修订删除"
-        if (data[operandOffset] === 1) {
+        // sprmCFRMarkDel — Toggle: 标记字符为"修订删除"
+        if (toggle === 1) {
           if (!revision) revision = { type: 'delete' }
           else revision.type = 'delete'
         }
         break
       }
-      case SPRM_C_RMARK: {
-        // sprmCRMark (0x0830) — 6-byte RMRK: 插入修订的作者索引 + 时间戳
-        const rmrk = parseRmrk(data, operandOffset)
-        if (rmrk) {
+      case SPRM_C_IBST_RMARK: {
+        // sprmCIbstRMark — 插入修订的作者索引（SttbfRMark）
+        const ibst = readUint16(data, operandOffset)
+        if (!revision) revision = { type: 'insert' }
+        revision.authorIndex = ibst
+        break
+      }
+      case SPRM_C_DTTM_RMARK: {
+        // sprmCDttmRMark — 插入修订的 DTTM 时间戳
+        const dttm = readUint32(data, operandOffset)
+        if (dttm !== 0) {
           if (!revision) revision = { type: 'insert' }
-          revision.authorIndex = rmrk.authorIndex
-          revision.timestamp = rmrk.timestamp
+          revision.timestamp = dttm
         }
         break
       }
-      case SPRM_C_RMARK_DEL: {
-        // sprmCRMarkDel (0x0834) — 6-byte RMRK: 删除修订的作者索引 + 时间戳
-        const rmrk = parseRmrk(data, operandOffset)
-        if (rmrk) {
+      case SPRM_C_IBST_RMARK_DEL: {
+        // sprmCIbstRMarkDel — 删除修订的作者索引
+        const ibst = readUint16(data, operandOffset)
+        if (!revision) revision = { type: 'delete' }
+        else revision.type = 'delete'
+        revision.authorIndex = ibst
+        break
+      }
+      case SPRM_C_DTTM_RMARK_DEL: {
+        // sprmCDttmRMarkDel — 删除修订的 DTTM 时间戳
+        const dttm = readUint32(data, operandOffset)
+        if (dttm !== 0) {
           if (!revision) revision = { type: 'delete' }
           else revision.type = 'delete'
-          revision.authorIndex = rmrk.authorIndex
-          revision.timestamp = rmrk.timestamp
+          revision.timestamp = dttm
         }
         break
       }
       case SPRM_CF_SPEC: {
-        // sprmCFSpec (0x083A) — Toggle: 标记字符为特殊字符（图片锚点等）
-        if (data[operandOffset] === 1) {
+        // sprmCFSpec — Toggle: 标记字符为特殊字符（图片锚点等）
+        if (toggle === 1) {
           isSpecial = true
         }
         break
       }
       case SPRM_C_PIC_LOCATION: {
-        // sprmCPicLocation (0x6805) — 4-byte fcPic: Data 流中 PICF 结构的偏移
+        // sprmCPicLocation — 4-byte fcPic: Data 流中 PICF 结构的偏移
         fcPic = readUint32(data, operandOffset) & 0x3FFFFFFF
         break
       }
@@ -448,6 +499,9 @@ function parseChpxGrpprlWithFont(data: Uint8Array, offset: number, size: number)
 
     pos += 2 + operandSize
   }
+
+  // ASCII font takes priority, then East Asian, then "other".
+  const fontIndex = ftc0 ?? ftc1 ?? ftc2
 
   const result: { format: Partial<CharacterFormat>; fontIndex?: number; revision?: { type: RevisionType; authorIndex?: number; timestamp?: number }; isSpecial?: boolean; fcPic?: number } = { format: fmt, fontIndex, revision }
   if (isSpecial) result.isSpecial = true
@@ -597,7 +651,11 @@ function parsePapxGrpprl(data: Uint8Array, offset: number, size: number): { form
     if (operandSize <= 0 || pos + 2 + operandSize > size) break
 
     switch (sprm) {
-      case SPRM_P_ILVL: {
+      case SPRM_P_ISTD:
+        // Paragraph style index — already carried by the PAPX istd field.
+        break
+      case SPRM_P_ILVL:
+      case SPRM_P_ILVL_LEGACY: {
         ilvl = data[operandOffset]
         break
       }
@@ -619,38 +677,45 @@ function parsePapxGrpprl(data: Uint8Array, offset: number, size: number): { form
         break
       }
       case SPRM_P_DXA_RIGHT: {
-        // 0x2403 = sprmPDxaRight (right indent)
         const twips = readInt16(data, operandOffset)
         fmt.rightIndent = twipsToPt(twips)
         break
       }
-      case SPRM_P_DXA_INDENT: {
-        // 0x2404 = sprmPDxaIndent (first line indent)
+      case SPRM_P_DXA_LEFT1: {
+        // sprmPDxaLeft1 — first line indent (negative = hanging indent)
         const twips = readInt16(data, operandOffset)
         fmt.firstLineIndent = twipsToPt(twips)
         break
       }
       case SPRM_P_DYA_BEFORE: {
-        const twips = readInt16(data, operandOffset)
+        const twips = readUint16(data, operandOffset)
         fmt.spaceBefore = twipsToPt(twips)
         break
       }
       case SPRM_P_DYA_AFTER: {
-        const twips = readInt16(data, operandOffset)
+        const twips = readUint16(data, operandOffset)
         fmt.spaceAfter = twipsToPt(twips)
         break
       }
-      case SPRM_P_LINE: {
-        const line = readInt16(data, operandOffset)
-        if (line < 0) {
-          fmt.lineSpacing = Math.abs(line) / 240
-        } else if (line > 0) {
-          fmt.lineSpacing = twipsToPt(line)
+      case SPRM_P_DYA_LINE: {
+        // sprmPDyaLine — 4-byte LSPD: dyaLine (int16) + fMultLinespace (uint16).
+        // fMult=1 → dyaLine is a line-count multiple in 1/240ths;
+        // fMult=0 → dyaLine is an exact/at-least height in twips.
+        const dyaLine = readInt16(data, operandOffset)
+        const fMult = readUint16(data, operandOffset + 2)
+        if (fMult === 1) {
+          if (dyaLine !== 0) fmt.lineSpacing = Math.abs(dyaLine) / 240
+        } else if (dyaLine !== 0) {
+          fmt.lineSpacing = twipsToPt(Math.abs(dyaLine))
         }
         break
       }
+      case SPRM_P_PAGE_BREAK_BEFORE: {
+        if (data[operandOffset] === 1) fmt.pageBreakBefore = true
+        break
+      }
       case SPRM_P_OUTLINE_LVL: {
-        // 0x2420 = sprmPOutlineLvl — direct outline level from PAPX
+        // sprmPOutLvl — outline level 0-8; 9 = body text (ignored)
         const lvl = data[operandOffset]
         if (lvl >= 0 && lvl <= 8) {
           fmt.outlineLevel = lvl
@@ -661,12 +726,11 @@ function parsePapxGrpprl(data: Uint8Array, offset: number, size: number): { form
       case SPRM_P_BRC_LEFT:
       case SPRM_P_BRC_BOTTOM:
       case SPRM_P_BRC_RIGHT: {
+        // 4-byte BRC80: byte0 dptLineWidth (1/8pt), byte1 brcType, byte2 ico.
         if (operandSize < 4) break
-        const cb = data[operandOffset]
-        if (cb < 4) break
-        const ico = data[operandOffset + 1]
-        const dptLineWidth = data[operandOffset + 2]
-        const brcType = data[operandOffset + 3]
+        const dptLineWidth = data[operandOffset]
+        const brcType = data[operandOffset + 1]
+        const ico = data[operandOffset + 2]
         if (brcType === 0) break
         if (!fmt.borders) fmt.borders = {}
         const border = {
@@ -683,99 +747,95 @@ function parsePapxGrpprl(data: Uint8Array, offset: number, size: number): { form
         break
       }
       case SPRM_P_SHD: {
-        // 0x2414 = sprmPShd — paragraph shading
-        // Shd structure: 2 bytes - cvBack (5 bits) + icoBack (5 bits) + icoFore (5 bits) + unused (1 bit)
-        // Simplified: extract icoBack (background color index)
+        // sprmPShd80 — 2-byte SHD80:
+        //   bits 0-4: icoFore, bits 5-9: icoBack, bits 10-15: ipat
         if (operandSize >= 2) {
           const shd = readUint16(data, operandOffset)
-          const icoBack = (shd >> 0) & 0x1F  // bits 0-4: background color index
-          const cvBack = (shd >> 5) & 0x1F   // bits 5-9: cvBack
-          // Map icoBack to color (Word color index 0-15)
-          // If cvBack != 0, use cvBack; otherwise use icoBack
-          const colorIndex = cvBack || icoBack
-          if (colorIndex > 0 && colorIndex <= 16) {
-            fmt.backgroundColor = SHD_COLOR_MAP[colorIndex] || undefined
+          const icoBack = (shd >> 5) & 0x1F
+          if (icoBack > 0 && icoBack <= 16) {
+            fmt.backgroundColor = SHD_COLOR_MAP[icoBack] || undefined
           }
         }
         break
       }
-      case SPRM_P_ILST: {
+      case SPRM_P_ILST_LEGACY: {
         ilst = readInt16(data, operandOffset)
         break
       }
-      case SPRM_P_ILFO: {
+      case SPRM_P_ILFO:
+      case SPRM_P_ILFO_LEGACY: {
         ilfo = readInt16(data, operandOffset)
         break
       }
-      case SPRM_P_DXA_TAB: {
-        // sprmPDxaTab (0x2417) - 可变长度制表位定义
-        // spra=6: 首字节是后续长度（不包括首字节）
-        // 每个制表位定义：dxaTab(2字节) + jcTab(1字节) + tlc(1字节) = 4字节
-        // 简化处理：只提取位置（dxaTab），忽略类型和前导符
-        if (operandSize >= 2 && fmt.tabs === undefined) {
-          fmt.tabs = []
-        }
-        // 首字节是长度计数（不包括首字节本身）
-        const tabCount = operandSize > 1 ? data[operandOffset] : 0
-        // 计算实际制表位数量（每个4字节）
-        const actualTabs = Math.min(tabCount, Math.floor((operandSize - 1) / 4))
-        for (let i = 0; i < actualTabs && fmt.tabs; i++) {
-          const tabOffset = operandOffset + 1 + i * 4
-          if (tabOffset + 2 > data.length) break
-          const dxaTab = readInt16(data, tabOffset)
-          const tabPt = twipsToPt(dxaTab)
-          fmt.tabs.push(tabPt)
+      case SPRM_P_CHG_TABS_PAPX: {
+        // sprmPChgTabsPapx (0xC60D) — PChgTabsPapxOperand:
+        //   cb(1) + cTabsDel(1) + rgdxaDel(2×d) + cTabsAdd(1) + rgdxaAdd(2×a) + rgtbdAdd(1×a)
+        // 简化处理：忽略删除，只提取添加的制表位位置。
+        if (operandSize < 3) break
+        const opEnd = operandOffset + operandSize
+        const cTabsDel = data[operandOffset + 1]
+        const cAddOffset = operandOffset + 2 + cTabsDel * 2
+        if (cAddOffset >= opEnd) break
+        const cTabsAdd = data[cAddOffset]
+        const addBase = cAddOffset + 1
+        for (let i = 0; i < cTabsAdd; i++) {
+          const tabOffset = addBase + i * 2
+          if (tabOffset + 2 > opEnd) break
+          if (fmt.tabs === undefined) fmt.tabs = []
+          fmt.tabs.push(twipsToPt(readInt16(data, tabOffset)))
         }
         break
       }
       case SPRM_P_CHG_TABS: {
-        // sprmPChgTabs (0x2418) - 修改制表位（增量/删除）
-        // spra=6: 首字节是后续长度
-        // 结构：
-        //   - cDelTab (1字节): 要删除的制表位数量
-        //   - rgdxaDelTab (cDelTab * 2字节): 要删除的制表位位置
-        //   - cAddTab (1字节): 要添加的制表位数量
-        //   - rgdxaAddTab (cAddTab * 4字节): 要添加的制表位定义（位置+类型+前导符）
-        // 简化处理：忽略删除操作，只提取添加的制表位位置
-        if (operandSize < 2) break
-        const cDelTab = data[operandOffset + 1]
-        const delTabsOffset = operandOffset + 2
-        const delTabsBytes = cDelTab * 2
-        const cAddTabOffset = delTabsOffset + delTabsBytes
-        if (cAddTabOffset >= data.length) break
-        const cAddTab = data[cAddTabOffset]
-        const addTabsOffset = cAddTabOffset + 1
-        const actualAddTabs = Math.min(cAddTab, Math.floor((operandSize - (cAddTabOffset - operandOffset)) / 4))
-        if (actualAddTabs > 0 && fmt.tabs === undefined) {
-          fmt.tabs = []
-        }
-        for (let i = 0; i < actualAddTabs && fmt.tabs; i++) {
-          const tabOffset = addTabsOffset + i * 4
-          if (tabOffset + 2 > data.length) break
-          const dxaTab = readInt16(data, tabOffset)
-          const tabPt = twipsToPt(dxaTab)
-          // 检查是否已存在（避免重复添加）
-          if (!fmt.tabs.includes(tabPt)) {
-            fmt.tabs.push(tabPt)
-          }
+        // sprmPChgTabs (0xC615) — PChgTabsOperand:
+        //   cb(1) + cTabsDel(1) + rgdxaDel(2×d) + rgdxaClose(2×d)
+        //        + cTabsAdd(1) + rgdxaAdd(2×a) + rgtbdAdd(1×a)
+        // cb=255 表示复杂形式（全部制表位重定义），此处跳过。
+        if (operandSize < 3 || data[operandOffset] === 255) break
+        const opEnd = operandOffset + operandSize
+        const cTabsDel = data[operandOffset + 1]
+        const cAddOffset = operandOffset + 2 + cTabsDel * 4
+        if (cAddOffset >= opEnd) break
+        const cTabsAdd = data[cAddOffset]
+        const addBase = cAddOffset + 1
+        for (let i = 0; i < cTabsAdd; i++) {
+          const tabOffset = addBase + i * 2
+          if (tabOffset + 2 > opEnd) break
+          const tabPt = twipsToPt(readInt16(data, tabOffset))
+          if (fmt.tabs === undefined) fmt.tabs = []
+          if (!fmt.tabs.includes(tabPt)) fmt.tabs.push(tabPt)
         }
         break
       }
       case SPRM_P_F_IN_TABLE: {
-        // sprmPFInTable (0x240C) — toggle (1 byte): paragraph is inside a table.
-        const flag = data[operandOffset] !== 0
-        if (flag) {
+        // sprmPFInTable — toggle (1 byte): paragraph is inside a table.
+        if (data[operandOffset] !== 0) {
           if (!table) table = { inTable: true }
           else table.inTable = true
         }
         break
       }
-      case SPRM_P_TABLE_DEPTH_SPEC:
+      case SPRM_P_F_TTP: {
+        // sprmPFTtp — toggle: this paragraph is a table row-end (TTP) mark.
+        // The row-end mark's PAPX carries the row's TAP SPRMs, so make sure
+        // a table object exists for them to land in.
+        if (data[operandOffset] !== 0) {
+          if (!table) table = { inTable: true }
+          else table.inTable = true
+        }
+        break
+      }
+      case SPRM_P_ITAP: {
+        // sprmPItap — 4-byte nested table depth (1 = top level).
+        const depth = readUint32(data, operandOffset)
+        if (depth > 0 && depth < 16) {
+          if (!table) table = { inTable: true, depth }
+          else table.depth = depth
+        }
+        break
+      }
       case SPRM_P_TABLE_DEPTH_LEGACY: {
-        // sprmPTableDepth — 1 byte: nested table depth (1 = top-level).
-        // 0x2410 is the spec encoding (spra=1); 0x4410 is a legacy/POI variant
-        // whose spra bits encode 2 but the operand is still 1 byte.
-        // getSprmOperandSize forces 1-byte for 0x4410 to keep alignment correct.
+        // Legacy 1-byte table depth (getSprmOperandSize forces 1 byte).
         const depth = data[operandOffset]
         if (depth > 0) {
           if (!table) table = { inTable: true, depth }
@@ -784,31 +844,19 @@ function parsePapxGrpprl(data: Uint8Array, offset: number, size: number): { form
         break
       }
       case SPRM_T_DEF_TABLE: {
-        // sprmTDefTable (0xD608) — variable length:
-        //   byte 0       : cb (后续数据长度，已由 getSprmOperandSize 处理)
-        //   byte 1       : itcMac (列数, 最大 63)
-        //   bytes 2..    : rgdxaCenter[itcMac+1] (列边界, 每个 2 字节)
-        //   bytes 后     : rgtc[itcMac] (单元格属性, 每个 20 字节)
-        // TC 结构 (20 字节):
-        //   bytes 0-3: TCGrpf 位域
-        //     bits 0-2: fVertMerge (0=none, 1=continue, 2=restart)
-        //   bytes 4-7: unused
-        //   bytes 8-11: BrcTop (4 字节)
-        //   bytes 12-15: BrcLeft
-        //   bytes 16-19: BrcBottom
-        //   bytes 20-23: BrcRight
-        // 实际 rgtc 每个元素 20 字节（仅前 4 字节位域 + 16 字节边框）。
-        const cells = parseTDefTable(data, operandOffset, operandSize)
-        if (cells.length > 0) {
+        // sprmTDefTable (0xD608) — 2-byte cb + itcMac + rgdxaCenter[] + rgtc[] (TC80).
+        const def = parseTDefTable(data, operandOffset, operandSize)
+        if (def.cells.length > 0) {
           if (!table) table = { inTable: true }
-          table.cells = cells
+          table.cells = def.cells
+          if (def.indentTwips !== undefined && table.indentTwips === undefined) {
+            table.indentTwips = def.indentTwips
+          }
         }
         break
       }
       case SPRM_T_TABLE_BORDERS: {
-        // sprmTTableBorders (0xD612) — variable length:
-        //   byte 0: cb (后续长度)
-        //   之后: 6 个 Brc 结构 (每个 4 字节)
+        // sprmTTableBorders80 (0xD605) — cb + 6 × BRC80:
         //   顺序: brcTop, brcLeft, brcBottom, brcRight, brcInsideH, brcInsideV
         const borders = parseTTableBorders(data, operandOffset, operandSize)
         if (borders) {
@@ -817,36 +865,21 @@ function parsePapxGrpprl(data: Uint8Array, offset: number, size: number): { form
         }
         break
       }
-      case SPRM_T_JTABLE: {
-        // sprmTJTable (0xD632) — variable length (spra=6):
-        //   byte 0: cb (=1)
-        //   byte 1: justification (0=left, 1=center, 2=right)
-        const payloadStart = operandOffset + 1
-        if (payloadStart < data.length) {
-          const val = data[payloadStart]
-          let justification: TableJustification | undefined
-          if (val === 0) justification = 'left'
-          else if (val === 1) justification = 'center'
-          else if (val === 2) justification = 'right'
-          if (justification) {
-            if (!table) table = { inTable: true }
-            table.justification = justification
-          }
+      case SPRM_T_JC90: {
+        // sprmTJc90 (0x5400) — 2-byte: 0=left, 1=center, 2=right.
+        const val = readUint16(data, operandOffset)
+        let justification: TableJustification | undefined
+        if (val === 0) justification = 'left'
+        else if (val === 1) justification = 'center'
+        else if (val === 2) justification = 'right'
+        if (justification) {
+          if (!table) table = { inTable: true }
+          table.justification = justification
         }
         break
       }
-      case SPRM_T_DXA_TABLE_INDENT: {
-        // sprmTDxaTableIndent (0xD609) — variable length (spra=6):
-        //   byte 0: cb (=2)
-        //   bytes 1-2: dxaIndent (twips, signed)
-        const payloadStart = operandOffset + 1
-        if (payloadStart + 2 <= data.length) {
-          const indent = readUint16(data, payloadStart)
-          if (indent !== 0) {
-            if (!table) table = { inTable: true }
-            table.indentTwips = indent
-          }
-        }
+      case SPRM_T_DEF_TABLE_SHD: {
+        // sprmTDefTableShd80 — cell shading; consumed for alignment, not rendered.
         break
       }
     }
@@ -858,92 +891,69 @@ function parsePapxGrpprl(data: Uint8Array, offset: number, size: number): { form
 }
 
 /**
- * Parse sprmTDefTable operand and extract per-cell info.
+ * Parse the sprmTDefTable operand and extract per-cell info.
  *
- * Layout (MS-DOC §2.6.8 sprmTDefTable):
- *   byte 0       : itcMac (number of columns, max 63)
- *   bytes 1..    : rgdxaCenter[itcMac+1] (column boundaries, 2 bytes each)
- *   bytes 后     : rgtc[itcMac] (cell descriptors, 20 bytes each)
+ * Operand layout (MS-DOC §2.6.3 sprmTDefTable — TDefTableOperand):
+ *   bytes 0-1    : cb (2 bytes — payload length + 1, handled by getSprmOperandSize)
+ *   byte  2      : itcMac (number of columns, max 63)
+ *   bytes 3..    : rgdxaCenter[itcMac+1] (column boundaries, int16 twips)
+ *   bytes 后     : rgtc[itcMac] (TC80 cell descriptors, 20 bytes each)
  *
- * TC structure (20 bytes):
- *   bytes 0-3 : TCGrpf (bit field)
- *     bits 0-2: fVertMerge (0=none, 1=continue, 2=restart)
- *     bits 3-5: fHorzMerge (0=none, 1=continue, 2=restart)
- *   bytes 4-7 : BrcTop (4 bytes)
- *   bytes 8-11: BrcLeft (4 bytes)
- *   bytes 12-15: BrcBottom (4 bytes)
- *   bytes 16-19: BrcRight (4 bytes)
- *
- * Brc structure (4 bytes):
- *   bits 0-7: dptLineWidth (1/8 pt)
- *   bits 8-11: brcType
- *   bits 12-15: ico (color index)
+ * TC80 structure (20 bytes):
+ *   bytes 0-1 : grfTc bit field —
+ *     bit 0: fFirstMerged (horizontal merge start)
+ *     bit 1: fMerged      (horizontal merge continuation)
+ *     bit 5: fVertMerge   (vertical merge member)
+ *     bit 6: fVertRestart (vertical merge start)
+ *   bytes 2-3 : wWidth (preferred cell width)
+ *   bytes 4-7 / 8-11 / 12-15 / 16-19: brcTop/Left/Bottom/Right (BRC80)
  */
-function parseTDefTable(data: Uint8Array, operandOffset: number, operandSize: number): TableCellInfo[] {
-  if (operandSize < 1) return []
-  const payloadStart = operandOffset + 1
-  if (payloadStart >= data.length) return []
+function parseTDefTable(data: Uint8Array, operandOffset: number, operandSize: number): { cells: TableCellInfo[]; indentTwips?: number } {
+  // operandSize includes the 2-byte cb field; payload starts right after it.
+  if (operandSize < 3) return { cells: [] }
+  const payloadStart = operandOffset + 2
+  const payloadEnd = operandOffset + operandSize
+  if (payloadStart >= data.length) return { cells: [] }
   const itcMac = data[payloadStart]
-  if (itcMac === 0 || itcMac > 63) return []
+  if (itcMac === 0 || itcMac > 63) return { cells: [] }
 
-  const rgdxaEnd = payloadStart + 1 + (itcMac + 1) * 2
-  if (rgdxaEnd > operandOffset + operandSize + 1) return []
+  const rgdxaStart = payloadStart + 1
+  const rgtcStart = rgdxaStart + (itcMac + 1) * 2
+  if (rgtcStart > payloadEnd) return { cells: [] }
 
-  const rgtcStart = rgdxaEnd
-  const availableBytes = (operandOffset + operandSize + 1) - rgtcStart
-  const tcSize = availableBytes >= itcMac * 20 ? 20 : (availableBytes >= itcMac * 18 ? 18 : 0)
-  if (tcSize === 0) return []
-
-  const columnWidths: number[] = []
-  for (let i = 0; i < itcMac; i++) {
-    const xaOffset = payloadStart + 1 + i * 2
-    const xaNextOffset = payloadStart + 1 + (i + 1) * 2
-    if (xaNextOffset + 2 <= data.length) {
-      const xa = readUint16(data, xaOffset)
-      const xaNext = readUint16(data, xaNextOffset)
-      columnWidths.push(xaNext - xa)
-    } else {
-      columnWidths.push(0)
-    }
-  }
+  // Table indent: the first column boundary is the row's left edge (twips).
+  const dxaLeft = readInt16(data, rgdxaStart)
+  const indentTwips = dxaLeft > 0 ? dxaLeft : undefined
 
   const cells: TableCellInfo[] = []
   for (let i = 0; i < itcMac; i++) {
-    const tcOffset = rgtcStart + i * tcSize
-    if (tcOffset >= data.length) break
-
-    const tcGrpf = readUint32(data, tcOffset)
-    const fVertMerge = tcGrpf & 0x07
-    const fHorzMerge = (tcGrpf >> 3) & 0x07
-
-    let verticalMerge: 'none' | 'restart' | 'continue' = 'none'
-    if (fVertMerge === 1) verticalMerge = 'continue'
-    else if (fVertMerge === 2) verticalMerge = 'restart'
-
-    let horizontalMerge: 'none' | 'restart' | 'continue' = 'none'
-    if (fHorzMerge === 1) horizontalMerge = 'continue'
-    else if (fHorzMerge === 2) horizontalMerge = 'restart'
+    const tcOffset = rgtcStart + i * 20
+    // rgtc may be truncated — Word omits trailing TCs it considers default.
+    const hasTc = tcOffset + 20 <= payloadEnd && tcOffset + 20 <= data.length
 
     const cellInfo: TableCellInfo = {
       column: i,
-      verticalMerge,
+      verticalMerge: 'none',
     }
 
-    if (horizontalMerge !== 'none') {
-      cellInfo.horizontalMerge = horizontalMerge
-    }
+    if (hasTc) {
+      const grfTc = readUint16(data, tcOffset)
+      const fFirstMerged = (grfTc & 0x01) !== 0
+      const fMerged = (grfTc & 0x02) !== 0
+      const fVertMerge = (grfTc & 0x20) !== 0
+      const fVertRestart = (grfTc & 0x40) !== 0
 
-    if (tcSize >= 20) {
-      const brcTop = readUint32(data, tcOffset + 4)
-      const brcLeft = readUint32(data, tcOffset + 8)
-      const brcBottom = readUint32(data, tcOffset + 12)
-      const brcRight = readUint32(data, tcOffset + 16)
+      if (fVertRestart) cellInfo.verticalMerge = 'restart'
+      else if (fVertMerge) cellInfo.verticalMerge = 'continue'
+
+      if (fFirstMerged) cellInfo.horizontalMerge = 'restart'
+      else if (fMerged) cellInfo.horizontalMerge = 'continue'
 
       const borders: TableCellInfo['borders'] = {}
-      const top = brcToBorderStyle(brcTop)
-      const left = brcToBorderStyle(brcLeft)
-      const bottom = brcToBorderStyle(brcBottom)
-      const right = brcToBorderStyle(brcRight)
+      const top = brc80ToBorderStyle(data, tcOffset + 4)
+      const left = brc80ToBorderStyle(data, tcOffset + 8)
+      const bottom = brc80ToBorderStyle(data, tcOffset + 12)
+      const right = brc80ToBorderStyle(data, tcOffset + 16)
       if (top) borders.top = top
       if (left) borders.left = left
       if (bottom) borders.bottom = bottom
@@ -955,14 +965,22 @@ function parseTDefTable(data: Uint8Array, operandOffset: number, operandSize: nu
 
     cells.push(cellInfo)
   }
-  return cells
+  return { cells, indentTwips }
 }
 
-function brcToBorderStyle(brcDword: number): TableBorderStyle | null {
-  if (brcDword === 0) return null
-  const lineWidth = brcDword & 0xFF
-  const borderType = (brcDword >> 8) & 0x0F
-  const colorIndex = (brcDword >> 12) & 0x0F
+/**
+ * Decode a 4-byte BRC80 (border code) at `offset`:
+ *   byte 0: dptLineWidth (1/8 pt)
+ *   byte 1: brcType (0 = none)
+ *   byte 2: ico (classic color index)
+ *   byte 3: dptSpace + fShadow/fFrame flags (ignored)
+ */
+function brc80ToBorderStyle(data: Uint8Array, offset: number): TableBorderStyle | null {
+  if (offset + 4 > data.length) return null
+  const lineWidth = data[offset]
+  const borderType = data[offset + 1]
+  const colorIndex = data[offset + 2]
+  if (borderType === 0 && lineWidth === 0 && colorIndex === 0) return null
   const style: TableBorderStyle = {}
   if (lineWidth > 0) style.lineWidth = lineWidth
   if (borderType > 0) style.borderType = borderType
@@ -971,17 +989,12 @@ function brcToBorderStyle(brcDword: number): TableBorderStyle | null {
 }
 
 /**
- * Parse sprmTTableBorders operand and extract the 6 table borders.
+ * Parse the sprmTTableBorders80 operand and extract the 6 table borders.
  *
- * Layout (MS-DOC §2.6.8 sprmTTableBorders):
- *   byte 0: cb (后续长度, 已由 getSprmOperandSize 处理)
- *   之后: 6 个 Brc 结构 (每个 4 字节)
+ * Layout (MS-DOC §2.6.3 sprmTTableBorders80):
+ *   byte 0: cb (后续长度 = 24, 已由 getSprmOperandSize 处理)
+ *   之后: 6 个 BRC80 结构 (每个 4 字节)
  *   顺序: brcTop, brcLeft, brcBottom, brcRight, brcInsideH, brcInsideV
- *
- * Brc 结构 (4 字节):
- *   bits 0-7: dptLineWidth (1/8 pt)
- *   bits 8-11: brcType (边框类型)
- *   bits 12-15: ico (颜色索引)
  */
 function parseTTableBorders(data: Uint8Array, operandOffset: number, operandSize: number): TableBorders | null {
   // operandSize includes cb byte; payload starts at operandOffset+1.
@@ -992,17 +1005,8 @@ function parseTTableBorders(data: Uint8Array, operandOffset: number, operandSize
   const borders: TableBorders = {}
   const order: Array<keyof TableBorders> = ['top', 'left', 'bottom', 'right', 'insideH', 'insideV']
   for (let i = 0; i < 6; i++) {
-    const brcOffset = payloadStart + i * 4
-    const brcDword = readUint32(data, brcOffset)
-    if (brcDword === 0) continue
-    const lineWidth = brcDword & 0xFF
-    const borderType = (brcDword >> 8) & 0x0F
-    const colorIndex = (brcDword >> 12) & 0x0F
-    const style: TableBorderStyle = {}
-    if (lineWidth > 0) style.lineWidth = lineWidth
-    if (borderType > 0) style.borderType = borderType
-    if (colorIndex > 0) style.colorIndex = colorIndex
-    if (Object.keys(style).length > 0) {
+    const style = brc80ToBorderStyle(data, payloadStart + i * 4)
+    if (style) {
       borders[order[i]] = style
     }
   }

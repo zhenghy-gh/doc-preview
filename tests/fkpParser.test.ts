@@ -37,10 +37,10 @@ function buildChpxFkpStream(): Uint8Array {
   u32(view, base + 0, 1024)
   u32(view, base + 4, 1034)
   u32(view, base + 8, 1044)
-  // CHPX payload: cb=3, grpprl = sprmCFBold(0x0801) + operand 1
+  // CHPX payload: cb=3, grpprl = sprmCFBold(0x0835) + operand 1
   // Placed at word offset 250 → byte 500
   stream[base + 500] = 3
-  stream[base + 501] = 0x01
+  stream[base + 501] = 0x35
   stream[base + 502] = 0x08
   stream[base + 503] = 1
   // rgb[2] right after rgfc
@@ -52,7 +52,7 @@ function buildChpxFkpStream(): Uint8Array {
 
 /**
  * Build a WordDocument stream with a single PapxFkp at page 1.
- * Two paragraphs: [1024,1034) centered (sprmPJc=1) istd=5, [1034,1044) no PAPX.
+ * Two paragraphs: [1024,1034) centered (sprmPJc80=1) istd=5, [1034,1044) no PAPX.
  */
 function buildPapxFkpStream(): Uint8Array {
   const stream = new Uint8Array(1024)
@@ -65,11 +65,11 @@ function buildPapxFkpStream(): Uint8Array {
   u32(view, base + 8, 1044)
   // PapxInFkp at word offset 248 → byte 496:
   //   cb=3 → payload 2*3-1 = 5 bytes: istd(2) + grpprl(3)
-  //   grpprl = sprmPJc(0x2401) + operand 1 (center)
+  //   grpprl = sprmPJc80(0x2403) + operand 1 (center)
   stream[base + 496] = 3
   stream[base + 497] = 5    // istd low byte
   stream[base + 498] = 0    // istd high byte
-  stream[base + 499] = 0x01
+  stream[base + 499] = 0x03
   stream[base + 500] = 0x24
   stream[base + 501] = 1
   // rgbx[2] (13 bytes each), bOffset is byte 0 of each entry
@@ -159,12 +159,12 @@ describe('FKP parsing (spec-level bin table → FKP pages)', () => {
       const wordDoc = buildPapxFkpStream()
       const base = 512
       // Rewrite the PapxInFkp with the cb==0 form: cb=0, cb'=3 → payload 6
-      // bytes: istd(2) + grpprl(4) = sprmPJc + jc(2=right) + padding sprm skipped
+      // bytes: istd(2) + grpprl(4) = sprmPJc80 + jc(2=right) + trailing pad
       wordDoc[base + 496] = 0
       wordDoc[base + 497] = 3 // cb' → payload 6 bytes
       wordDoc[base + 498] = 7 // istd low
       wordDoc[base + 499] = 0 // istd high
-      wordDoc[base + 500] = 0x01
+      wordDoc[base + 500] = 0x03
       wordDoc[base + 501] = 0x24
       wordDoc[base + 502] = 2 // right
       wordDoc[base + 503] = 0 // trailing pad
