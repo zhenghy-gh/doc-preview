@@ -402,14 +402,12 @@ export function parseChpxGrpprlWithFont(data: Uint8Array, offset: number, size: 
         }
         break
       }
-      case SPRM_C_KERN: {
-        // sprmCHpsKern — kerning threshold（半磅） → 实际磅数 = kern / 2
-        const kern = readUint16(data, operandOffset)
-        if (kern > 0) {
-          fmt.letterSpacing = kern / 2
-        }
+      case SPRM_C_KERN:
+        // sprmCHpsKern is the kerning *threshold* (apply kerning when font
+        // size ≥ hps/2), not a letter-spacing amount. Rendering it as
+        // letterSpacing stretched heading styles badly, so just consume it.
+        // Actual letter spacing comes from sprmCDxaSpace above.
         break
-      }
       case SPRM_C_DXA_SPACE: {
         // sprmCDxaSpace: 字符间距（缇） → 实际磅数 = dxaSpace / 20
         const dxaSpace = readInt16(data, operandOffset)

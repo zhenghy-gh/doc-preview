@@ -146,6 +146,179 @@ function readUtf16leString(data: Uint8Array, offset: number, byteLength: number)
  */
 export function parseStylesheet(data: Uint8Array, fc: number, lcb: number): StyleDefinition[] {
   if (lcb <= 0 || fc < 0 || fc + lcb > data.length) return []
+  const end = fc + lcb
+
+  // ---- Spec path (MS-DOC §2.9.271): STSH = LPStshi + rglpstd ----
+  // LPStshi: cbStshi (2) + STSHI (cbStshi bytes).
+  // STSHI starts with StshiF: cstd (2) + cbSTDBaseInFile (2) + flags…
+  // cbSTDBaseInFile is 8 (Word 6/95), 10 (Word 97-2003) or 18 (post-2000
+  // extension); anything outside that range means this is not a spec STSH
+  // (e.g. our synthetic legacy fixtures) and we fall back to the heuristic.
+  const cbStshi = readUint16(data, fc)
+  if (cbStshi >= 6 && fc + 2 + cbStshi <= end) {
+    const stshi = fc + 2
+    const cstd = readUint16(data, stshi)
+    const cbStdBase = readUint16(data, stshi + 2)
+    if (cstd > 0 && cstd <= 10000 && cbStdBase >= 8 && cbStdBase <= 32) {
+      const styles = parseSpecStds(data, fc + 2 + cbStshi, end, cstd, cbStdBase)
+      if (styles.length > 0) {
+        fillBuiltinStyles(styles)
+        return styles
+      }
+    }
+  }
+
+  return parseLegacyStylesheet(data, fc, lcb)
+}
+
+/** Backfill well-known built-in styles when the parsed table is sparse. */
+function fillBuiltinStyles(styles: StyleDefinition[]): void {
+  if (styles.length >= 10) return
+  for (let i = 0; i < 50; i++) {
+    const builtin = BUILTIN_STYLES[i]
+    if (builtin && !styles.find(s => s.istd === i)) {
+      styles.push({
+        istd: i,
+        name: builtin.name,
+        type: builtin.type as StyleDefinition['type'],
+      })
+    }
+  }
+}
+
+/**
+ * Parse the rglpstd array of a spec-level STSH.
+ *
+ * Each LPStd is cbStd (2 bytes) + STD (cbStd bytes); cbStd = 0 marks an
+ * empty slot. STD layout (§2.9.259):
+ *   StdfBase (cbSTDBaseInFile bytes) — bit fields:
+ *     word 0: sti (bits 0-11)
+ *     word 1: stk (bits 0-3, style kind) + istdBase (bits 4-15, inheritance)
+ *     word 2: cupx (bits 0-3) + istdNext (bits 4-15)
+ *     word 3: bchUpe, word 4: grfstd
+ *   xstzName — Xstz: cch (2) + UTF-16LE chars + null terminator (2)
+ *   grLPUpxSw — cupx UPX chunks, each 2-byte aligned relative to STD start:
+ *     paragraph style (stk=1): UpxPapx (cbUpx + istd(2) + grpprlPapx)
+ *                              then UpxChpx (cbUpx + grpprlChpx)
+ *     character style (stk=2): UpxChpx only
+ */
+function parseSpecStds(
+  data: Uint8Array,
+  start: number,
+  end: number,
+  cstd: number,
+  cbStdBase: number,
+): StyleDefinition[] {
+  const styles: StyleDefinition[] = []
+  let pos = start
+
+  for (let i = 0; i < cstd && pos + 2 <= end; i++) {
+    const cbStd = readUint16(data, pos)
+    pos += 2
+    if (cbStd === 0) {
+      // Empty slot — keep the istd numbering aligned with a minimal entry.
+      const builtin = BUILTIN_STYLES[i]
+      styles.push({
+        istd: i,
+        name: builtin?.name || `Style ${i}`,
+        type: (builtin?.type || 'unknown') as StyleDefinition['type'],
+      })
+      continue
+    }
+    if (pos + cbStd > end || cbStd < cbStdBase) break
+
+    const stdStart = pos
+    const stdEnd = stdStart + cbStd
+
+    const w1 = readUint16(data, stdStart + 2) // stk + istdBase
+    const w2 = readUint16(data, stdStart + 4) // cupx + istdNext
+    const stk = w1 & 0x0F
+    const istdBase = (w1 >> 4) & 0x0FFF
+    const cupx = w2 & 0x0F
+
+    let styleType: StyleDefinition['type'] = 'unknown'
+    if (stk === 1) styleType = 'paragraph'
+    else if (stk === 2) styleType = 'character'
+    else if (stk === 3) styleType = 'table'
+    else if (stk === 4) styleType = 'numbering'
+
+    // xstzName
+    let p = stdStart + cbStdBase
+    let name = ''
+    if (p + 2 <= stdEnd) {
+      const cch = readUint16(data, p)
+      p += 2
+      if (cch > 0 && cch < 256 && p + cch * 2 <= stdEnd) {
+        name = readUtf16leString(data, p, cch * 2)
+      }
+      p += cch * 2 + 2 // chars + null terminator
+    }
+
+    // grLPUpxSw — each UPX is 2-byte aligned relative to the STD start.
+    if ((p - stdStart) & 1) p++
+
+    let charFormat: Partial<CharacterFormat> | undefined
+    let paraFormat: Partial<ParagraphFormat> | undefined
+    let fontIndex: number | undefined
+
+    if (stk === 1 && cupx >= 1 && p + 2 <= stdEnd) {
+      // UpxPapx: cbUpx (2) + istd (2) + grpprlPapx
+      const cbUpx = readUint16(data, p)
+      if (cbUpx >= 2 && p + 2 + cbUpx <= stdEnd) {
+        const grpprlSize = cbUpx - 2
+        if (grpprlSize > 0) {
+          paraFormat = parsePapxGrpprl(data, p + 4, grpprlSize).format
+        }
+        p += 2 + cbUpx
+        if ((p - stdStart) & 1) p++
+        // UpxChpx: cbUpx (2) + grpprlChpx (no istd prefix)
+        if (cupx >= 2 && p + 2 <= stdEnd) {
+          const cbChpx = readUint16(data, p)
+          if (cbChpx > 0 && p + 2 + cbChpx <= stdEnd) {
+            const result = parseChpxGrpprlWithFont(data, p + 2, cbChpx)
+            charFormat = result.format
+            fontIndex = result.fontIndex
+          }
+        }
+      }
+    } else if (stk === 2 && cupx >= 1 && p + 2 <= stdEnd) {
+      const cbChpx = readUint16(data, p)
+      if (cbChpx > 0 && p + 2 + cbChpx <= stdEnd) {
+        const result = parseChpxGrpprlWithFont(data, p + 2, cbChpx)
+        charFormat = result.format
+        fontIndex = result.fontIndex
+      }
+    }
+
+    const builtin = BUILTIN_STYLES[i]
+    const styleDef: StyleDefinition = {
+      istd: i,
+      name: name || builtin?.name || `Style ${i}`,
+      type: styleType,
+    }
+    if (istdBase !== 0x0FFF && istdBase !== i) {
+      styleDef.istdNext = istdBase
+    }
+    if (charFormat && Object.keys(charFormat).length > 0) {
+      styleDef.charFormat = charFormat
+    }
+    if (paraFormat && Object.keys(paraFormat).length > 0) {
+      styleDef.paraFormat = paraFormat
+    }
+    if (fontIndex !== undefined) {
+      styleDef.fontIndex = fontIndex
+    }
+    styles.push(styleDef)
+
+    pos = stdEnd
+    if (cbStd & 1) pos++ // LPStd entries are 2-byte aligned
+  }
+
+  return styles
+}
+
+function parseLegacyStylesheet(data: Uint8Array, fc: number, lcb: number): StyleDefinition[] {
+  if (lcb <= 0 || fc < 0 || fc + lcb > data.length) return []
 
   const styles: StyleDefinition[] = []
 
