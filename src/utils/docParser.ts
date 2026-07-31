@@ -33,7 +33,8 @@ import { isTableRowText } from './tableText'
 import { extractImagesFromStream, imagesToDataUrls } from './imageExtractor'
 import { extractPicturesFromDataStream, parsePicfAt } from './pictureParser'
 import type { ParsedPicture } from './pictureParser'
-import { parseChpxRuns, parsePapxRuns, mergeCharFormatForParagraph } from './formatParser'
+import { parseChpxRuns, parsePapxRuns, parseChpxRunsFromFkp, parsePapxRunsFromFkp, mergeCharFormatForParagraph } from './formatParser'
+import type { PieceFcRange } from './formatParser'
 import type { ChpxRun, PapxRun } from './formatParser'
 import { parseStylesheet, getHeadingLevel, detectStyleSet } from './styleParser'
 import type { StyleDefinition, StyleSetInfo } from './styleParser'
@@ -1037,6 +1038,28 @@ export class DocParser {
     const hasValidFibOffsets = fib.lcbStshf > 0 || fib.lcbPlcfBteChpx > 0 || fib.lcbPlcfBtePapx > 0
     const isLibwvFile = !hasValidFibOffsets && tableData.length > 100
 
+    // Lazily-built piece table for spec-level FKP parsing (FC→CP conversion).
+    // Real Word 97+ bin tables reference 512-byte FKPs in the WordDocument
+    // stream instead of storing grpprls inline, so when the legacy inline
+    // parse yields nothing we retry via FKPs.
+    let fkpPieces: PieceFcRange[] | null = null
+    const getFkpPieces = (): PieceFcRange[] => {
+      if (fkpPieces !== null) return fkpPieces
+      fkpPieces = []
+      if (wordDocData && fib.lcbClx > 0) {
+        const clxData = this.readClxData(fib, wordDocData, directory)
+        if (clxData) {
+          fkpPieces = this.parseClxPieces(clxData).map(p => ({
+            cpStart: p.cpStart,
+            cpEnd: p.cpEnd,
+            fcStart: p.fcValue,
+            compressed: p.fCompressed,
+          }))
+        }
+      }
+      return fkpPieces
+    }
+
     try {
       if (fib.lcbPlcfBteChpx > 0 &&
           fib.fcPlcfBteChpx + fib.lcbPlcfBteChpx <= tableData.length) {
@@ -1044,6 +1067,14 @@ export class DocParser {
         if (runs.length > 0) {
           logger.info(`解析到 ${runs.length} 个 CHPX 字符格式运行`)
           chpxRuns.push(...runs)
+        } else if (wordDocData) {
+          const fkpRuns = parseChpxRunsFromFkp(
+            tableData, wordDocData, fib.fcPlcfBteChpx, fib.lcbPlcfBteChpx, getFkpPieces(),
+          )
+          if (fkpRuns.length > 0) {
+            logger.info(`FKP 路径解析到 ${fkpRuns.length} 个 CHPX 字符格式运行`)
+            chpxRuns.push(...fkpRuns)
+          }
         }
       }
     } catch (e) {
@@ -1093,6 +1124,14 @@ export class DocParser {
         if (runs.length > 0) {
           logger.info(`解析到 ${runs.length} 个 PAPX 段落格式运行`)
           papxRuns.push(...runs)
+        } else if (wordDocData) {
+          const fkpRuns = parsePapxRunsFromFkp(
+            tableData, wordDocData, fib.fcPlcfBtePapx, fib.lcbPlcfBtePapx, getFkpPieces(),
+          )
+          if (fkpRuns.length > 0) {
+            logger.info(`FKP 路径解析到 ${fkpRuns.length} 个 PAPX 段落格式运行`)
+            papxRuns.push(...fkpRuns)
+          }
         }
       }
     } catch (e) {
@@ -1415,9 +1454,21 @@ export class DocParser {
     const parts = text.split(/\n/)
     for (let i = 0; i < parts.length; i++) {
       const paraText = parts[i]
-      const paraLen = paraText.length
-      allParagraphs.push({ text: paraText, cpStart: cp, originalIndex: i })
-      cp += paraLen + 1 // +1 for the \n (paragraph mark)
+      // Word table rows end with a TTP mark (0x07) instead of a paragraph
+      // mark (0x0D), so whole tables arrive glued to the following text
+      // inside a single \n-part. Split after each row boundary (two
+      // consecutive cell marks) so every row becomes its own paragraph and
+      // can match its PAPX run — the run that carries the row's TAP
+      // (sprmTDefTable: borders, merges, widths).
+      const subParts = paraText.includes('\u0007\u0007')
+        ? paraText.split(/(?<=\u0007\u0007)/)
+        : [paraText]
+      let subOffset = 0
+      for (const subText of subParts) {
+        allParagraphs.push({ text: subText, cpStart: cp + subOffset, originalIndex: i })
+        subOffset += subText.length
+      }
+      cp += paraText.length + 1 // +1 for the \n (paragraph mark)
     }
 
     const result: any[] = []
@@ -1457,8 +1508,37 @@ export class DocParser {
           _cpStart: para.cpStart, // 保留 CP 位置供超链接映射
         }
 
-        if (papxRuns.length > 0 && para.originalIndex < papxRuns.length) {
-          const papx = papxRuns[para.originalIndex]
+        // Match the paragraph to its PAPX run. Prefer CP matching: a PAPX
+        // run covers [cpStart, cpEnd) including the paragraph mark, so the
+        // run containing the mark CP (cpStart + text length) is the right
+        // one. Positional (index) alignment is kept as a fallback for
+        // non-standard files whose runs carry unrelated coordinates — but
+        // it breaks whenever the \n-split count differs from the real
+        // paragraph count (e.g. table cell/row marks are 0x07, not 0x0D).
+        let papx: PapxRun | undefined
+        if (papxRuns.length > 0) {
+          // For a normal paragraph the mark (0x0D → \n) sits just past the
+          // text. A table row keeps its TTP mark (0x07) as its own last
+          // character, so probe that position instead — its run carries the
+          // row's TAP.
+          const markCp = para.text.endsWith('\u0007')
+            ? para.cpStart + para.text.length - 1
+            : para.cpStart + para.text.length
+          // Runs are sorted by cpStart: binary-search the run containing markCp.
+          let lo = 0
+          let hi = papxRuns.length - 1
+          while (lo <= hi) {
+            const mid = (lo + hi) >> 1
+            const run = papxRuns[mid]
+            if (run.cpEnd <= markCp) lo = mid + 1
+            else if (run.cpStart > markCp) hi = mid - 1
+            else { papx = run; break }
+          }
+          if (!papx && para.originalIndex < papxRuns.length) {
+            papx = papxRuns[para.originalIndex]
+          }
+        }
+        if (papx) {
           if (papx.format && Object.keys(papx.format).length > 0) {
             newPara.paraFormat = {
               ...newPara.paraFormat,

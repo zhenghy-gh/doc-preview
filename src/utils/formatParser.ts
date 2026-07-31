@@ -1105,3 +1105,207 @@ export function mergeCharFormatForParagraph(
 
   return result
 }
+
+// ---- Spec-level FKP parsing (MS-DOC §2.4.2 Retrieving Text-related Formatting) ----
+//
+// Real Word 97+ files do NOT store CHPX/PAPX grpprls inline in the bin tables.
+// Instead PlcfBteChpx / PlcfBtePapx map FC ranges to 512-byte Formatted Disk
+// Pages (FKPs) inside the WordDocument stream:
+//
+//   PlcBteChpx = aFC[(n+1)] (4 bytes each) + aPnBteChpx[n] (4 bytes each)
+//     → byte size = 8n + 4 → n = (lcb - 4) / 8
+//   PnFkpChpx/PnFkpPapx: bits 0-21 = pn; FKP is at pn*512 in WordDocument.
+//
+//   ChpxFkp (512 bytes): rgfc[crun+1] (4-byte FCs) + rgb[crun] (1 byte each,
+//     word offset of CHPX within the FKP; 0 = no CHPX) + crun at byte 511.
+//     CHPX at rgb*2: cb (1 byte) + grpprl[cb].
+//
+//   PapxFkp (512 bytes): rgfc[cpara+1] + rgbx[cpara] (13 bytes each: bOffset
+//     1 byte + PHE 12 bytes) + cpara at byte 511. PapxInFkp at bOffset*2:
+//     cb (1 byte); if cb != 0 the payload is 2*cb-1 bytes (istd + grpprl);
+//     if cb == 0 a second byte cb' follows and the payload is 2*cb' bytes.
+//
+// FCs are byte offsets in the WordDocument stream; they are converted to CPs
+// via the piece table (each piece maps [fcStart, fcEnd) ↔ [cpStart, cpEnd)
+// with 1 or 2 bytes per character depending on fCompressed).
+
+/** Minimal piece-table info needed to convert FCs to CPs. */
+export interface PieceFcRange {
+  cpStart: number
+  cpEnd: number
+  /** Byte offset of the piece's first character in the WordDocument stream. */
+  fcStart: number
+  /** true = 8-bit (1 byte/char), false = UTF-16LE (2 bytes/char). */
+  compressed: boolean
+}
+
+/**
+ * Convert an FC (byte) range into CP ranges using the piece table.
+ * A single FC range may span multiple pieces; one CP range is returned per
+ * overlapping piece. Pieces must be the full piece table (all stories).
+ */
+function fcRangeToCpRanges(
+  fcStart: number,
+  fcEnd: number,
+  pieces: PieceFcRange[],
+): Array<{ cpStart: number; cpEnd: number }> {
+  const out: Array<{ cpStart: number; cpEnd: number }> = []
+  for (const p of pieces) {
+    const bytesPerChar = p.compressed ? 1 : 2
+    const pieceFcEnd = p.fcStart + (p.cpEnd - p.cpStart) * bytesPerChar
+    const s = Math.max(fcStart, p.fcStart)
+    const e = Math.min(fcEnd, pieceFcEnd)
+    if (e <= s) continue
+    const cpS = p.cpStart + Math.floor((s - p.fcStart) / bytesPerChar)
+    const cpE = p.cpStart + Math.ceil((e - p.fcStart) / bytesPerChar)
+    if (cpE > cpS) out.push({ cpStart: cpS, cpEnd: cpE })
+  }
+  return out
+}
+
+/** Read the bin table (PlcBteChpx/PlcBtePapx) and return FKP page numbers with their FC ranges. */
+function parseBinTable(
+  tableData: Uint8Array,
+  fc: number,
+  lcb: number,
+): Array<{ fcStart: number; fcEnd: number; pn: number }> {
+  if (lcb < 12 || fc < 0 || fc + lcb > tableData.length) return []
+  // n = (lcb - 4) / 8; tolerate trailing padding by flooring.
+  const n = Math.floor((lcb - 4) / 8)
+  if (n <= 0 || n > 100000) return []
+
+  const entries: Array<{ fcStart: number; fcEnd: number; pn: number }> = []
+  for (let i = 0; i < n; i++) {
+    const fcStart = readUint32(tableData, fc + i * 4)
+    const fcEnd = readUint32(tableData, fc + (i + 1) * 4)
+    if (fcEnd <= fcStart) return [] // aFC must be strictly increasing
+    const pnRaw = readUint32(tableData, fc + (n + 1) * 4 + i * 4)
+    const pn = pnRaw & 0x3FFFFF
+    entries.push({ fcStart, fcEnd, pn })
+  }
+  return entries
+}
+
+/**
+ * Parse CHPX runs the spec-level way: bin table → ChpxFkp pages → grpprls,
+ * FC ranges converted to CPs via the piece table.
+ *
+ * @param tableData - The table stream (0Table/1Table).
+ * @param wordDocData - The WordDocument stream (FKPs live here).
+ * @param fc/lcb - fcPlcfBteChpx / lcbPlcfBteChpx from the FIB.
+ * @param pieces - Full piece table for FC→CP conversion.
+ */
+export function parseChpxRunsFromFkp(
+  tableData: Uint8Array,
+  wordDocData: Uint8Array,
+  fc: number,
+  lcb: number,
+  pieces: PieceFcRange[],
+): ChpxRun[] {
+  if (pieces.length === 0) return []
+  const bins = parseBinTable(tableData, fc, lcb)
+  if (bins.length === 0) return []
+
+  const runs: ChpxRun[] = []
+  for (const bin of bins) {
+    const base = bin.pn * 512
+    if (base + 512 > wordDocData.length) continue
+    const crun = wordDocData[base + 511]
+    // rgfc needs (crun+1)*4 bytes and rgb needs crun bytes; all must fit
+    // before the crun byte itself.
+    if (crun === 0 || (crun + 1) * 4 + crun > 511) continue
+
+    for (let i = 0; i < crun; i++) {
+      const fcStart = readUint32(wordDocData, base + i * 4)
+      const fcEnd = readUint32(wordDocData, base + (i + 1) * 4)
+      if (fcEnd <= fcStart) continue
+      const rgb = wordDocData[base + (crun + 1) * 4 + i]
+      if (rgb === 0) continue // no CHPX → inherits from paragraph style
+      const chpxOffset = base + rgb * 2
+      if (chpxOffset >= base + 511) continue
+      const cb = wordDocData[chpxOffset]
+      if (cb === 0 || chpxOffset + 1 + cb > base + 512) continue
+
+      const { format, fontIndex, revision, isSpecial, fcPic } =
+        parseChpxGrpprlWithFont(wordDocData, chpxOffset + 1, cb)
+      if (Object.keys(format).length === 0 && fontIndex === undefined &&
+          !revision && !isSpecial && fcPic === undefined) continue
+
+      for (const cpRange of fcRangeToCpRanges(fcStart, fcEnd, pieces)) {
+        const run: ChpxRun = { cpStart: cpRange.cpStart, cpEnd: cpRange.cpEnd, format, fontIndex, revision }
+        if (isSpecial) run.isSpecial = true
+        if (fcPic !== undefined) run.fcPic = fcPic
+        runs.push(run)
+      }
+    }
+  }
+
+  runs.sort((a, b) => a.cpStart - b.cpStart || a.cpEnd - b.cpEnd)
+  return runs
+}
+
+/**
+ * Parse PAPX runs the spec-level way: bin table → PapxFkp pages → grpprls,
+ * FC ranges converted to CPs via the piece table.
+ */
+export function parsePapxRunsFromFkp(
+  tableData: Uint8Array,
+  wordDocData: Uint8Array,
+  fc: number,
+  lcb: number,
+  pieces: PieceFcRange[],
+): PapxRun[] {
+  if (pieces.length === 0) return []
+  const bins = parseBinTable(tableData, fc, lcb)
+  if (bins.length === 0) return []
+
+  const runs: PapxRun[] = []
+  for (const bin of bins) {
+    const base = bin.pn * 512
+    if (base + 512 > wordDocData.length) continue
+    const cpara = wordDocData[base + 511]
+    // rgfc: (cpara+1)*4 bytes; rgbx (BxPap): 13 bytes each.
+    if (cpara === 0 || (cpara + 1) * 4 + cpara * 13 > 511) continue
+
+    for (let i = 0; i < cpara; i++) {
+      const fcStart = readUint32(wordDocData, base + i * 4)
+      const fcEnd = readUint32(wordDocData, base + (i + 1) * 4)
+      if (fcEnd <= fcStart) continue
+      const bOffset = wordDocData[base + (cpara + 1) * 4 + i * 13]
+      if (bOffset === 0) continue // no PAPX → style defaults
+      let papxOffset = base + bOffset * 2
+      if (papxOffset >= base + 511) continue
+
+      // PapxInFkp: cb (1 byte). cb != 0 → payload 2*cb-1 bytes; cb == 0 →
+      // read cb' (next byte), payload 2*cb' bytes. Payload = istd(2) + grpprl.
+      let cb = wordDocData[papxOffset]
+      let payloadLen: number
+      if (cb === 0) {
+        const cbPrime = wordDocData[papxOffset + 1]
+        payloadLen = cbPrime * 2
+        papxOffset += 2
+      } else {
+        payloadLen = cb * 2 - 1
+        papxOffset += 1
+      }
+      if (payloadLen < 2 || papxOffset + payloadLen > base + 512) continue
+
+      const istd = readUint16(wordDocData, papxOffset)
+      const grpprlLen = payloadLen - 2
+      const { format, ilvl, ilst, ilfo, table } =
+        parsePapxGrpprl(wordDocData, papxOffset + 2, grpprlLen)
+
+      for (const cpRange of fcRangeToCpRanges(fcStart, fcEnd, pieces)) {
+        const run: PapxRun = { cpStart: cpRange.cpStart, cpEnd: cpRange.cpEnd, format, istd }
+        if (ilvl !== undefined) run.ilvl = ilvl
+        if (ilst !== undefined) run.ilst = ilst
+        if (ilfo !== undefined) run.ilfo = ilfo
+        if (table) run.table = table
+        runs.push(run)
+      }
+    }
+  }
+
+  runs.sort((a, b) => a.cpStart - b.cpStart || a.cpEnd - b.cpEnd)
+  return runs
+}

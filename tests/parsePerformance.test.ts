@@ -21,7 +21,7 @@ const docsDir = resolve(here, '../docs')
  * Each entry is skipped gracefully when its sample file is not present, so the
  * suite still passes in checkouts without the docs/ fixtures.
  */
-const SAMPLES: Array<{ file: string; maxMs: number; minTextLen?: number }> = [
+const SAMPLES: Array<{ file: string; maxMs: number; minTextLen?: number; minTableParas?: number }> = [
   // detectCharacterStyles stress (unicode) — healthy ~130-185ms, pre-optimisation ~3070ms.
   // minTextLen also guards the CLX bare-Pcdt fix (regression → empty/truncated body).
   { file: 'unicode-n4100.doc', maxMs: 1500, minTextLen: 10000 },
@@ -42,10 +42,14 @@ const SAMPLES: Array<{ file: string; maxMs: number; minTextLen?: number }> = [
   // No table stream (embedded-Excel compound file) — guards the FibBase
   // fcMin/fcMac fallback; before it this file yielded 9 garbage chars.
   { file: 'doc-101.doc', maxMs: 1000, minTextLen: 800 },
+  // Table-heavy Word 97 file — guards the FKP (formatted disk page) parsing
+  // path and the TTP row splitting; before it this file produced 10 glued
+  // paragraphs with zero spec-level table info.
+  { file: 'unicode-n1750w97.doc', maxMs: 1500, minTextLen: 20000, minTableParas: 50 },
 ]
 
 describe('parse performance regression', () => {
-  for (const { file, maxMs, minTextLen } of SAMPLES) {
+  for (const { file, maxMs, minTextLen, minTableParas } of SAMPLES) {
     const path = resolve(docsDir, file)
     const runner = existsSync(path) ? it : it.skip
     runner(`parses ${file} within ${maxMs}ms`, () => {
@@ -58,6 +62,11 @@ describe('parse performance regression', () => {
       expect(elapsed).toBeLessThan(maxMs)
       if (minTextLen !== undefined) {
         expect((result.text ?? '').length).toBeGreaterThan(minTextLen)
+      }
+      if (minTableParas !== undefined) {
+        const paragraphs = (result.document as any)?.paragraphs ?? []
+        const tableParas = paragraphs.filter((p: any) => p.paraFormat?.table).length
+        expect(tableParas).toBeGreaterThanOrEqual(minTableParas)
       }
     })
   }

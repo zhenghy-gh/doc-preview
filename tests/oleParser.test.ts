@@ -127,6 +127,17 @@ describe('OleParser', () => {
       expect(parser.safeReadUint8(0)).toBe(0x42)
       expect(parser.safeReadUint16(0)).toBe(0x0142)
     })
+
+    it('should read 64-bit little-endian values', () => {
+      const buf = new ArrayBuffer(12)
+      const view = new Uint8Array(buf)
+      view[0] = 0x02
+      view[4] = 0x01
+
+      const parser = new OleParser(buf)
+      expect(parser.safeReadUint64(0)).toBe(0x0000000100000002n)
+      expect(parser.safeReadUint64(8)).toBe(0n)
+    })
   })
 
   describe('parseHeader', () => {
@@ -309,6 +320,37 @@ describe('OleParser', () => {
       expect(entry.objectType).toBe(2)
       expect(entry.startSector).toBe(2)
       expect(entry.size).toBe(1024)
+    })
+
+    it('should read v4 directory stream sizes as 64-bit values with a safe cap', () => {
+      const sectorSize = 4096
+      const buf = new ArrayBuffer(sectorSize * 3)
+      const view = new Uint8Array(buf)
+      view[0] = 0xD0; view[1] = 0xCF; view[2] = 0x11; view[3] = 0xE0
+      view[4] = 0xA1; view[5] = 0xB1; view[6] = 0x1A; view[7] = 0xE1
+      view[26] = 0x04
+      view[30] = 0x0C
+      view[48] = 0x01
+      view[76] = 0x00
+
+      const fatOffset = sectorSize
+      view[fatOffset] = 0xFF; view[fatOffset + 1] = 0xFF
+      view[fatOffset + 2] = 0xFF; view[fatOffset + 3] = 0xFF
+      view[fatOffset + 4] = 0xFF; view[fatOffset + 5] = 0xFF
+      view[fatOffset + 6] = 0xFF; view[fatOffset + 7] = 0xFF
+
+      const dirOffset = sectorSize * 2
+      writeDirectoryEntry(view, dirOffset, 'WordDocument', 2, 2, 32)
+      // High 32 bits make the stream claim 4GB + 32 bytes. The parser should
+      // read the 64-bit value but cap it to the actual file size for safety.
+      view[dirOffset + 124] = 0x01
+
+      const parser = new OleParser(buf)
+      const header = parser.parseHeader()
+      const fat = parser.getFatSectors(header)
+      const dirs = parser.getDirectorySectors(header, fat)
+
+      expect(dirs[0].size).toBe(buf.byteLength)
     })
   })
 

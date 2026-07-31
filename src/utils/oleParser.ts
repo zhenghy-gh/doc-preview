@@ -93,6 +93,17 @@ export class OleParser {
     return this.view.getUint32(offset, littleEndian)
   }
 
+  safeReadUint64(offset: number, littleEndian: boolean = true, defaultValue: bigint = 0n): bigint {
+    if (offset < 0 || offset + 8 > this.buffer.byteLength) {
+      logger.warn(`Uint64 越界访问: offset=${offset}, length=${this.buffer.byteLength}`)
+      return defaultValue
+    }
+
+    const low = BigInt(this.view.getUint32(offset, littleEndian))
+    const high = BigInt(this.view.getUint32(offset + 4, littleEndian))
+    return littleEndian ? (high << 32n) + low : (low << 32n) + high
+  }
+
   // ---- Format detection ----
 
   detectFormat(): FileFormat {
@@ -571,12 +582,29 @@ export class OleParser {
         name,
         objectType,
         startSector: this.safeReadInt32(offset + 116),
-        size: this.safeReadUint32(offset + 120),
+        size: this._readDirectoryStreamSize(offset + 120),
         nameLength,
       }
     } catch (error) {
       logger.warn(`解析目录条目失败: ${error}`)
       return null
     }
+  }
+
+  private _readDirectoryStreamSize(offset: number): number {
+    const header = this._header
+    const lowSize = this.safeReadUint32(offset)
+    if (!header || header.majorVersion < 4) return lowSize
+
+    const size64 = this.safeReadUint64(offset)
+    if (size64 <= BigInt(Number.MAX_SAFE_INTEGER)) {
+      const size = Number(size64)
+      if (size <= this.buffer.byteLength) return size
+      logger.warn(`目录流大小 ${size} 超出文件大小 ${this.buffer.byteLength}，按文件大小截断`)
+      return this.buffer.byteLength
+    }
+
+    logger.warn(`目录流大小 ${size64.toString()} 超出 JavaScript 安全整数范围，按文件大小截断`)
+    return this.buffer.byteLength
   }
 }

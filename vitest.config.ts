@@ -9,7 +9,7 @@ export default defineConfig({
   },
   test: {
     include: ['tests/**/*.test.ts'],
-    exclude: ['tests/_*.test.ts'],
+    exclude: ['tests/_*.test.ts', 'tests/*probe*.test.ts'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html', 'json'],
