@@ -213,26 +213,18 @@ describe('DocParser', () => {
 
       // ---- Sector 3 (offset 2048): table stream ----
       const tblBase = SECTOR * 4
-      // CLX:
+      // CLX (bare Pcdt, MS-DOC §2.9.38/§2.9.72):
       //   clxt (1 byte) = 0x02
       view[tblBase + 0] = 0x02
-      //   lcb (4 bytes) = 27 (Pcdt size)
-      writeU32(tblBase + 1, 27)
-      // Pcdt:
-      //   clxt (1 byte) = 0x01
-      view[tblBase + 5] = 0x01
-      //   reserved (2 bytes) = 0
-      //   lcbPlcPcd (4 bytes) = 20
-      writeU32(tblBase + 8, 20)
+      //   lcb (4 bytes) = PlcPcd byte size = 4*(n+1) + 8*n = 16 for n=1
+      writeU32(tblBase + 1, 16)
       // PlcPcd:
-      //   n (4 bytes) = 1
-      writeU32(tblBase + 12, 1)
-      //   rgCcp (8 bytes): [0, 11]
-      writeU32(tblBase + 16, 0)
-      writeU32(tblBase + 20, textLength)
-      //   rgPcd (8 bytes): reserved(2) + fc(4) + prm(2)
-      //     fc = textOffset (no compression bit)
-      writeU32(tblBase + 24 + 2, textOffset)  // fc at offset +2 within PCD entry
+      //   aCP (8 bytes): [0, 11]
+      writeU32(tblBase + 5, 0)
+      writeU32(tblBase + 9, textLength)
+      //   aPcd (8 bytes): reserved(2) + fc(4) + prm(2)
+      //     fc = textOffset (no compression bit → UTF-16LE at that byte offset)
+      writeU32(tblBase + 13 + 2, textOffset)  // fc at offset +2 within PCD entry
 
       return buf
     }
@@ -365,7 +357,9 @@ describe('DocParser', () => {
       // FibRgLw97 ends at 36 + 22*4 = 124. cbRgFcLcb (PAIR count) at 124.
       writeU16(124 + wdBase, 34)
       // fcClx at blobStart + 33*8 = 126 + 264 = 390; lcbClx at 394.
-      const clxSize = 1 + 4 + (1 + 2 + 4 + (4 + 4 * 4 + 3 * 8))
+      // CLX = bare Pcdt: clxt(1) + lcb(4) + PlcPcd(4*(n+1) + 8*n) for n=3.
+      const plcPcdSize = 4 * 4 + 3 * 8
+      const clxSize = 1 + 4 + plcPcdSize
       writeU32(390 + wdBase, 0)         // fcClx = 0 (within 0Table)
       writeU32(394 + wdBase, clxSize)   // lcbClx
 
@@ -389,27 +383,21 @@ describe('DocParser', () => {
 
       // ---- Sector 3: 0Table stream ----
       const tblBase = SECTOR * 4
-      // CLX with 3 pieces:
-      //   clxt(1)=0x02, lcb(4), Pcdt(clxt=0x01, reserved(2), lcbPlcPcd(4), PlcPcd)
-      //   PlcPcd: n(4)=3, rgCcp(4*4)=[0,8,23,36], rgPcd(3*8)
+      // CLX = bare Pcdt (MS-DOC §2.9.38/§2.9.72):
+      //   clxt(1)=0x02, lcb(4)=PlcPcd size, PlcPcd
+      //   PlcPcd: aCP(4*4)=[0,8,23,36], aPcd(3*8)
       view[tblBase + 0] = 0x02
-      writeU32(tblBase + 1, clxSize - 5)  // lcb = Pcdt size
-      view[tblBase + 5] = 0x01
-      // reserved 2 bytes at tblBase+6,7 (zero)
-      const plcPcdSize = 4 + 4 * 4 + 3 * 8
-      writeU32(tblBase + 8, plcPcdSize)
-      // n = 3
-      writeU32(tblBase + 12, 3)
-      // rgCcp = [0, 8, 23, 36]
-      writeU32(tblBase + 16, 0)
-      writeU32(tblBase + 20, 8)
-      writeU32(tblBase + 24, 23)
-      writeU32(tblBase + 28, 36)
-      // rgPcd: 3 entries, each 8 bytes (2 reserved + 4 fc + 2 prm)
+      writeU32(tblBase + 1, plcPcdSize)  // lcb = PlcPcd size
+      // aCP = [0, 8, 23, 36] at tblBase+5
+      writeU32(tblBase + 5, 0)
+      writeU32(tblBase + 9, 8)
+      writeU32(tblBase + 13, 23)
+      writeU32(tblBase + 17, 36)
+      // aPcd: 3 entries, each 8 bytes (2 reserved + 4 fc + 2 prm), at tblBase+21
       //   piece 0: fc = textOffset (UTF-16LE, no compression bit)
       //   piece 1: fc = textOffset + 16
       //   piece 2: fc = textOffset + 46
-      let pcdOff = tblBase + 32
+      let pcdOff = tblBase + 21
       const fcValues = [textOffset, textOffset + 16, textOffset + 46]
       for (let i = 0; i < 3; i++) {
         pcdOff += 2 // reserved

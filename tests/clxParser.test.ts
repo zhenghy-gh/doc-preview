@@ -1,41 +1,40 @@
 import { describe, it, expect } from 'vitest'
 import { DocParser } from '../src/utils/docParser'
 
+/**
+ * CLX fixtures follow the MS-DOC §2.9.38 layout:
+ *   Clx = RgPrc *Pcdt   (zero or more Prc, then a single Pcdt)
+ *   Pcdt = clxt(1)=0x02 + lcb(4) + PlcPcd(lcb)
+ *   PlcPcd = aCP[(n+1)] (4 bytes each) + aPcd[n] (8 bytes each)
+ *   → PlcPcd byte size = 4*(n+1) + 8*n = 12n + 4
+ *
+ * FcCompressed (§2.9.73): the stored 30-bit fc is the byte offset for
+ * uncompressed (UTF-16LE) pieces, and twice the byte offset for compressed
+ * (8-bit) pieces (real offset = fc / 2). The builders below therefore double
+ * the caller-supplied byte offset when `compressed` is set.
+ */
 describe('Clx Parser Robustness', () => {
   function buildClxWithNPieces(n: number, charCountPerPiece: number): Uint8Array {
-    const ccpCount = n + 1
-    const ccpByteSize = ccpCount * 4
-    const pcdByteSize = n * 8
-    const plcPcdSize = 4 + ccpByteSize + pcdByteSize
-    const pcdtSize = 1 + 2 + 4 + plcPcdSize
-    const clxSize = 1 + 4 + pcdtSize
+    const plcPcdSize = 4 * (n + 1) + 8 * n
+    const clxSize = 1 + 4 + plcPcdSize
 
     const data = new Uint8Array(clxSize)
     const view = new DataView(data.buffer)
 
     let offset = 0
-    data[offset] = 0x02
-    offset += 1
-
-    view.setUint32(offset, pcdtSize, true)
-    offset += 4
-
-    data[offset] = 0x01
-    offset += 1
-    offset += 2
+    data[offset++] = 0x02
     view.setUint32(offset, plcPcdSize, true)
     offset += 4
 
-    view.setUint32(offset, n, true)
-    offset += 4
-
+    // aCP[(n+1)]: 0, ccp, 2*ccp, ... n*ccp
     let currentCcp = 0
-    for (let i = 0; i < ccpCount; i++) {
+    for (let i = 0; i <= n; i++) {
       view.setUint32(offset, currentCcp, true)
       offset += 4
       currentCcp += charCountPerPiece
     }
 
+    // aPcd[n]: 2 bytes flags/Pn + 4 bytes Fc + 2 bytes Prm (uncompressed)
     for (let i = 0; i < n; i++) {
       offset += 2
       const fc = i * charCountPerPiece * 2
@@ -54,17 +53,11 @@ describe('Clx Parser Robustness', () => {
     expect(clx[0]).toBe(0x02)
 
     const lcb = view.getUint32(1, true)
-    expect(lcb).toBeGreaterThan(0)
+    expect(lcb).toBe(4 * 2 + 8 * 1) // 12n+4 = 16
 
-    const pcdtStart = 5
-    expect(clx[pcdtStart]).toBe(0x01)
-
-    const plcPcdStart = pcdtStart + 7
-    const n = view.getUint32(plcPcdStart, true)
-    expect(n).toBe(1)
-
-    const ccp0 = view.getUint32(plcPcdStart + 4, true)
-    const ccp1 = view.getUint32(plcPcdStart + 8, true)
+    const plcPcdStart = 5
+    const ccp0 = view.getUint32(plcPcdStart, true)
+    const ccp1 = view.getUint32(plcPcdStart + 4, true)
     expect(ccp0).toBe(0)
     expect(ccp1).toBe(100)
   })
@@ -73,14 +66,14 @@ describe('Clx Parser Robustness', () => {
     const clx = buildClxWithNPieces(3, 100)
     const view = new DataView(clx.buffer)
 
-    const pcdtStart = 5
-    const plcPcdStart = pcdtStart + 7
-    const n = view.getUint32(plcPcdStart, true)
+    const lcb = view.getUint32(1, true)
+    const n = Math.floor((lcb - 4) / 12)
     expect(n).toBe(3)
 
+    const plcPcdStart = 5
     const ccps: number[] = []
     for (let i = 0; i <= n; i++) {
-      ccps.push(view.getUint32(plcPcdStart + 4 + i * 4, true))
+      ccps.push(view.getUint32(plcPcdStart + i * 4, true))
     }
     expect(ccps).toEqual([0, 100, 200, 300])
   })
@@ -90,30 +83,24 @@ describe('Clx Parser Robustness', () => {
     const clx = buildClxWithNPieces(n, 10)
     const view = new DataView(clx.buffer)
 
-    const pcdtStart = 5
-    const plcPcdStart = pcdtStart + 7
-    const readN = view.getUint32(plcPcdStart, true)
+    const lcb = view.getUint32(1, true)
+    const readN = Math.floor((lcb - 4) / 12)
     expect(readN).toBe(n)
     expect(readN).toBeGreaterThan(1000)
   })
 
-  it('should have correct Pcdt structure with reserved bytes', () => {
+  it('should have correct Pcdt structure (bare Pcdt, no Prc prefix)', () => {
     const clx = buildClxWithNPieces(1, 10)
     const view = new DataView(clx.buffer)
 
-    const pcdtStart = 5
-    expect(clx[pcdtStart]).toBe(0x01)
+    expect(clx[0]).toBe(0x02)
 
-    const reserved1 = clx[pcdtStart + 1]
-    const reserved2 = clx[pcdtStart + 2]
-    expect(reserved1).toBe(0)
-    expect(reserved2).toBe(0)
+    const lcb = view.getUint32(1, true)
+    expect(lcb).toBeGreaterThan(0)
 
-    const lcbPlcPcd = view.getUint32(pcdtStart + 3, true)
-    expect(lcbPlcPcd).toBeGreaterThan(0)
-
-    const plcPcdStart = pcdtStart + 7
-    expect(plcPcdStart).toBe(pcdtStart + 1 + 2 + 4)
+    // PlcPcd starts immediately after clxt(1) + lcb(4); the first aCP is 0.
+    const plcPcdStart = 5
+    expect(view.getUint32(plcPcdStart, true)).toBe(0)
   })
 
   it('should have each Pcd entry 8 bytes with fc at offset 2', () => {
@@ -121,10 +108,9 @@ describe('Clx Parser Robustness', () => {
     const clx = buildClxWithNPieces(n, 50)
     const view = new DataView(clx.buffer)
 
-    const pcdtStart = 5
-    const plcPcdStart = pcdtStart + 7
+    const plcPcdStart = 5
     const ccpByteSize = (n + 1) * 4
-    const pcdStart = plcPcdStart + 4 + ccpByteSize
+    const pcdStart = plcPcdStart + ccpByteSize
 
     for (let i = 0; i < n; i++) {
       const entryOffset = pcdStart + i * 8
@@ -136,7 +122,7 @@ describe('Clx Parser Robustness', () => {
 
   it('should detect clxt !== 2 as invalid Clx', () => {
     const data = new Uint8Array(10)
-    data[0] = 0x01
+    data[0] = 0x03
     expect(data[0]).not.toBe(0x02)
   })
 
@@ -156,34 +142,54 @@ describe('Clx Parser Robustness', () => {
     expect(lcb).toBeGreaterThan(available)
   })
 
+  it('should reject PlcPcd sizes that do not match 12n + 4', () => {
+    const parser = new DocParser(new ArrayBuffer(512))
+    const data = new Uint8Array(22)
+    const view = new DataView(data.buffer)
+    data[0] = 0x02
+    view.setUint32(1, 17, true)
+
+    const pieces = (parser as any).parseClxPieces(data)
+    expect(pieces).toEqual([])
+  })
+
+  it('should reject CP boundaries that move backwards', () => {
+    const parser = new DocParser(new ArrayBuffer(512))
+    const data = new Uint8Array(21)
+    const view = new DataView(data.buffer)
+    data[0] = 0x02
+    view.setUint32(1, 16, true)
+    view.setUint32(5, 10, true)
+    view.setUint32(9, 5, true)
+
+    const pieces = (parser as any).parseClxPieces(data)
+    expect(pieces).toEqual([])
+  })
+
   it('should concatenate multiple pieces when parsing CLX text', () => {
     const parser = new DocParser(new ArrayBuffer(512))
     const textBytes = new TextEncoder().encode('HelloWorld')
 
-    const clx = new Uint8Array(1 + 4 + (1 + 2 + 4 + (4 + (3 * 4) + (2 * 8))))
+    // 2 compressed pieces: "Hello" at byte 0, "World" at byte 5.
+    const plcPcdSize = 4 * 3 + 8 * 2 // 28
+    const clx = new Uint8Array(1 + 4 + plcPcdSize)
     const view = new DataView(clx.buffer)
     let offset = 0
     clx[offset++] = 0x02
-    view.setUint32(offset, clx.length - 5, true)
+    view.setUint32(offset, plcPcdSize, true)
     offset += 4
-    clx[offset++] = 0x01
+    // aCP: 0, 5, 10
+    view.setUint32(offset, 0, true); offset += 4
+    view.setUint32(offset, 5, true); offset += 4
+    view.setUint32(offset, 10, true); offset += 4
+    // aPcd[0]: compressed, byte offset 0 → stored fc = 0*2 = 0
     offset += 2
-    view.setUint32(offset, 4 + (3 * 4) + (2 * 8), true)
-    offset += 4
-    view.setUint32(offset, 2, true)
-    offset += 4
-    view.setUint32(offset, 0, true)
-    offset += 4
-    view.setUint32(offset, 5, true)
-    offset += 4
-    view.setUint32(offset, 10, true)
-    offset += 4
+    view.setUint32(offset, (0x40000000 | 0) >>> 0, true); offset += 4
     offset += 2
-    view.setUint32(offset, 0x40000000, true)
-    offset += 4
+    // aPcd[1]: compressed, byte offset 5 → stored fc = 5*2 = 10
     offset += 2
+    view.setUint32(offset, (0x40000000 | 10) >>> 0, true); offset += 4
     offset += 2
-    view.setUint32(offset, 0x40000005, true)
 
     const result = (parser as any).parseClx(clx, textBytes)
     expect(result).toBe('Hello\n\nWorld')
@@ -192,40 +198,34 @@ describe('Clx Parser Robustness', () => {
 
 describe('Story splitting (splitPiecesByStory / parseClxWithStories)', () => {
   /**
-   * Build a CLX blob with explicit per-piece CP ranges and fc values.
-   * Each piece defaults to UTF-16LE; pass `compressed: true` for 8-bit.
-   * Pass `fChp: true` + `chpxIndex` to set the fChp flag and CHPX index.
+   * Build a bare-Pcdt CLX blob with explicit per-piece CP ranges and byte
+   * offsets. Each piece defaults to UTF-16LE; pass `compressed: true` for 8-bit
+   * (the byte offset is doubled to match FcCompressed encoding). Pass
+   * `fChp: true` + `chpxIndex` to set the fChp flag and CHPX index.
    */
   function buildClxWithExplicitPieces(
     pieces: Array<{ cpStart: number; cpEnd: number; fc: number; compressed?: boolean; fChp?: boolean; chpxIndex?: number }>,
   ): Uint8Array {
     const n = pieces.length
-    const ccpByteSize = (n + 1) * 4
-    const pcdByteSize = n * 8
-    const plcPcdSize = 4 + ccpByteSize + pcdByteSize
-    const pcdtSize = 1 + 2 + 4 + plcPcdSize
-    const clxSize = 1 + 4 + pcdtSize
+    const plcPcdSize = 4 * (n + 1) + 8 * n
+    const clxSize = 1 + 4 + plcPcdSize
 
     const data = new Uint8Array(clxSize)
     const view = new DataView(data.buffer)
     let offset = 0
     data[offset++] = 0x02
-    view.setUint32(offset, pcdtSize, true); offset += 4
-    data[offset++] = 0x01
-    offset += 2 // reserved
     view.setUint32(offset, plcPcdSize, true); offset += 4
-    view.setUint32(offset, n, true); offset += 4
-    // rgCcp: cp[0] = pieces[0].cpStart, cp[i+1] = pieces[i].cpEnd
+    // aCP: cp[0] = pieces[0].cpStart, cp[i+1] = pieces[i].cpEnd
     view.setUint32(offset, pieces[0].cpStart, true); offset += 4
     for (let i = 0; i < n; i++) {
       view.setUint32(offset, pieces[i].cpEnd, true); offset += 4
     }
-    // rgPcd: each 8 bytes (2 Pn + 4 Fc + 2 Prm)
+    // aPcd: each 8 bytes (2 flags/Pn + 4 Fc + 2 Prm)
     for (let i = 0; i < n; i++) {
-      offset += 2 // Pn
-      let fc = pieces[i].compressed ? (pieces[i].fc | 0x40000000) : pieces[i].fc
+      offset += 2
+      let fc = pieces[i].compressed ? ((pieces[i].fc * 2) | 0x40000000) : pieces[i].fc
       if (pieces[i].fChp) fc |= 0x80000000
-      view.setUint32(offset, fc, true); offset += 4
+      view.setUint32(offset, fc >>> 0, true); offset += 4
       const prm = pieces[i].chpxIndex ?? 0
       view.setUint16(offset, prm, true); offset += 2
     }
@@ -358,7 +358,7 @@ describe('Story splitting (splitPiecesByStory / parseClxWithStories)', () => {
       ccpText: 5, ccpFtn: 0, ccpHdd: 0, ccpMcr: 0,
       ccpAtn: 0, ccpEdn: 0, ccpTxbx: 0, ccpHdrTxbx: 0,
     }
-    // Invalid CLX (clxt != 2) → parseClxPieces returns []
+    // Malformed CLX (Prc prefix leading nowhere) → parseClxPieces returns []
     const badClx = new Uint8Array([0x01, 0, 0, 0, 0])
 
     const result = (parser as any).parseClxWithStories(badClx, textBytes, rgCcp)
@@ -371,30 +371,23 @@ describe('PCD prm field (piece-level CHPX association)', () => {
     pieces: Array<{ cpStart: number; cpEnd: number; fc: number; compressed?: boolean; fChp?: boolean; chpxIndex?: number }>,
   ): Uint8Array {
     const n = pieces.length
-    const ccpByteSize = (n + 1) * 4
-    const pcdByteSize = n * 8
-    const plcPcdSize = 4 + ccpByteSize + pcdByteSize
-    const pcdtSize = 1 + 2 + 4 + plcPcdSize
-    const clxSize = 1 + 4 + pcdtSize
+    const plcPcdSize = 4 * (n + 1) + 8 * n
+    const clxSize = 1 + 4 + plcPcdSize
 
     const data = new Uint8Array(clxSize)
     const view = new DataView(data.buffer)
     let offset = 0
     data[offset++] = 0x02
-    view.setUint32(offset, pcdtSize, true); offset += 4
-    data[offset++] = 0x01
-    offset += 2 // reserved
     view.setUint32(offset, plcPcdSize, true); offset += 4
-    view.setUint32(offset, n, true); offset += 4
     view.setUint32(offset, pieces[0].cpStart, true); offset += 4
     for (let i = 0; i < n; i++) {
       view.setUint32(offset, pieces[i].cpEnd, true); offset += 4
     }
     for (let i = 0; i < n; i++) {
-      offset += 2 // Pn
-      let fc = pieces[i].compressed ? (pieces[i].fc | 0x40000000) : pieces[i].fc
+      offset += 2
+      let fc = pieces[i].compressed ? ((pieces[i].fc * 2) | 0x40000000) : pieces[i].fc
       if (pieces[i].fChp) fc |= 0x80000000
-      view.setUint32(offset, fc, true); offset += 4
+      view.setUint32(offset, fc >>> 0, true); offset += 4
       view.setUint16(offset, pieces[i].chpxIndex ?? 0, true); offset += 2
     }
     return data

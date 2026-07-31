@@ -1048,12 +1048,24 @@ export function mergeCharFormatForParagraph(
   let firstHighlight: string | undefined
   let firstFontName: string | undefined
 
-  for (const run of runs) {
-    const overlapStart = Math.max(run.cpStart, cpStart)
-    const overlapEnd = Math.min(run.cpEnd, cpEnd)
+  // runs are sorted by cpStart and cpEnd (aCP is strictly increasing), so binary-search
+  // the first run that can overlap [cpStart, cpEnd) and stop as soon as runs move past
+  // the paragraph. This turns the per-paragraph cost from O(runs) into O(log runs +
+  // overlapping), avoiding the O(paragraphs * runs) blow-up on text-heavy documents.
+  let lo = 0
+  let hi = runs.length
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    if (runs[mid].cpEnd > cpStart) hi = mid
+    else lo = mid + 1
+  }
+  for (let ri = lo; ri < runs.length; ri++) {
+    const run = runs[ri]
+    if (run.cpStart >= cpEnd) break
+    const overlapStart = run.cpStart > cpStart ? run.cpStart : cpStart
+    const overlapEnd = run.cpEnd < cpEnd ? run.cpEnd : cpEnd
     if (overlapEnd <= overlapStart) continue
     const len = overlapEnd - overlapStart
-
     if (run.format.bold) boldCount += len
     if (run.format.italic) italicCount += len
     if (run.format.underline) underlineCount += len

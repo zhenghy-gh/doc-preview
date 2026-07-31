@@ -92,6 +92,15 @@ export interface FibData {
   lcbClx: number
   fcMin: number
   fcMac: number
+  /**
+   * Raw fcMin/fcMac from FibBase offsets 24/28. Word 97+ still writes these
+   * legacy Word 6/95 text-range fields; they are the only way to locate the
+   * body when the document lacks a table stream (so the Clx is unreachable).
+   * Kept separate from fcMin/fcMac (which stay 0 for Word 97+) so existing
+   * extraction-path priorities are unchanged.
+   */
+  fcMinBase?: number
+  fcMacBase?: number
   fComplex: boolean
   fibBase: number
   /** True → use 1Table stream; False → use 0Table stream. */
@@ -220,6 +229,12 @@ export function parseFib(data: Uint8Array): FibData | null {
     const wordVersion = detectWordVersion(nFib)
     logger.log(`Word 版本: ${WORD_VERSION_LABELS[wordVersion]} (nFib=0x${nFib.toString(16).toUpperCase()})`)
 
+    // FibBase offsets 24/28 hold the legacy fcMin/fcMac text range. Word 97+
+    // still writes them; keep the raw values around as a fallback for files
+    // whose table stream (and therefore Clx) is missing.
+    const fcMinBase = readDwordAt(data, 24)
+    const fcMacBase = readDwordAt(data, 28)
+
     // csw at offset 32
     const csw = data[32] | (data[33] << 8)
 
@@ -230,7 +245,7 @@ export function parseFib(data: Uint8Array): FibData | null {
     if (fibRgWEnd + 4 > data.length) {
       logger.warn('FIB FibRgW超出范围，仅使用fFlags标志')
       return {
-        fcMin: 0, fcMac: 0, fcClx: 0, lcbClx: 0,
+        fcMin: 0, fcMac: 0, fcMinBase, fcMacBase, fcClx: 0, lcbClx: 0,
         fComplex, fWhichTblStm, isTextutil, fibBase: 32, rgCcp: { ...EMPTY_RGCCP },
         fcPlcfBteChpx: 0, lcbPlcfBteChpx: 0,
         fcPlcfBtePapx: 0, lcbPlcfBtePapx: 0,
@@ -259,7 +274,7 @@ export function parseFib(data: Uint8Array): FibData | null {
     if (fibRgLwEnd + 2 > data.length) {
       logger.warn('FIB FibRgLw超出范围，仅使用fFlags标志')
       return {
-        fcMin: 0, fcMac: 0, fcClx: 0, lcbClx: 0,
+        fcMin: 0, fcMac: 0, fcMinBase, fcMacBase, fcClx: 0, lcbClx: 0,
         fComplex, fWhichTblStm, isTextutil, fibBase: 32, rgCcp: { ...EMPTY_RGCCP },
         fcPlcfBteChpx: 0, lcbPlcfBteChpx: 0,
         fcPlcfBtePapx: 0, lcbPlcfBtePapx: 0,
@@ -308,7 +323,7 @@ export function parseFib(data: Uint8Array): FibData | null {
     if (blobStart + blobSize > data.length || cbRgFcLcb < 2 || cbRgFcLcb > 1000) {
       logger.warn(`FIB blob无效(cbRgFcLcb=${cbRgFcLcb})，返回rgCcp供文本提取`)
       return {
-        fcMin: 0, fcMac: 0, fcClx: 0, lcbClx: 0,
+        fcMin: 0, fcMac: 0, fcMinBase, fcMacBase, fcClx: 0, lcbClx: 0,
         fComplex, fWhichTblStm, isTextutil, nFib, wordVersion, fibBase: 32, rgCcp,
         fcPlcfBteChpx: 0, lcbPlcfBteChpx: 0,
         fcPlcfBtePapx: 0, lcbPlcfBtePapx: 0,
@@ -390,7 +405,7 @@ export function parseFib(data: Uint8Array): FibData | null {
     )
 
     return {
-      fcClx, lcbClx, fcMin, fcMac, fComplex, fWhichTblStm, isTextutil, nFib, wordVersion, fibBase: 32, rgCcp,
+      fcClx, lcbClx, fcMin, fcMac, fcMinBase, fcMacBase, fComplex, fWhichTblStm, isTextutil, nFib, wordVersion, fibBase: 32, rgCcp,
       fcPlcfBteChpx, lcbPlcfBteChpx, fcPlcfBtePapx, lcbPlcfBtePapx,
       fcStshf, lcbStshf, fcSttbfFfn, lcbSttbfFfn,
       fcLst, lcbLst, fcPlcfLfo, lcbPlcfLfo,

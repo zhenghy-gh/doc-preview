@@ -632,20 +632,15 @@ export class DocParser {
    * Parse the Clx (complex file information) structure to extract text from pieces.
    *
    * Clx structure:
-   *   clxt (1 byte) = 0x02  → indicates Pcdt follows
-   *   lcb  (4 bytes)       → length of Pcdt data
-   *   Pcdt (variable)
-   *
-   * Pcdt structure:
-   *   clxt      (1 byte) = 0x01
-   *   reserved  (2 bytes)
-   *   lcbPlcPcd (4 bytes) → length of PlcPcd
+   *   RgPrc[]   (optional) → clxtPrc(0x01) + cbGrpprl + grpprl
+   *   Pcdt:
+   *   clxt      (1 byte) = 0x02
+   *   lcb       (4 bytes) → length of PlcPcd
    *   PlcPcd    (variable)
    *
    * PlcPcd structure:
-   *   n       (4 bytes)   → number of pieces
-   *   rgCcp   ((n+1)*4 bytes) → character positions for each piece
-   *   rgPcd   (n*8 bytes) → PCD entries for each piece
+   *   aCP     ((n+1)*4 bytes) → character positions for each piece
+   *   aPcd    (n*8 bytes) → PCD entries for each piece
    *
    * PCD entry (8 bytes each):
    *   reserved (2 bytes)  → flags / unused
@@ -684,7 +679,7 @@ export class DocParser {
       }
 
       const pieceText = this.extractTextFromRange(
-        wordDocData, byteStart, byteEnd, piece.fCompressed,
+        wordDocData, byteStart, byteEnd, piece.fCompressed, false,
       )
       if (pieceText.trim().length > 0) {
         pieceTexts.push(pieceText.trim())
@@ -702,24 +697,30 @@ export class DocParser {
    */
   private parseClxPieces(clxData: Uint8Array): Piece[] {
     if (clxData.length < 5) return []
-    const clxt = clxData[0]
-    if (clxt !== 2) return []
 
-    let offset = 1
-    const lcb = DocParser.readUint32(clxData, offset)
-    offset += 4
-    if (lcb <= 0 || lcb > clxData.length - offset) return []
+    // Walk the CLX (MS-DOC §2.9.38: Clx = RgPrc *Pcdt). Zero or more Prc
+    // entries — each clxtPrc(1 byte)=0x01, cbGrpprl(2 bytes), grpprl(cbGrpprl
+    // bytes) — may precede the single Pcdt. Skip any Prc prefix.
+    let offset = 0
+    while (offset < clxData.length && clxData[offset] === 0x01) {
+      if (offset + 3 > clxData.length) return []
+      const cbGrpprl = DocParser.readUint16(clxData, offset + 1)
+      offset += 3 + cbGrpprl
+    }
 
-    const pcdtStart = offset
-    const clxt2 = clxData[pcdtStart]
-    if (clxt2 !== 1) return []
+    // Pcdt (§2.9.72): clxt(1 byte)=0x02, lcb(4 bytes)=PlcPcd byte size, PlcPcd.
+    if (offset + 5 > clxData.length || clxData[offset] !== 2) return []
+    const lcb = DocParser.readUint32(clxData, offset + 1)
+    const plcPcdStart = offset + 5
+    if (lcb < 4 || plcPcdStart + lcb > clxData.length) return []
 
-    const lcbPlcPcd = DocParser.readUint32(clxData, pcdtStart + 3)
-    const plcPcdStart = pcdtStart + 7
-
-    if (lcbPlcPcd <= 0 || plcPcdStart + lcbPlcPcd > clxData.length) return []
-
-    const n = DocParser.readUint32(clxData, plcPcdStart)
+    // PlcPcd (§2.8.35) = aCP[(n+1)] (4 bytes each) + aPcd[n] (8 bytes each).
+    // Byte size = 4*(n+1) + 8*n = 12n + 4  →  n = (lcb - 4) / 12.
+    if ((lcb - 4) % 12 !== 0) {
+      logger.warn(`PlcPcd lcb=${lcb} 不是有效长度`)
+      return []
+    }
+    const n = Math.floor((lcb - 4) / 12)
     if (n <= 0 || n > DocParser.MAX_PIECE_COUNT) {
       logger.warn(`PlcPcd n=${n} 超出范围`)
       return []
@@ -727,17 +728,10 @@ export class DocParser {
 
     const ccpCount = n + 1
     const ccpByteSize = ccpCount * 4
-    const pcdByteSize = n * 8
-    const expectedSize = 4 + ccpByteSize + pcdByteSize
-
-    if (plcPcdStart + expectedSize > clxData.length) {
-      logger.warn('PlcPcd 数据越界')
-      return []
-    }
 
     const plcCp: number[] = []
     for (let i = 0; i < ccpCount; i++) {
-      const cp = DocParser.readUint32(clxData, plcPcdStart + 4 + i * 4)
+      const cp = DocParser.readUint32(clxData, plcPcdStart + i * 4)
       if (cp > DocParser.MAX_TOTAL_CHARS) {
         logger.warn(`CP 值过大: ${cp}`)
         return []
@@ -745,25 +739,32 @@ export class DocParser {
       plcCp.push(cp)
     }
 
-    const rgPcdStart = plcPcdStart + 4 + ccpByteSize
+    const rgPcdStart = plcPcdStart + ccpByteSize
     const pieces: Piece[] = []
 
     for (let i = 0; i < n; i++) {
       const pcdOffset = rgPcdStart + i * 8
-      // PCD (8 bytes, MS-DOC §2.5.6.4):
-      //   Pn (2 bytes): paragraph number (or 0)
-      //   Fc (4 bytes): bit 0-29 = fc; bit 30 = fCompressed; bit 31 = fChp
+      // PCD (8 bytes, MS-DOC §2.9.72):
+      //   Pn/flags (2 bytes)
+      //   Fc (FcCompressed, 4 bytes): bit 0-29 = fc; bit 30 = fCompressed
       //   Prm (2 bytes): CHPX index when fChp is set
       const fcAndFlags = DocParser.readUint32(clxData, pcdOffset + 2)
       const fCompressed = (fcAndFlags & 0x40000000) !== 0
       const fChp = (fcAndFlags & 0x80000000) !== 0
-      const fcValue = fcAndFlags & 0x3FFFFFFF
+      const rawFc = fcAndFlags & 0x3FFFFFFF
+      // FcCompressed (§2.9.73): uncompressed text is UTF-16LE at byte offset
+      // `fc`; compressed text is 8-bit (Windows-1252) at byte offset `fc / 2`.
+      const fcValue = fCompressed ? Math.floor(rawFc / 2) : rawFc
       const chpxIndex = fChp ? DocParser.readUint16(clxData, pcdOffset + 6) : undefined
 
       const cpStart = plcCp[i]
       const cpEnd = plcCp[i + 1]
       const charCount = cpEnd - cpStart
-      if (charCount <= 0) continue
+      if (charCount < 0) {
+        logger.warn(`CP 边界倒退: ${cpStart} > ${cpEnd}`)
+        return []
+      }
+      if (charCount === 0) continue
 
       const piece: Piece = { cpStart, cpEnd, fcValue, fCompressed, fChp, charCount }
       if (chpxIndex !== undefined) piece.chpxIndex = chpxIndex
@@ -863,7 +864,7 @@ export class DocParser {
         }
 
         const segText = this.extractTextFromRange(
-          wordDocData, segStart, segEnd, piece.fCompressed,
+          wordDocData, segStart, segEnd, piece.fCompressed, false,
         )
         const segTextLen = segText.length
         const segStartInStory = storyOffset[b.name]
@@ -907,15 +908,26 @@ export class DocParser {
     'PK\x03\x04', 'PK\x05\x06', 'PK\x07\x08',
   ]
 
+  // How often (in appended chars) to run the binary-signature scan. Must stay below
+  // the 64-char detection window so a signature completing between checks is still
+  // within the trailing window at the next scheduled check.
+  private static readonly SIGNATURE_CHECK_INTERVAL = 48
+
   private containsBinarySignature(text: string): boolean {
     const tail = text.slice(-64)
     return DocParser.BINARY_SIGNATURES.some(sig => tail.includes(sig))
   }
 
-  private extractTextFromRange(data: Uint8Array, start: number, end: number, isCompressed: boolean = false): string {
+  private extractTextFromRange(data: Uint8Array, start: number, end: number, isCompressed: boolean = false, guardBinary: boolean = true): string {
     if (start < 0 || end > data.length || start >= end) return ''
 
     let text = ''
+    // The binary-signature scan is expensive (slice + N substring searches), so we
+    // throttle it instead of running it on every character. The interval (48) is kept
+    // smaller than the 64-char detection window so a signature completing between
+    // checks is still inside the trailing window at the next check — detection is only
+    // deferred by a few dozen chars, which the lastIndexOf('\n') truncation absorbs.
+    let sinceCheck = 0
     if (isCompressed) {
       for (let i = start; i < end; i++) {
         const byte = data[i]
@@ -935,11 +947,14 @@ export class DocParser {
           // Skip unmapped high bytes (likely binary noise)
         }
         else if (byte >= 0x20) text += String.fromCharCode(byte)
-        // Check for binary signature in the trailing 64 chars
-        if (text.length >= 8 && this.containsBinarySignature(text)) {
-          const lastNewline = text.lastIndexOf('\n')
-          text = lastNewline >= 0 ? text.slice(0, lastNewline) : ''
-          break
+        // Check for binary signature in the trailing chars (throttled)
+        if (guardBinary && ++sinceCheck >= DocParser.SIGNATURE_CHECK_INTERVAL && text.length >= 8) {
+          sinceCheck = 0
+          if (this.containsBinarySignature(text)) {
+            const lastNewline = text.lastIndexOf('\n')
+            text = lastNewline >= 0 ? text.slice(0, lastNewline) : ''
+            return text
+          }
         }
       }
     } else {
@@ -958,13 +973,21 @@ export class DocParser {
         else if (DocParser.isValidPrintableChar(charCode)) {
           text += String.fromCharCode(charCode)
         }
-        // Check for binary signature in the trailing 64 chars
-        if (text.length >= 8 && this.containsBinarySignature(text)) {
-          const lastNewline = text.lastIndexOf('\n')
-          text = lastNewline >= 0 ? text.slice(0, lastNewline) : ''
-          break
+        // Check for binary signature in the trailing chars (throttled)
+        if (guardBinary && ++sinceCheck >= DocParser.SIGNATURE_CHECK_INTERVAL && text.length >= 8) {
+          sinceCheck = 0
+          if (this.containsBinarySignature(text)) {
+            const lastNewline = text.lastIndexOf('\n')
+            text = lastNewline >= 0 ? text.slice(0, lastNewline) : ''
+            return text
+          }
         }
       }
+    }
+    // Final check to catch a signature in the last (< interval) unchecked chars.
+    if (guardBinary && text.length >= 8 && this.containsBinarySignature(text)) {
+      const lastNewline = text.lastIndexOf('\n')
+      text = lastNewline >= 0 ? text.slice(0, lastNewline) : ''
     }
     return text
   }
@@ -1702,6 +1725,32 @@ export class DocParser {
       }
     }
 
+    // Clx unreachable (typically the table stream is missing — e.g. compound
+    // files written by third-party exporters that embed Excel objects). Word
+    // still writes the legacy FibBase fcMin/fcMac text range, so use it when
+    // it is exactly consistent with the story character counts: span == ccp
+    // (8-bit) or span == 2*ccp (UTF-16LE). The strict equality keeps garbage
+    // FibBase values (textutil files etc.) from hijacking this path.
+    if (fib && fib.fcMinBase !== undefined && fib.fcMacBase !== undefined) {
+      const span = fib.fcMacBase - fib.fcMinBase
+      const c = fib.rgCcp
+      const totalCcp = c.ccpText + c.ccpFtn + c.ccpHdd + c.ccpMcr + c.ccpAtn + c.ccpEdn + c.ccpTxbx + c.ccpHdrTxbx
+      const inBounds = fib.fcMinBase >= 32 && fib.fcMacBase <= data.length && span > 0
+      if (inBounds && totalCcp > 0 && (span === totalCcp || span === totalCcp * 2)) {
+        const is8bit = span === totalCcp
+        logger.log(`FibBase 范围回退: [${fib.fcMinBase}, ${fib.fcMacBase}) ${is8bit ? '8-bit' : 'UTF-16LE'}`)
+        const raw = this.extractParagraphsWithFormat(data, {
+          fcMin: fib.fcMinBase, fcMac: fib.fcMacBase,
+          fComplex: is8bit, trustFcMin: true, _isRetry: true,
+        })
+        const paragraphs = this.filterParagraphsWithGenericLogic(raw)
+        this.applyStructuralFormats(paragraphs)
+        if (paragraphs.length > 0) {
+          return { paragraphs }
+        }
+      }
+    }
+
     // textutil-generated files have fComplex bit always set (byte 10=0xBF),
     // but the content is often UTF-16LE. Ignore fComplex for those files
     // and lean toward UTF-16 in the scoring fallback.
@@ -2172,14 +2221,17 @@ export class DocParser {
     return this.filterParagraphsWithGenericLogic(paragraphs)
   }
 
-  private extractParagraphsWithFormat(data: Uint8Array, options?: { fcMin?: number; fComplex?: boolean; _isRetry?: boolean; fcMac?: number }): any[] {
+  private extractParagraphsWithFormat(data: Uint8Array, options?: { fcMin?: number; fComplex?: boolean; _isRetry?: boolean; fcMac?: number; trustFcMin?: boolean }): any[] {
     const paragraphs: any[] = []
     let currentParagraph = ''
     let paragraphIndex = 0
     const maxBytes = Math.min(data.length, this.maxScanBytes, options?.fcMac || data.length)
     let startOffset = options?.fcMin ?? 0
 
-    if (startOffset < 2048) {
+    // The 2048 floor skips FIB header noise for heuristic scans, but callers
+    // holding a verified text range (e.g. FibBase fcMin/fcMac) may start
+    // earlier — doc bodies can begin right after the 1024-byte FIB area.
+    if (startOffset < 2048 && !options?.trustFcMin) {
       startOffset = 2048
       logger.log(`从 offset ${startOffset} 开始提取`)
     }
@@ -2884,13 +2936,17 @@ export class DocParser {
     const styles: Array<{start: number; end: number; style: any}> = []
     let currentStyle: any = null
     let styleStart = 0
+    // Running count of CJK chars in text[0, i). Lets us decide the fallback Chinese
+    // font in O(1) per char instead of re-scanning the whole prefix (was O(n^2)).
+    let chineseSoFar = 0
 
     for (let i = 0; i < text.length; i++) {
       const char = text[i]
-      const isDigit = /[0-9]/.test(char)
-      const isChinese = /[\u4e00-\u9fff]/.test(char)
-      const isUpperCase = /[A-Z]/.test(char)
-      const isLowerCase = /[a-z]/.test(char)
+      const code = text.charCodeAt(i)
+      const isDigit = code >= 0x30 && code <= 0x39
+      const isChinese = code >= 0x4e00 && code <= 0x9fff
+      const isUpperCase = code >= 0x41 && code <= 0x5a
+      const isLowerCase = code >= 0x61 && code <= 0x7a
       const isWhitespace = /\s/.test(char)
 
       let charStyle: any = null
@@ -2898,7 +2954,15 @@ export class DocParser {
       else if (isDigit) charStyle = { fontName: 'Times New Roman', underline: this.shouldHaveUnderline(text, i) }
       else if (isUpperCase || isLowerCase) charStyle = { fontName: 'Times New Roman', underline: false }
       else if (isChinese) charStyle = { fontName: '仿宋', underline: false }
-      else charStyle = { fontName: this.getChineseFont(text, i), underline: false }
+      else {
+        // Fallback font decision based on CJK density of the preceding text.
+        const fontName = (i === 0 || chineseSoFar === 0)
+          ? 'Times New Roman'
+          : (chineseSoFar / i > 0.7 ? '宋体' : '仿宋')
+        charStyle = { fontName, underline: false }
+      }
+
+      if (isChinese) chineseSoFar++
 
       if (currentStyle && this.isSameStyle(currentStyle, charStyle)) continue
       if (currentStyle && !this.isSameStyle(currentStyle, charStyle)) {
@@ -2951,13 +3015,6 @@ export class DocParser {
       return (style1.underline || false) === (style2.underline || false)
     }
     return fn1 === fn2 && (style1.underline || false) === (style2.underline || false)
-  }
-
-  private getChineseFont(text: string, index: number): string {
-    const before = text.substring(0, index)
-    const chineseCount = (before.match(/[\u4e00-\u9fff]/g) || []).length
-    if (before.length === 0 || chineseCount === 0) return 'Times New Roman'
-    return chineseCount / before.length > 0.7 ? '宋体' : '仿宋'
   }
 
   private detectParagraphFormat(text: string, index: number, totalParagraphs: number): any {
@@ -3111,34 +3168,58 @@ export class DocParser {
 
   private removeInternalDuplicates(text: string): string {
     if (text.length < 10) return text
+    const n = text.length
 
-    for (let len = Math.floor(text.length / 2); len >= 3; len--) {
-      for (let i = 0; i <= text.length - len * 2; i++) {
-        const part1 = text.substring(i, i + len)
-        const part2 = text.substring(i + len, i + len * 2)
-        if (part1 === part2) {
-          let count = 2
-          let j = i + len * 2
-          while (j + len <= text.length && text.substring(j, j + len) === part1) {
-            count++
-            j += len
+    // Collapse adjacent duplicated blocks (parser artifacts like "abcabc" -> "abc").
+    // A tandem repeat of period `len` at position i means text[i+j] == text[i+j+len]
+    // for every j in [0, len). Instead of allocating substrings for every (len, i)
+    // pair (the old O(n^3) scan that also hit its worst case on clean text), we track
+    // a rolling run of consecutive character matches at gap `len`; a run of `len`
+    // matches marks the smallest qualifying i for that period — identical selection
+    // order to the original (largest period first, then smallest index).
+    // Periods below 12 are left alone: real extraction artifacts duplicate whole
+    // sentence chunks, while short tandems are usually legitimate prose ("This is
+    // a", "had had", "la la la") that a small threshold would eat.
+    for (let len = Math.floor(n / 2); len >= 12; len--) {
+      let run = 0
+      const maxP = n - len
+      for (let p = 0; p < maxP; p++) {
+        if (text.charCodeAt(p) === text.charCodeAt(p + len)) {
+          if (++run >= len) {
+            const i = p - len + 1
+            const part1 = text.substring(i, i + len)
+            let count = 2
+            let j = i + len * 2
+            while (j + len <= n && text.substring(j, j + len) === part1) {
+              count++
+              j += len
+            }
+            const before = text.substring(0, i)
+            const after = text.substring(i + len * count)
+            return this.removeInternalDuplicates(before + part1 + after)
           }
-          const before = text.substring(0, i)
-          const after = text.substring(i + len * count)
-          return this.removeInternalDuplicates(before + part1 + after)
+        } else {
+          run = 0
         }
       }
     }
 
-    for (let len = Math.floor(text.length / 3); len >= 5; len--) {
-      for (let i = 0; i <= text.length - len * 3; i++) {
-        const part1 = text.substring(i, i + len)
-        const part2 = text.substring(i + len, i + len * 2)
-        const part3 = text.substring(i + len * 2, i + len * 3)
-        if (part1 === part2 && part2 === part3) {
-          const before = text.substring(0, i)
-          const after = text.substring(i + len * 3)
-          return this.removeInternalDuplicates(before + part1 + after)
+    // Collapse triple repeats (three identical adjacent blocks -> one). Needs a run of
+    // 2*len consecutive gap matches: the first `len` prove block1==block2, the next
+    // `len` prove block2==block3.
+    for (let len = Math.floor(n / 3); len >= 5; len--) {
+      let run = 0
+      const maxP = n - len
+      for (let p = 0; p < maxP; p++) {
+        if (text.charCodeAt(p) === text.charCodeAt(p + len)) {
+          if (++run >= len * 2) {
+            const i = p - len * 2 + 1
+            const before = text.substring(0, i)
+            const after = text.substring(i + len * 3)
+            return this.removeInternalDuplicates(before + text.substring(i, i + len) + after)
+          }
+        } else {
+          run = 0
         }
       }
     }

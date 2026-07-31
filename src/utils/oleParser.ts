@@ -391,7 +391,13 @@ export class OleParser {
 
     let currentSector = entry.startSector
     let bytesRead = 0
-    const maxIterations = 1000
+    // Safety net against cyclic FAT chains. Reading entry.size bytes needs at
+    // most ceil(size / sectorSize) sectors, so derive the cap from the stream
+    // size (plus slack) rather than a fixed constant — a fixed 1000 truncated
+    // large streams (e.g. a 1000-sector = 512000-byte ceiling). Bound by
+    // fat.length so a corrupt chain can never loop forever.
+    const expectedSectors = Math.ceil(entry.size / sectorSize) + 8
+    const maxIterations = Math.min(fat.length + 8, expectedSectors)
     let iterations = 0
 
     while (currentSector >= 0 && currentSector < fat.length && fat[currentSector] !== FREESECT && bytesRead < entry.size && iterations < maxIterations) {
@@ -469,7 +475,8 @@ export class OleParser {
     let currentMiniSector = entry.startSector
     let bytesRead = 0
     let iterations = 0
-    const maxIterations = 1000
+    // Derive the cyclic-chain guard from the stream size (see readRegularStream).
+    const maxIterations = Math.min(miniFat.length + 8, Math.ceil(entry.size / miniSectorSize) + 8)
 
     while (currentMiniSector >= 0 && currentMiniSector < miniFat.length && miniFat[currentMiniSector] !== FREESECT && bytesRead < entry.size && iterations < maxIterations) {
       iterations++

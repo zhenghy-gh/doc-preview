@@ -381,6 +381,86 @@ describe('OleParser', () => {
     })
   })
 
+  describe('large regular stream reads', () => {
+    it('reads a stream spanning more than 1000 sectors without truncating', () => {
+      // Regression guard: readRegularStream once capped iterations at a fixed
+      // 1000, silently truncating any stream larger than 1000 sectors
+      // (1000 * 512 = 512000 bytes). Build a contiguous 1100-sector stream and
+      // assert every byte is returned.
+      const sectorSize = 512
+      const entriesPerSector = sectorSize / 4 // 128
+      // NB: this parser defines FREESECT = -2 (0xFFFFFFFE) and ENDOFCHAIN = -1
+      // (0xFFFFFFFF) — swapped from the OLE spec — so match its convention here.
+      const ENDOFCHAIN = 0xffffffff
+      const FREESECT = 0xfffffffe
+
+      const fatSectorCount = 9 // sectors 0..8
+      const dirSector = 9
+      const dataStart = 10
+      const dataSectorCount = 1100 // > 1000 → tripped the old ceiling
+      const dataEnd = dataStart + dataSectorCount - 1 // 1109
+      const totalSectors = dataEnd + 1 // 1110
+      const buf = new ArrayBuffer((totalSectors + 1) * sectorSize)
+      const view = new Uint8Array(buf)
+
+      // OLE signature + v3 512-byte sectors
+      view[0] = 0xd0; view[1] = 0xcf; view[2] = 0x11; view[3] = 0xe0
+      view[4] = 0xa1; view[5] = 0xb1; view[6] = 0x1a; view[7] = 0xe1
+      view[26] = 0x03
+      view[30] = 0x09
+      view[32] = 0x06
+      const setU32 = (off: number, value: number) => {
+        view[off] = value & 0xff
+        view[off + 1] = (value >> 8) & 0xff
+        view[off + 2] = (value >> 16) & 0xff
+        view[off + 3] = (value >> 24) & 0xff
+      }
+      setU32(44, fatSectorCount)   // fatSectorsCount
+      setU32(48, dirSector)        // firstDirectorySector
+      setU32(56, 4096)             // miniStreamCutoffSize
+      setU32(60, ENDOFCHAIN)       // firstMiniFatSector
+      setU32(64, 0)                // miniFatSectorsCount
+      setU32(68, ENDOFCHAIN)       // firstDifatSector
+      setU32(72, 0)                // difatSectorsCount
+
+      // DIFAT: FAT sectors are 0..8, terminated by FREESECT
+      for (let k = 0; k < fatSectorCount; k++) setU32(76 + k * 4, k)
+      setU32(76 + fatSectorCount * 4, FREESECT)
+
+      // FAT: sectorToOffset(sector) = (sector + 1) * sectorSize
+      const setFat = (idx: number, value: number) => {
+        const fatSectorK = Math.floor(idx / entriesPerSector)
+        const off = (fatSectorK + 1) * sectorSize + (idx % entriesPerSector) * 4
+        setU32(off, value)
+      }
+      for (let idx = 0; idx <= dirSector; idx++) setFat(idx, ENDOFCHAIN) // FAT + dir sectors
+      for (let idx = dataStart; idx < dataEnd; idx++) setFat(idx, idx + 1) // contiguous chain
+      setFat(dataEnd, ENDOFCHAIN)
+
+      // Directory sector: Root Entry + the big stream
+      const dirOffset = (dirSector + 1) * sectorSize
+      const dataSize = dataSectorCount * sectorSize // 563200
+      writeDirectoryEntry(view, dirOffset, 'Root Entry', 5, 0, 0)
+      writeDirectoryEntry(view, dirOffset + 128, 'WordDocument', 2, dataStart, dataSize)
+
+      // Fill the data region with a known marker byte
+      const dataByteStart = (dataStart + 1) * sectorSize
+      for (let i = dataByteStart; i < dataByteStart + dataSize; i++) view[i] = 0x41
+
+      const parser = new OleParser(buf)
+      const header = parser.parseHeader()
+      const fat = parser.getFatSectors(header)
+      const dirs = parser.getDirectorySectors(header, fat)
+      const stream = parser.findWordDocumentStream(dirs)
+
+      expect(stream).not.toBeNull()
+      expect(stream!.size).toBe(dataSize) // not clipped at 512000
+      expect(stream!.data.length).toBe(dataSize)
+      expect(stream!.data[dataSize - 1]).toBe(0x41) // last byte present
+      expect(stream!.data.every(b => b === 0x41)).toBe(true)
+    })
+  })
+
   describe('findWordDocumentStream', () => {
     function makeEntry(name: string, objectType: number, size: number = 0, startSector: number = 0): any {
       return { name, objectType, size, startSector, nameLength: name.length * 2 }
