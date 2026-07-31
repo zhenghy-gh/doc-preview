@@ -545,16 +545,17 @@ describe('OleParser', () => {
       setFat(4, 0xFFFFFFFF)
 
       const dirOffset = sectorSize * 3
-      writeDirectoryEntry(view, dirOffset, 'Root Entry', 5, 4, 64)
-      writeDirectoryEntry(view, dirOffset + 128, 'WordDocument', 2, 0, 11)
+      writeDirectoryEntry(view, dirOffset, 'Root Entry', 5, 4, 128)
+      writeDirectoryEntry(view, dirOffset + 128, 'WordDocument', 2, 0, 70)
 
       const miniFatOffset = sectorSize * 4
-      // mini-sector 0 = end of chain
-      view[miniFatOffset] = 0xFF; view[miniFatOffset + 1] = 0xFF
-      view[miniFatOffset + 2] = 0xFF; view[miniFatOffset + 3] = 0xFF
+      // mini-sector 0 -> 1 -> end of chain
+      view[miniFatOffset] = 0x01
+      view[miniFatOffset + 4] = 0xFF; view[miniFatOffset + 5] = 0xFF
+      view[miniFatOffset + 6] = 0xFF; view[miniFatOffset + 7] = 0xFF
 
       const rootMiniStreamOffset = sectorSize * 5
-      const content = 'Hello\rWorld'
+      const content = `Hello${'x'.repeat(65)}`
       for (let i = 0; i < content.length; i++) {
         view[rootMiniStreamOffset + i] = content.charCodeAt(i)
       }
@@ -566,8 +567,9 @@ describe('OleParser', () => {
       const stream = parser.findWordDocumentStream(dirs)
 
       expect(stream).not.toBeNull()
-      expect(stream?.size).toBe(11)
+      expect(stream?.size).toBe(70)
       expect(new TextDecoder('latin1').decode(stream!.data.slice(0, 5))).toBe('Hello')
+      expect(stream?.data[69]).toBe('x'.charCodeAt(0))
     })
   })
 
