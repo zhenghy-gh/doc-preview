@@ -206,7 +206,9 @@ export class OleParser {
 
     const sectorSize = this.getSectorSize(header)
     const entriesPerSector = sectorSize / 4
-    const totalSectors = Math.ceil(this.buffer.byteLength / sectorSize)
+    // Sector numbers start after the compound-file header. Do not expose the
+    // header itself as a phantom FAT entry.
+    const totalSectors = Math.max(0, Math.floor((this.buffer.byteLength - 1) / sectorSize))
 
     logger.log(`开始读取 FAT 表，共 ${header.difat.length} 个 FAT 扇区, ${totalSectors} 总扇区`)
 

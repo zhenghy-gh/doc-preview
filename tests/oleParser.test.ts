@@ -207,7 +207,7 @@ describe('OleParser', () => {
   })
 
   describe('getFatSectors', () => {
-    it('should return a FAT array filled with FREESECT (-1) for empty DIFAT', () => {
+    it('should not count the compound-file header as a FAT sector', () => {
       const buf = new ArrayBuffer(512)
       const view = new Uint8Array(buf)
       view[0] = 0xD0; view[1] = 0xCF; view[2] = 0x11; view[3] = 0xE0
@@ -217,9 +217,7 @@ describe('OleParser', () => {
       const parser = new OleParser(buf)
       const header = parser.parseHeader()
       const fat = parser.getFatSectors(header)
-      // All entries are FREESECT (-1) since no FAT sectors are referenced
-      expect(fat.length).toBeGreaterThan(0)
-      expect(fat.every(entry => entry === -1)).toBe(true)
+      expect(fat).toEqual([])
     })
 
     it('should cache FAT array on repeated calls', () => {
@@ -259,7 +257,7 @@ describe('OleParser', () => {
       const parser = new OleParser(buf)
       const header = parser.parseHeader()
       const fat = parser.getFatSectors(header)
-      expect(fat.length).toBeGreaterThanOrEqual(3)
+      expect(fat).toHaveLength(3)
       expect(fat[0]).toBe(-2)   // ENDOFCHAIN
       expect(fat[1]).toBe(2)    // next sector
       expect(fat[2]).toBe(-2)   // ENDOFCHAIN
