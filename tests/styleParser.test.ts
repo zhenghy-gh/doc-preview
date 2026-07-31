@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   parseStylesheet,
+  resolveStyleFormat,
   getHeadingLevel,
   getStyleName,
   detectStyleSet,
@@ -119,6 +120,64 @@ describe('styleParser', () => {
       // The parser tries both layouts; it should find the names somehow
       // (at minimum, the built-in fallback kicks in)
       expect(result.length).toBeGreaterThan(0)
+    })
+  })
+
+  describe('resolveStyleFormat', () => {
+    it('should return the direct style format when there is no base', () => {
+      const styles = [
+        { istd: 0, name: 'Normal', type: 'paragraph' as const, charFormat: { fontSize: 12 } },
+      ]
+      const resolved = resolveStyleFormat(styles, 0)
+      expect(resolved.charFormat).toEqual({ fontSize: 12 })
+      expect(resolved.paraFormat).toBeUndefined()
+    })
+
+    it('should merge formats along the istdBase chain (derived overrides base)', () => {
+      const styles = [
+        { istd: 0, name: 'Normal', type: 'paragraph' as const, charFormat: { fontSize: 10, fontName: 'Times' }, fontIndex: 0 },
+        { istd: 1, name: 'Heading 1', type: 'paragraph' as const, istdBase: 0, charFormat: { fontSize: 18, bold: true }, paraFormat: { spaceBefore: 12 } },
+        { istd: 3, name: 'Heading 3', type: 'paragraph' as const, istdBase: 1, charFormat: { fontSize: 13 } },
+      ]
+      const resolved = resolveStyleFormat(styles, 3)
+      // fontSize: Heading 3 (13) overrides Heading 1 (18) overrides Normal (10)
+      expect(resolved.charFormat).toEqual({ fontSize: 13, bold: true, fontName: 'Times' })
+      // paraFormat inherited from Heading 1
+      expect(resolved.paraFormat).toEqual({ spaceBefore: 12 })
+      // fontIndex from nearest definer (Normal)
+      expect(resolved.fontIndex).toBe(0)
+    })
+
+    it('should prefer the fontIndex from the most derived style', () => {
+      const styles = [
+        { istd: 0, name: 'Normal', type: 'paragraph' as const, fontIndex: 0 },
+        { istd: 1, name: 'Heading 1', type: 'paragraph' as const, istdBase: 0, fontIndex: 2 },
+      ]
+      expect(resolveStyleFormat(styles, 1).fontIndex).toBe(2)
+    })
+
+    it('should guard against inheritance cycles', () => {
+      const styles = [
+        { istd: 0, name: 'A', type: 'paragraph' as const, istdBase: 1, charFormat: { bold: true } },
+        { istd: 1, name: 'B', type: 'paragraph' as const, istdBase: 0, charFormat: { italic: true } },
+      ]
+      const resolved = resolveStyleFormat(styles, 0)
+      expect(resolved.charFormat).toEqual({ bold: true, italic: true })
+    })
+
+    it('should return empty result for unknown istd', () => {
+      const resolved = resolveStyleFormat([], 5)
+      expect(resolved.charFormat).toBeUndefined()
+      expect(resolved.paraFormat).toBeUndefined()
+      expect(resolved.fontIndex).toBeUndefined()
+    })
+
+    it('should stop the chain at a missing base style', () => {
+      const styles = [
+        { istd: 2, name: 'Derived', type: 'paragraph' as const, istdBase: 99, charFormat: { bold: true } },
+      ]
+      const resolved = resolveStyleFormat(styles, 2)
+      expect(resolved.charFormat).toEqual({ bold: true })
     })
   })
 

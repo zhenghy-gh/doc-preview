@@ -130,23 +130,20 @@ describe('DocParser', () => {
       writeU16(32, 6)            // miniSectorSizePower = 6 (64 bytes)
       writeU32(48, 1)            // firstDirectorySector = 1
       writeU32(56, 4096)         // miniStreamCutoffSize
-      writeU32(60, 0xFFFFFFFF)   // firstMiniFatSector = ENDOFCHAIN (project: -1)
+      writeU32(60, 0xFFFFFFFE)   // firstMiniFatSector = ENDOFCHAIN
       writeU32(64, 0)            // miniFatSectorsCount
-      writeU32(68, 0xFFFFFFFF)   // firstDifatSector = ENDOFCHAIN (project: -1)
+      writeU32(68, 0xFFFFFFFE)   // firstDifatSector = ENDOFCHAIN
       writeU32(72, 0)            // difatSectorsCount
       writeU32(76, 0)            // DIFAT[0] = sector 0 (FAT)
       for (let i = 1; i < 109; i++) {
-        writeU32(76 + i * 4, 0xFFFFFFFE)  // DIFAT[1..108] = FREESECT (project: -2)
+        writeU32(76 + i * 4, 0xFFFFFFFF)  // DIFAT[1..108] = FREESECT
       }
 
       // ---- Sector 0 (offset 512): FAT ----
-      // NOTE: This project's OleParser uses FREESECT=-2 (0xFFFFFFFE) and
-      // ENDOFCHAIN=-1 (0xFFFFFFFF), which is the reverse of the MS-CFB spec
-      // constants. Match the project's convention here so the FAT chain is
-      // read correctly.
+      // MS-CFB sector chain markers.
       const fatBase = SECTOR
-      const ENDOFCHAIN = 0xFFFFFFFF
-      const FREESECT = 0xFFFFFFFE
+      const ENDOFCHAIN = 0xFFFFFFFE
+      const FREESECT = 0xFFFFFFFF
       writeU32(fatBase + 0 * 4, ENDOFCHAIN)  // sector 0: FAT
       writeU32(fatBase + 1 * 4, ENDOFCHAIN)  // sector 1: Directory
       writeU32(fatBase + 2 * 4, ENDOFCHAIN)  // sector 2: WordDocument
@@ -171,7 +168,7 @@ describe('DocParser', () => {
         writeU32(entryOffset + 116, startSector)
         writeU32(entryOffset + 120, size)
       }
-      writeDirEntry(dirBase + 0 * 128, 'Root Entry', 5, 0xFFFFFFFF, 0)
+      writeDirEntry(dirBase + 0 * 128, 'Root Entry', 5, 0xFFFFFFFE, 0)
       writeDirEntry(dirBase + 1 * 128, 'WordDocument', 2, 2, 512)
       writeDirEntry(dirBase + 2 * 128, options.tableStreamName, 2, 3, 64)
 
@@ -287,8 +284,8 @@ describe('DocParser', () => {
         view[off + 3] = (val >> 24) & 0xff
       }
 
-      const ENDOFCHAIN = 0xFFFFFFFF
-      const FREESECT = 0xFFFFFFFE
+      const ENDOFCHAIN = 0xFFFFFFFE
+      const FREESECT = 0xFFFFFFFF
 
       // ---- Header ----
       view[0] = 0xD0; view[1] = 0xCF; view[2] = 0x11; view[3] = 0xE0

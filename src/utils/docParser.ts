@@ -36,7 +36,7 @@ import type { ParsedPicture } from './pictureParser'
 import { parseChpxRuns, parsePapxRuns, parseChpxRunsFromFkp, parsePapxRunsFromFkp, mergeCharFormatForParagraph } from './formatParser'
 import type { PieceFcRange } from './formatParser'
 import type { ChpxRun, PapxRun } from './formatParser'
-import { parseStylesheet, getHeadingLevel, detectStyleSet } from './styleParser'
+import { parseStylesheet, resolveStyleFormat, getHeadingLevel, detectStyleSet } from './styleParser'
 import type { StyleDefinition, StyleSetInfo } from './styleParser'
 import { parseFontTable } from './fontParser'
 import { parseListTable, getListFormat, getListFormatFromLfo, parsePlcfLfo } from './listParser'
@@ -1554,25 +1554,27 @@ export class DocParser {
             const style = styles.find(s => s.istd === papx.istd)
             if (style) {
               newPara.paraFormat.styleName = style.name
-              // Apply style's base paragraph format (inheritance)
-              if (style.paraFormat && Object.keys(style.paraFormat).length > 0) {
+              // Resolve the full style formatting along the istdBase
+              // inheritance chain (e.g. Heading 3 → Heading 1 → Normal),
+              // then let direct PAPX/CHPX overrides win.
+              const resolved = resolveStyleFormat(styles, papx.istd)
+              if (resolved.paraFormat && Object.keys(resolved.paraFormat).length > 0) {
                 // Style base format → PAPX overrides (already applied above)
                 newPara.paraFormat = {
-                  ...style.paraFormat,
+                  ...resolved.paraFormat,
                   ...newPara.paraFormat,
                 }
               }
-              // Apply style's base character format
-              if (style.charFormat && Object.keys(style.charFormat).length > 0) {
+              if (resolved.charFormat && Object.keys(resolved.charFormat).length > 0) {
                 newPara.charFormat = {
-                  ...style.charFormat,
+                  ...resolved.charFormat,
                   ...newPara.charFormat,
                 }
               }
               // Apply style's font name
-              if (style.fontIndex !== undefined && fontNames && fontNames.length > style.fontIndex) {
+              if (resolved.fontIndex !== undefined && fontNames && fontNames.length > resolved.fontIndex) {
                 if (!newPara.charFormat.fontName) {
-                  newPara.charFormat.fontName = fontNames[style.fontIndex]
+                  newPara.charFormat.fontName = fontNames[resolved.fontIndex]
                 }
               }
               // Only use style-name-based heading level if outlineLevel wasn't set

@@ -191,7 +191,7 @@ describe('OleParser', () => {
   })
 
   describe('getFatSectors', () => {
-    it('should return a FAT array filled with FREESECT (-2) for empty DIFAT', () => {
+    it('should return a FAT array filled with FREESECT (-1) for empty DIFAT', () => {
       const buf = new ArrayBuffer(512)
       const view = new Uint8Array(buf)
       view[0] = 0xD0; view[1] = 0xCF; view[2] = 0x11; view[3] = 0xE0
@@ -201,9 +201,9 @@ describe('OleParser', () => {
       const parser = new OleParser(buf)
       const header = parser.parseHeader()
       const fat = parser.getFatSectors(header)
-      // All entries are FREESECT (-2) since no FAT sectors are referenced
+      // All entries are FREESECT (-1) since no FAT sectors are referenced
       expect(fat.length).toBeGreaterThan(0)
-      expect(fat.every(entry => entry === -2)).toBe(true)
+      expect(fat.every(entry => entry === -1)).toBe(true)
     })
 
     it('should cache FAT array on repeated calls', () => {
@@ -229,24 +229,24 @@ describe('OleParser', () => {
 
       // DIFAT[0] at offset 76 = sector 0 → FAT sector is at byte 512
       view[76] = 0x00; view[77] = 0x00; view[78] = 0x00; view[79] = 0x00
-      // Second DIFAT entry: FREESECT (-2) = 0xFFFFFFFE
-      view[80] = 0xFE; view[81] = 0xFF; view[82] = 0xFF; view[83] = 0xFF
+      // Second DIFAT entry: FREESECT (-1) = 0xFFFFFFFF
+      view[80] = 0xFF; view[81] = 0xFF; view[82] = 0xFF; view[83] = 0xFF
 
       // FAT sector 0 starts at byte 512
-      // Entry 0: ENDOFCHAIN (-1) = 0xFFFFFFFF
-      view[512] = 0xFF; view[513] = 0xFF; view[514] = 0xFF; view[515] = 0xFF
+      // Entry 0: ENDOFCHAIN (-2) = 0xFFFFFFFE
+      view[512] = 0xFE; view[513] = 0xFF; view[514] = 0xFF; view[515] = 0xFF
       // Entry 1: chain to sector 2
       view[516] = 0x02; view[517] = 0x00; view[518] = 0x00; view[519] = 0x00
       // Entry 2: ENDOFCHAIN
-      view[520] = 0xFF; view[521] = 0xFF; view[522] = 0xFF; view[523] = 0xFF
+      view[520] = 0xFE; view[521] = 0xFF; view[522] = 0xFF; view[523] = 0xFF
 
       const parser = new OleParser(buf)
       const header = parser.parseHeader()
       const fat = parser.getFatSectors(header)
       expect(fat.length).toBeGreaterThanOrEqual(3)
-      expect(fat[0]).toBe(-1)   // ENDOFCHAIN
+      expect(fat[0]).toBe(-2)   // ENDOFCHAIN
       expect(fat[1]).toBe(2)    // next sector
-      expect(fat[2]).toBe(-1)   // ENDOFCHAIN
+      expect(fat[2]).toBe(-2)   // ENDOFCHAIN
     })
 
     it('should read additional FAT sectors from the DIFAT sector chain', () => {
@@ -269,15 +269,15 @@ describe('OleParser', () => {
       setU32(68, 2)          // first DIFAT sector is sector 2
       setU32(72, 1)          // one DIFAT sector
       setU32(76, 0)          // header DIFAT[0] -> FAT sector 0
-      setU32(80, 0xFFFFFFFE) // header DIFAT terminator
+      setU32(80, 0xFFFFFFFF) // header DIFAT terminator
 
       const fat1Offset = (1 + 1) * sectorSize
       setU32(fat1Offset + 2 * 4, 7) // FAT entry for sector 130 (128 + 2)
 
       const difatOffset = (2 + 1) * sectorSize
       setU32(difatOffset, 1) // extended DIFAT -> FAT sector 1
-      setU32(difatOffset + 4, 0xFFFFFFFE)
-      setU32(difatOffset + (sectorSize / 4 - 1) * 4, 0xFFFFFFFF)
+      setU32(difatOffset + 4, 0xFFFFFFFF)
+      setU32(difatOffset + (sectorSize / 4 - 1) * 4, 0xFFFFFFFE)
 
       const parser = new OleParser(buf)
       const header = parser.parseHeader()
@@ -295,8 +295,8 @@ describe('OleParser', () => {
       view[0] = 0xD0; view[1] = 0xCF; view[2] = 0x11; view[3] = 0xE0
       view[4] = 0xA1; view[5] = 0xB1; view[6] = 0x1A; view[7] = 0xE1
       view[30] = 0x09 // 512-byte sectors
-      // firstDirectorySector (offset 48) = ENDOFCHAIN (-1)
-      view[48] = 0xFF; view[49] = 0xFF; view[50] = 0xFF; view[51] = 0xFF
+      // firstDirectorySector (offset 48) = ENDOFCHAIN (-2)
+      view[48] = 0xFE; view[49] = 0xFF; view[50] = 0xFF; view[51] = 0xFF
 
       const parser = new OleParser(buf)
       const header = parser.parseHeader()
@@ -320,8 +320,8 @@ describe('OleParser', () => {
 
       // FAT sector 0 at byte 512: entry 0 = ENDOFCHAIN (FAT itself)
       // entry 1 = ENDOFCHAIN (directory sector has no chain)
-      view[512] = 0xFF; view[513] = 0xFF; view[514] = 0xFF; view[515] = 0xFF
-      view[516] = 0xFF; view[517] = 0xFF; view[518] = 0xFF; view[519] = 0xFF
+      view[512] = 0xFE; view[513] = 0xFF; view[514] = 0xFF; view[515] = 0xFF
+      view[516] = 0xFE; view[517] = 0xFF; view[518] = 0xFF; view[519] = 0xFF
 
       // Directory sector 1 at byte 1024: build one "WordDocument" entry
       // Entry layout: 128 bytes per entry
@@ -370,11 +370,11 @@ describe('OleParser', () => {
       view[30] = 0x09
       view[48] = 0x01
       view[76] = 0x00
-      view[sectorSize] = 0xFF
+      view[sectorSize] = 0xFE
       view[sectorSize + 1] = 0xFF
       view[sectorSize + 2] = 0xFF
       view[sectorSize + 3] = 0xFF
-      view[sectorSize + 4] = 0xFF
+      view[sectorSize + 4] = 0xFE
       view[sectorSize + 5] = 0xFF
       view[sectorSize + 6] = 0xFF
       view[sectorSize + 7] = 0xFF
@@ -402,9 +402,9 @@ describe('OleParser', () => {
       view[76] = 0x00
 
       const fatOffset = sectorSize
-      view[fatOffset] = 0xFF; view[fatOffset + 1] = 0xFF
+      view[fatOffset] = 0xFE; view[fatOffset + 1] = 0xFF
       view[fatOffset + 2] = 0xFF; view[fatOffset + 3] = 0xFF
-      view[fatOffset + 4] = 0xFF; view[fatOffset + 5] = 0xFF
+      view[fatOffset + 4] = 0xFE; view[fatOffset + 5] = 0xFF
       view[fatOffset + 6] = 0xFF; view[fatOffset + 7] = 0xFF
 
       const dirOffset = sectorSize * 2
@@ -448,16 +448,16 @@ describe('OleParser', () => {
       view[30] = 0x09
       setU32(44, fatSectorCount)
       setU32(48, dirStart)
-      setU32(68, 0xFFFFFFFF)
+      setU32(68, 0xFFFFFFFE)
       setU32(72, 0)
       for (let i = 0; i < fatSectorCount; i++) setU32(76 + i * 4, i)
-      setU32(76 + fatSectorCount * 4, 0xFFFFFFFE)
+      setU32(76 + fatSectorCount * 4, 0xFFFFFFFF)
 
-      for (let i = 0; i < fatSectorCount; i++) setFat(i, 0xFFFFFFFF)
+      for (let i = 0; i < fatSectorCount; i++) setFat(i, 0xFFFFFFFE)
       for (let sector = dirStart; sector < dirStart + dirSectorCount - 1; sector++) {
         setFat(sector, sector + 1)
       }
-      setFat(dirStart + dirSectorCount - 1, 0xFFFFFFFF)
+      setFat(dirStart + dirSectorCount - 1, 0xFFFFFFFE)
 
       const lastDirOffset = (dirStart + dirSectorCount) * sectorSize
       writeDirectoryEntry(view, lastDirOffset, 'WordDocument', 2, 0, 512)
@@ -524,7 +524,7 @@ describe('OleParser', () => {
       view[60] = 0x03; view[61] = 0x00; view[62] = 0x00; view[63] = 0x00
       view[64] = 0x01; view[65] = 0x00; view[66] = 0x00; view[67] = 0x00
       // first DIFAT sector = ENDOFCHAIN, count = 0
-      view[68] = 0xFF; view[69] = 0xFF; view[70] = 0xFF; view[71] = 0xFF
+      view[68] = 0xFE; view[69] = 0xFF; view[70] = 0xFF; view[71] = 0xFF
       view[72] = 0x00; view[73] = 0x00; view[74] = 0x00; view[75] = 0x00
       // DIFAT[0] = FAT sector 0
       view[76] = 0x00; view[77] = 0x00; view[78] = 0x00; view[79] = 0x00
@@ -538,11 +538,11 @@ describe('OleParser', () => {
         view[off + 3] = (value >> 24) & 0xff
       }
       // FAT sector 0
-      setFat(0, 0xFFFFFFFF)
-      setFat(1, 0xFFFFFFFF)
-      setFat(2, 0xFFFFFFFF)
-      setFat(3, 0xFFFFFFFF)
-      setFat(4, 0xFFFFFFFF)
+      setFat(0, 0xFFFFFFFE)
+      setFat(1, 0xFFFFFFFE)
+      setFat(2, 0xFFFFFFFE)
+      setFat(3, 0xFFFFFFFE)
+      setFat(4, 0xFFFFFFFE)
 
       const dirOffset = sectorSize * 3
       writeDirectoryEntry(view, dirOffset, 'Root Entry', 5, 4, 128)
@@ -551,7 +551,7 @@ describe('OleParser', () => {
       const miniFatOffset = sectorSize * 4
       // mini-sector 0 -> 1 -> end of chain
       view[miniFatOffset] = 0x01
-      view[miniFatOffset + 4] = 0xFF; view[miniFatOffset + 5] = 0xFF
+      view[miniFatOffset + 4] = 0xFE; view[miniFatOffset + 5] = 0xFF
       view[miniFatOffset + 6] = 0xFF; view[miniFatOffset + 7] = 0xFF
 
       const rootMiniStreamOffset = sectorSize * 5
@@ -591,12 +591,12 @@ describe('OleParser', () => {
       view[30] = 0x09
       setU32(48, 1)
       setU32(56, 4096)
-      setU32(60, 0xFFFFFFFF)
+      setU32(60, 0xFFFFFFFE)
       setU32(76, 0)
 
       const fatOffset = sectorSize
-      setU32(fatOffset, 0xFFFFFFFF)
-      setU32(fatOffset + 4, 0xFFFFFFFF)
+      setU32(fatOffset, 0xFFFFFFFE)
+      setU32(fatOffset + 4, 0xFFFFFFFE)
       setU32(fatOffset + 8, 2)
 
       const dirOffset = sectorSize * 2
@@ -619,10 +619,9 @@ describe('OleParser', () => {
       // assert every byte is returned.
       const sectorSize = 512
       const entriesPerSector = sectorSize / 4 // 128
-      // NB: this parser defines FREESECT = -2 (0xFFFFFFFE) and ENDOFCHAIN = -1
-      // (0xFFFFFFFF) — swapped from the OLE spec — so match its convention here.
-      const ENDOFCHAIN = 0xffffffff
-      const FREESECT = 0xfffffffe
+      // MS-CFB sector chain markers.
+      const ENDOFCHAIN = 0xfffffffe
+      const FREESECT = 0xffffffff
 
       const fatSectorCount = 9 // sectors 0..8
       const dirSector = 9

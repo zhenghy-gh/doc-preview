@@ -326,6 +326,53 @@ function parseSpecStds(
   return styles
 }
 
+/**
+ * Resolve the full formatting of a style by walking its istdBase chain.
+ *
+ * Word styles inherit from a base style (e.g. Heading 3 → Heading 1 →
+ * Normal). A style's own grpprl only stores the *differences* from its
+ * base, so rendering just the direct style loses everything defined by
+ * ancestors. This merges formats from the root down: ancestors first,
+ * derived styles override.
+ *
+ * Guards against cycles (visited set) and runaway chains (depth cap).
+ *
+ * @param styles - Parsed style definitions.
+ * @param istd - Style index to resolve.
+ * @returns Merged char/para format and the nearest defined fontIndex.
+ */
+export function resolveStyleFormat(styles: StyleDefinition[], istd: number): ResolvedStyleFormat {
+  // Collect the chain from the requested style up to its root.
+  const chain: StyleDefinition[] = []
+  const visited = new Set<number>()
+  let current = istd
+  for (let depth = 0; depth < 16; depth++) {
+    if (visited.has(current)) break // cycle
+    visited.add(current)
+    const style = styles.find(s => s.istd === current)
+    if (!style) break
+    chain.push(style)
+    if (style.istdBase === undefined) break
+    current = style.istdBase
+  }
+
+  // Merge root-first so derived styles override their ancestors.
+  const resolved: ResolvedStyleFormat = {}
+  for (let i = chain.length - 1; i >= 0; i--) {
+    const style = chain[i]
+    if (style.charFormat && Object.keys(style.charFormat).length > 0) {
+      resolved.charFormat = { ...resolved.charFormat, ...style.charFormat }
+    }
+    if (style.paraFormat && Object.keys(style.paraFormat).length > 0) {
+      resolved.paraFormat = { ...resolved.paraFormat, ...style.paraFormat }
+    }
+    if (style.fontIndex !== undefined) {
+      resolved.fontIndex = style.fontIndex
+    }
+  }
+  return resolved
+}
+
 function parseLegacyStylesheet(data: Uint8Array, fc: number, lcb: number): StyleDefinition[] {
   if (lcb <= 0 || fc < 0 || fc + lcb > data.length) return []
 

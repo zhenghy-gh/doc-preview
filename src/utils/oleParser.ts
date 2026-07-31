@@ -37,8 +37,9 @@ const OLE_SIGNATURE = '\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1'
 const ZIP_SIGNATURE = '\x50\x4B\x03\x04'
 const XML_HEADER = '<?xml'
 
-const FREESECT = -2
-const ENDOFCHAIN = -1
+// MS-CFB special sector markers (signed 32-bit representations).
+const FREESECT = -1       // 0xFFFFFFFF
+const ENDOFCHAIN = -2     // 0xFFFFFFFE
 
 export class OleParser {
   private buffer: ArrayBuffer
