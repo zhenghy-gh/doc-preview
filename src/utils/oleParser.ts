@@ -181,6 +181,7 @@ export class OleParser {
       difat: this._getDifat(76, 109),
     }
     header.difat.push(...this._getExtendedDifat(header))
+    header.difat = this._normalizeDifat(header.difat, header)
 
     logger.log(`版本: ${header.majorVersion}.${header.minorVersion}, 字节序: ${header.byteOrder}`)
     logger.log(`扇区大小: ${Math.pow(2, header.sectorSizePower)} bytes`)
@@ -577,9 +578,15 @@ export class OleParser {
     const sectorSize = this.getSectorSize(header)
     const entriesPerDifatSector = sectorSize / 4 - 1
     let currentSector = header.firstDifatSector
+    const visited = new Set<number>()
 
     for (let i = 0; i < header.difatSectorsCount; i++) {
       if (currentSector < 0 || currentSector === FREESECT || currentSector === ENDOFCHAIN) break
+      if (visited.has(currentSector)) {
+        logger.warn(`DIFAT 链检测到循环: sector=${currentSector}`)
+        break
+      }
+      visited.add(currentSector)
       const offset = this.sectorToOffset(currentSector, header)
       if (offset < 0 || offset + sectorSize > this.buffer.byteLength) {
         logger.warn(`DIFAT 扇区 ${currentSector} 越界`)
@@ -596,6 +603,30 @@ export class OleParser {
     }
 
     return difat
+  }
+
+  private _normalizeDifat(difat: number[], header: OleHeader): number[] {
+    const sectorSize = this.getSectorSize(header)
+    const sectorCount = sectorSize > 0
+      ? Math.max(0, Math.floor((this.buffer.byteLength - 1) / sectorSize))
+      : 0
+    const declaredCount = header.fatSectorsCount > 0
+      ? header.fatSectorsCount
+      : difat.length
+    const normalized: number[] = []
+    const seen = new Set<number>()
+
+    for (const sector of difat) {
+      if (normalized.length >= declaredCount) break
+      if (sector < 0 || sector >= sectorCount || seen.has(sector)) continue
+      seen.add(sector)
+      normalized.push(sector)
+    }
+
+    if (normalized.length !== difat.length) {
+      logger.warn(`DIFAT 已规范化: ${difat.length} -> ${normalized.length} 个 FAT 扇区`)
+    }
+    return normalized
   }
 
   private _parseDirectoryEntry(offset: number): DirectoryEntry | null {

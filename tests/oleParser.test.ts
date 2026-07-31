@@ -188,6 +188,22 @@ describe('OleParser', () => {
       const header = parser.parseHeader()
       expect(header.sectorSizePower).toBe(9)
     })
+
+    it('should remove duplicate and out-of-range DIFAT entries', () => {
+      const sectorSize = 512
+      const buf = new ArrayBuffer(sectorSize * 4)
+      const view = new DataView(buf)
+      view.setUint16(30, 9, true)
+      view.setUint32(44, 2, true)
+      view.setInt32(76, 0, true)
+      view.setInt32(80, 0, true)
+      view.setInt32(84, 99, true)
+      view.setInt32(88, 1, true)
+      view.setInt32(92, -1, true)
+
+      const parser = new OleParser(buf)
+      expect(parser.parseHeader().difat).toEqual([0, 1])
+    })
   })
 
   describe('getFatSectors', () => {
@@ -496,7 +512,7 @@ describe('OleParser', () => {
 
       const parser = new OleParser(buf)
       const header = parser.parseHeader()
-      const fat = [-1, -1]
+      const fat = [-1, -2]
       const miniFat = parser.getMiniFatSectors(header, fat)
 
       expect(miniFat).toHaveLength(128)
