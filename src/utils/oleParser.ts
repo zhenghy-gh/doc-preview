@@ -180,6 +180,18 @@ export class OleParser {
       difatSectorsCount: this.safeReadUint32(72),
       difat: this._getDifat(76, 109),
     }
+    const expectedSectorShift = header.majorVersion === 4 ? 12 : 9
+    if (header.sectorSizePower !== expectedSectorShift) {
+      logger.warn(`非法扇区位移 ${header.sectorSizePower}，按 CFB v${header.majorVersion || 3} 默认值 ${expectedSectorShift} 处理`)
+      header.sectorSizePower = expectedSectorShift
+    }
+    if (header.miniSectorSizePower !== 6) {
+      logger.warn(`非法迷你扇区位移 ${header.miniSectorSizePower}，按默认值 6 处理`)
+      header.miniSectorSizePower = 6
+    }
+    if (header.miniStreamCutoffSize === 0) {
+      header.miniStreamCutoffSize = 4096
+    }
     header.difat.push(...this._getExtendedDifat(header))
     header.difat = this._normalizeDifat(header.difat, header)
 

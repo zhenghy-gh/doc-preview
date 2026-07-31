@@ -189,6 +189,21 @@ describe('OleParser', () => {
       expect(header.sectorSizePower).toBe(9)
     })
 
+    it('should normalize unsafe sector parameters to CFB defaults', () => {
+      const buf = new ArrayBuffer(512)
+      const view = new DataView(buf)
+      view.setUint16(26, 4, true)
+      view.setUint16(30, 31, true)
+      view.setUint16(32, 15, true)
+      view.setUint32(56, 0, true)
+
+      const header = new OleParser(buf).parseHeader()
+
+      expect(header.sectorSizePower).toBe(12)
+      expect(header.miniSectorSizePower).toBe(6)
+      expect(header.miniStreamCutoffSize).toBe(4096)
+    })
+
     it('should remove duplicate and out-of-range DIFAT entries', () => {
       const sectorSize = 512
       const buf = new ArrayBuffer(sectorSize * 4)
