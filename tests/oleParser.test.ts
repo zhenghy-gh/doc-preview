@@ -474,6 +474,33 @@ describe('OleParser', () => {
       expect(dirs[0].size).toBe(buf.byteLength)
     })
 
+    it('should cap v3 directory stream sizes to the physical file', () => {
+      const sectorSize = 512
+      const buf = new ArrayBuffer(sectorSize * 3)
+      const view = new Uint8Array(buf)
+      view[0] = 0xD0; view[1] = 0xCF; view[2] = 0x11; view[3] = 0xE0
+      view[4] = 0xA1; view[5] = 0xB1; view[6] = 0x1A; view[7] = 0xE1
+      view[26] = 0x03
+      view[30] = 0x09
+      view[48] = 0x01
+      view[76] = 0x00
+      view[sectorSize] = 0xFE
+      view[sectorSize + 1] = 0xFF
+      view[sectorSize + 2] = 0xFF
+      view[sectorSize + 3] = 0xFF
+      view[sectorSize + 4] = 0xFE
+      view[sectorSize + 5] = 0xFF
+      view[sectorSize + 6] = 0xFF
+      view[sectorSize + 7] = 0xFF
+
+      const dirOffset = sectorSize * 2
+      writeDirectoryEntry(view, dirOffset, 'WordDocument', 2, 2, 0xFFFFFFFF)
+      const parser = new OleParser(buf)
+      const dirs = parser.getDirectorySectors(parser.parseHeader(), parser.getFatSectors(parser.parseHeader()))
+
+      expect(dirs[0].size).toBe(buf.byteLength)
+    })
+
     it('should read directory chains spanning more than 1000 sectors', () => {
       const sectorSize = 512
       const entriesPerFatSector = sectorSize / 4

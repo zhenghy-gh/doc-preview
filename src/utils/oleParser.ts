@@ -708,7 +708,11 @@ export class OleParser {
   private _readDirectoryStreamSize(offset: number): number {
     const header = this._header
     const lowSize = this.safeReadUint32(offset)
-    if (!header || header.majorVersion < 4) return lowSize
+    if (!header || header.majorVersion < 4) {
+      if (lowSize <= this.buffer.byteLength) return lowSize
+      logger.warn(`目录流大小 ${lowSize} 超出文件大小 ${this.buffer.byteLength}，按文件大小截断`)
+      return this.buffer.byteLength
+    }
 
     const size64 = this.safeReadUint64(offset)
     if (size64 <= BigInt(Number.MAX_SAFE_INTEGER)) {
