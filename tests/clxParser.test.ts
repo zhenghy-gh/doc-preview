@@ -136,6 +136,24 @@ describe('Clx Parser Robustness', () => {
     expect(data.length).toBeLessThan(5)
   })
 
+  it('should skip multiple valid RgPrc prefixes before the Pcdt', () => {
+    const parser = new DocParser(new ArrayBuffer(512))
+    const pcdt = buildClxWithNPieces(1, 5)
+    const data = new Uint8Array(4 + 5 + pcdt.length)
+    data.set([0x01, 0x01, 0x00, 0xAA], 0)
+    data.set([0x01, 0x02, 0x00, 0xBB, 0xCC], 4)
+    data.set(pcdt, 9)
+
+    expect((parser as any).parseClxPieces(data)).toHaveLength(1)
+  })
+
+  it('should reject an RgPrc prefix whose grpprl exceeds the CLX buffer', () => {
+    const parser = new DocParser(new ArrayBuffer(512))
+    const data = new Uint8Array([0x01, 0xFF, 0x7F, 0x02, 0, 0, 0, 0])
+
+    expect((parser as any).parseClxPieces(data)).toEqual([])
+  })
+
   it('should handle lcb larger than available data', () => {
     const data = new Uint8Array(20)
     data[0] = 0x02

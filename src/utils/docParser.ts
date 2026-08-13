@@ -705,7 +705,12 @@ export class DocParser {
     while (offset < clxData.length && clxData[offset] === 0x01) {
       if (offset + 3 > clxData.length) return []
       const cbGrpprl = DocParser.readUint16(clxData, offset + 1)
-      offset += 3 + cbGrpprl
+      const nextOffset = offset + 3 + cbGrpprl
+      if (nextOffset > clxData.length) {
+        logger.warn(`CLX RgPrc 越界: offset=${offset}, cbGrpprl=${cbGrpprl}`)
+        return []
+      }
+      offset = nextOffset
     }
 
     // Pcdt (§2.9.72): clxt(1 byte)=0x02, lcb(4 bytes)=PlcPcd byte size, PlcPcd.
