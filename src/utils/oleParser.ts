@@ -291,7 +291,7 @@ export class OleParser {
         }
 
         const entry = this._parseDirectoryEntry(entryOffset)
-        if (entry && entry.nameLength > 0) {
+        if (entry && entry.name.length > 0) {
           directory.push(entry)
           logger.log(`找到目录条目: ${entry.name} (类型: ${entry.objectType}, 大小: ${entry.size})`)
         }
@@ -682,15 +682,18 @@ export class OleParser {
         return null
       }
 
+      // CFB stores the terminating UTF-16 NUL in nameLength. A few older
+      // producers omit it, so accept both layouts while never decoding the
+      // metadata bytes that follow the fixed 64-byte name field.
+      const terminator = nameLength >= 2 && this.safeReadUint16(offset + nameLength - 2) === 0
+        ? nameLength - 2
+        : nameLength
       let name = ''
-      for (let i = 0; i < nameLength && offset + i + 1 < this.buffer.byteLength; i += 2) {
+      for (let i = 0; i < terminator && offset + i + 1 < this.buffer.byteLength; i += 2) {
         const char = this.safeReadUint16(offset + i)
-        if (char !== 0) {
-          name += String.fromCharCode(char)
-        }
+        if (char === 0) break
+        name += String.fromCharCode(char)
       }
-
-      name = name.trim()
 
       return {
         name,
