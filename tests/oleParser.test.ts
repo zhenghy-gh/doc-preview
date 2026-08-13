@@ -222,6 +222,16 @@ describe('OleParser', () => {
   })
 
   describe('getFatSectors', () => {
+    it('should ignore a trailing partial sector when sizing the FAT', () => {
+      const buf = new ArrayBuffer(512 + 512 + 100)
+      const view = new DataView(buf)
+      view.setUint16(26, 3, true)
+      view.setUint16(30, 9, true)
+
+      const parser = new OleParser(buf)
+      expect(parser.getFatSectors(parser.parseHeader())).toHaveLength(1)
+    })
+
     it('should not count the compound-file header as a FAT sector', () => {
       const buf = new ArrayBuffer(512)
       const view = new Uint8Array(buf)

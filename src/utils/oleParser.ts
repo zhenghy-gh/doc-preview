@@ -222,7 +222,7 @@ export class OleParser {
     const entriesPerSector = sectorSize / 4
     // Sector numbers start after the compound-file header. Do not expose the
     // header itself as a phantom FAT entry.
-    const totalSectors = Math.max(0, Math.floor((this.buffer.byteLength - 1) / sectorSize))
+    const totalSectors = Math.max(0, Math.floor((this.buffer.byteLength - sectorSize) / sectorSize))
 
     logger.log(`开始读取 FAT 表，共 ${header.difat.length} 个 FAT 扇区, ${totalSectors} 总扇区`)
 
@@ -635,7 +635,7 @@ export class OleParser {
   private _normalizeDifat(difat: number[], header: OleHeader): number[] {
     const sectorSize = this.getSectorSize(header)
     const sectorCount = sectorSize > 0
-      ? Math.max(0, Math.floor((this.buffer.byteLength - 1) / sectorSize))
+      ? Math.max(0, Math.floor((this.buffer.byteLength - sectorSize) / sectorSize))
       : 0
     const declaredCount = header.fatSectorsCount > 0
       ? header.fatSectorsCount
