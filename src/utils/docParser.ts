@@ -614,7 +614,6 @@ export class DocParser {
     return filtered.join('\n\n').trim()
   }
 
-  private static readonly MAX_PIECE_COUNT = 1000
   private static readonly MAX_TOTAL_CHARS = 10 * 1024 * 1024
   /** Maximum number of images to extract from a single document. */
   private static readonly MAX_IMAGES = 50
@@ -722,7 +721,11 @@ export class DocParser {
       return []
     }
     const n = Math.floor((lcb - 4) / 12)
-    if (n <= 0 || n > DocParser.MAX_PIECE_COUNT) {
+    // `lcb` already bounds n to the bytes physically present in the CLX. Use
+    // the document-wide character ceiling as the allocation guard instead of
+    // a fixed 1000-piece cap: heavily edited documents can legitimately have
+    // thousands of short pieces.
+    if (n <= 0 || n > DocParser.MAX_TOTAL_CHARS) {
       logger.warn(`PlcPcd n=${n} 超出范围`)
       return []
     }

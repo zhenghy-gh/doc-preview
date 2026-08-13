@@ -78,15 +78,20 @@ describe('Clx Parser Robustness', () => {
     expect(ccps).toEqual([0, 100, 200, 300])
   })
 
-  it('should handle large number of pieces (n > 1000 for safety limit)', () => {
+  it('should parse legitimate piece tables containing more than 1000 pieces', () => {
     const n = 2000
-    const clx = buildClxWithNPieces(n, 10)
+    const clx = buildClxWithNPieces(n, 1)
     const view = new DataView(clx.buffer)
 
     const lcb = view.getUint32(1, true)
     const readN = Math.floor((lcb - 4) / 12)
     expect(readN).toBe(n)
     expect(readN).toBeGreaterThan(1000)
+
+    const parser = new DocParser(new ArrayBuffer(512))
+    const pieces = (parser as any).parseClxPieces(clx)
+    expect(pieces).toHaveLength(n)
+    expect(pieces[n - 1]).toMatchObject({ cpStart: n - 1, cpEnd: n, charCount: 1 })
   })
 
   it('should have correct Pcdt structure (bare Pcdt, no Prc prefix)', () => {
