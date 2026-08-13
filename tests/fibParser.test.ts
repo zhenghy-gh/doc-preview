@@ -206,6 +206,8 @@ describe('parseFib', () => {
     expect(result!.fComplex).toBe(true)
     expect(result!.fcMin).toBe(0)
     expect(result!.fcMac).toBe(0)
+    expect(result!.nFib).toBe(0x0100)
+    expect(result!.wordVersion).toBe('word2003')
   })
 
   it('should return only fComplex when buffer leaves FibRgLw out of range', () => {
@@ -215,6 +217,8 @@ describe('parseFib', () => {
     expect(result).not.toBeNull()
     expect(result!.fComplex).toBe(false)
     expect(result!.fcMin).toBe(0)
+    expect(result!.nFib).toBe(0x0100)
+    expect(result!.wordVersion).toBe('word2003')
   })
 
   it('should accept both magic variants (0xa5ec and 0xa5eb)', () => {
