@@ -189,6 +189,14 @@ describe('Clx Parser Robustness', () => {
     expect(pieces).toEqual([])
   })
 
+  it('should reject a Piece Table whose first CP does not start at zero', () => {
+    const parser = new DocParser(new ArrayBuffer(512))
+    const data = buildClxWithNPieces(1, 5)
+    new DataView(data.buffer).setUint32(5, 3, true)
+
+    expect((parser as any).parseClxPieces(data)).toEqual([])
+  })
+
   it('should reject compressed pieces whose stored FC is not divisible by two', () => {
     const parser = new DocParser(new ArrayBuffer(512))
     const data = buildClxWithNPieces(1, 5)

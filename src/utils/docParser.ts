@@ -741,6 +741,10 @@ export class DocParser {
     const plcCp: number[] = []
     for (let i = 0; i < ccpCount; i++) {
       const cp = DocParser.readUint32(clxData, plcPcdStart + i * 4)
+      if (i === 0 && cp !== 0) {
+        logger.warn(`PlcPcd 首个 CP 必须为 0，实际为 ${cp}`)
+        return []
+      }
       if (cp > DocParser.MAX_TOTAL_CHARS) {
         logger.warn(`CP 值过大: ${cp}`)
         return []
