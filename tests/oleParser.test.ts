@@ -501,6 +501,19 @@ describe('OleParser', () => {
   })
 
   describe('mini stream support', () => {
+    it('should cap a mini-stream allocation to the root mini-stream capacity', () => {
+      const parser = new OleParser(new ArrayBuffer(512))
+      const result = (parser as any).readMiniStream(
+        { name: 'Small', objectType: 2, startSector: 0, size: 0xFFFFFFFF, nameLength: 12 },
+        new Uint8Array([1, 2, 3, 4]),
+        [-2],
+        { miniSectorSizePower: 6 },
+      )
+
+      expect(result.size).toBe(4)
+      expect(Array.from(result.data)).toEqual([1, 2, 3, 4])
+    })
+
     it('should cap a malicious MiniFAT sector count to the physical file capacity', () => {
       const sectorSize = 512
       const buf = new ArrayBuffer(sectorSize * 2)

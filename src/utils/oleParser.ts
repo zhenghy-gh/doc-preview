@@ -521,16 +521,17 @@ export class OleParser {
 
   private readMiniStream(entry: DirectoryEntry, rootStreamData: Uint8Array, miniFat: number[], header: OleHeader): StreamData {
     const miniSectorSize = Math.pow(2, header.miniSectorSizePower)
-    const data = new Uint8Array(entry.size)
+    const targetSize = Math.min(entry.size, rootStreamData.length)
+    const data = new Uint8Array(targetSize)
 
     let currentMiniSector = entry.startSector
     let bytesRead = 0
     let iterations = 0
     const visited = new Set<number>()
     // Derive the cyclic-chain guard from the stream size (see readRegularStream).
-    const maxIterations = Math.min(miniFat.length + 8, Math.ceil(entry.size / miniSectorSize) + 8)
+    const maxIterations = Math.min(miniFat.length + 8, Math.ceil(targetSize / miniSectorSize) + 8)
 
-    while (currentMiniSector >= 0 && currentMiniSector < miniFat.length && miniFat[currentMiniSector] !== FREESECT && bytesRead < entry.size && iterations < maxIterations) {
+    while (currentMiniSector >= 0 && currentMiniSector < miniFat.length && miniFat[currentMiniSector] !== FREESECT && bytesRead < targetSize && iterations < maxIterations) {
       if (visited.has(currentMiniSector)) {
         logger.warn(`迷你流链检测到循环: miniSector=${currentMiniSector}`)
         break
@@ -543,7 +544,7 @@ export class OleParser {
         break
       }
 
-      const bytesToRead = Math.min(miniSectorSize, entry.size - bytesRead, rootStreamData.length - offset)
+      const bytesToRead = Math.min(miniSectorSize, targetSize - bytesRead, rootStreamData.length - offset)
       data.set(rootStreamData.subarray(offset, offset + bytesToRead), bytesRead)
 
       bytesRead += bytesToRead
