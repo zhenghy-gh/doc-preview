@@ -395,16 +395,18 @@ export class OleParser {
 
     const header = this.parseHeader()
     const fat = this.getFatSectors(header)
-    const miniFat = this.getMiniFatSectors(header, fat)
-    const rootEntry = this.findRootEntry(header, fat)
 
-    if (this.shouldUseMiniStream(entry, header) && rootEntry) {
-      const rootStream = this.readRegularStream(rootEntry, header, fat)
-      if (rootStream.size > 0) {
-        const miniStream = this.readMiniStream(entry, rootStream.data, miniFat, header)
-        if (miniStream.size > 0) {
-          logger.info(`迷你流读取完成: ${miniStream.data.length} bytes`)
-          return miniStream
+    if (this.shouldUseMiniStream(entry, header)) {
+      const miniFat = this.getMiniFatSectors(header, fat)
+      const rootEntry = this.findRootEntry(header, fat)
+      if (rootEntry) {
+        const rootStream = this.readRegularStream(rootEntry, header, fat)
+        if (rootStream.size > 0) {
+          const miniStream = this.readMiniStream(entry, rootStream.data, miniFat, header)
+          if (miniStream.size > 0) {
+            logger.info(`迷你流读取完成: ${miniStream.data.length} bytes`)
+            return miniStream
+          }
         }
       }
     }

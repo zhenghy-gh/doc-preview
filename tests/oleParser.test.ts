@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { OleParser } from '../src/utils/oleParser'
 
 function createBuffer(signature: number[]): ArrayBuffer {
@@ -620,6 +620,25 @@ describe('OleParser', () => {
   })
 
   describe('large regular stream reads', () => {
+    it('should not initialize MiniFAT when reading a regular stream', () => {
+      const sectorSize = 512
+      const buf = new ArrayBuffer(sectorSize * 2)
+      const view = new DataView(buf)
+      view.setUint16(26, 3, true)
+      view.setUint16(30, 9, true)
+      view.setUint16(32, 6, true)
+      view.setUint32(56, 4096, true)
+
+      const parser = new OleParser(buf)
+      const miniFatSpy = vi.spyOn(parser, 'getMiniFatSectors')
+      parser.readStream({
+        name: 'WordDocument', objectType: 2, startSector: 0,
+        size: 4096, nameLength: 26,
+      })
+
+      expect(miniFatSpy).not.toHaveBeenCalled()
+    })
+
     it('should stop a cyclic FAT stream without duplicating sector contents', () => {
       const sectorSize = 512
       const buf = new ArrayBuffer(sectorSize * 4)
