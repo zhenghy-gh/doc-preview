@@ -171,6 +171,16 @@ describe('Clx Parser Robustness', () => {
     expect(pieces).toEqual([])
   })
 
+  it('should reject compressed pieces whose stored FC is not divisible by two', () => {
+    const parser = new DocParser(new ArrayBuffer(512))
+    const data = buildClxWithNPieces(1, 5)
+    const view = new DataView(data.buffer)
+    const pcdStart = 5 + 2 * 4
+    view.setUint32(pcdStart + 2, 0x40000001, true)
+
+    expect((parser as any).parseClxPieces(data)).toEqual([])
+  })
+
   it('should concatenate multiple pieces when parsing CLX text', () => {
     const parser = new DocParser(new ArrayBuffer(512))
     const textBytes = new TextEncoder().encode('HelloWorld')

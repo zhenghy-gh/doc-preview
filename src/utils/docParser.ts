@@ -756,6 +756,10 @@ export class DocParser {
       const fCompressed = (fcAndFlags & 0x40000000) !== 0
       const fChp = (fcAndFlags & 0x80000000) !== 0
       const rawFc = fcAndFlags & 0x3FFFFFFF
+      if (fCompressed && (rawFc & 1) !== 0) {
+        logger.warn(`压缩 Piece 的 FC 未按 2 字节对齐: ${rawFc}`)
+        return []
+      }
       // FcCompressed (§2.9.73): uncompressed text is UTF-16LE at byte offset
       // `fc`; compressed text is 8-bit (Windows-1252) at byte offset `fc / 2`.
       const fcValue = fCompressed ? Math.floor(rawFc / 2) : rawFc
