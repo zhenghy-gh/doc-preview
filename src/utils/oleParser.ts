@@ -47,6 +47,7 @@ export class OleParser {
   private _header: OleHeader | null = null
   private _fat: number[] | null = null
   private _miniFat: number[] | null = null
+  private _directory: DirectoryEntry[] | null = null
 
   constructor(buffer: ArrayBuffer) {
     this.buffer = buffer
@@ -58,6 +59,7 @@ export class OleParser {
     this._header = null
     this._fat = null
     this._miniFat = null
+    this._directory = null
   }
 
   // ---- Safe readers ----
@@ -253,6 +255,8 @@ export class OleParser {
   // ---- Directory ----
 
   getDirectorySectors(header: OleHeader, fat: number[]): DirectoryEntry[] {
+    if (this._directory) return this._directory
+
     const directory: DirectoryEntry[] = []
     const sectorSize = this.getSectorSize(header)
     const entriesPerSector = sectorSize / 128
@@ -298,6 +302,7 @@ export class OleParser {
     }
 
     logger.log(`目录表读取完成，共 ${directory.length} 个条目`)
+    this._directory = directory
     return directory
   }
 

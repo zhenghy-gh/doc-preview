@@ -318,6 +318,20 @@ describe('OleParser', () => {
   })
 
   describe('getDirectorySectors', () => {
+    it('should cache parsed directory entries and invalidate them with resetCache', () => {
+      const parser = new OleParser(new ArrayBuffer(512))
+      const header = parser.parseHeader()
+      const fat: number[] = []
+
+      const first = parser.getDirectorySectors(header, fat)
+      const second = parser.getDirectorySectors(header, fat)
+      expect(second).toBe(first)
+
+      parser.resetCache()
+      const third = parser.getDirectorySectors(parser.parseHeader(), fat)
+      expect(third).not.toBe(first)
+    })
+
     it('should return empty array when no directory sector is reachable', () => {
       const buf = new ArrayBuffer(512)
       const view = new Uint8Array(buf)
