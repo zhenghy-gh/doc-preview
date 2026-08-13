@@ -26,7 +26,8 @@ export type WordVersion =
  *   - >= 0x0108    → Word 2007+
  */
 export function detectWordVersion(nFib: number): WordVersion {
-  if (nFib <= 0x005D) return 'word6'
+  if (!Number.isInteger(nFib) || nFib < 0x005D || nFib > 0xFFFF) return 'unknown'
+  if (nFib === 0x005D) return 'word6'
   if (nFib <= 0x005F) return 'word95'
   if (nFib <= 0x00C1) return 'word97'
   if (nFib <= 0x00D9) return 'word2000'

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseFib } from '../src/utils/fibParser'
+import { detectWordVersion, parseFib } from '../src/utils/fibParser'
 
 // FibRgFcLcb97 pair indices (MS-DOC §2.5.5). Each pair is 8 bytes
 // (4-byte fc + 4-byte lcb). cbRgFcLcb is the count of pairs.
@@ -410,5 +410,18 @@ describe('parseFib', () => {
       expect(result!.fcDop).toBe(0)
       expect(result!.lcbDop).toBe(0)
     })
+  })
+})
+
+describe('detectWordVersion', () => {
+  it('should not classify missing or pre-spec nFib values as Word 6', () => {
+    expect(detectWordVersion(0)).toBe('unknown')
+    expect(detectWordVersion(0x005C)).toBe('unknown')
+    expect(detectWordVersion(0x005D)).toBe('word6')
+  })
+
+  it('should reject non-integer and out-of-range nFib values', () => {
+    expect(detectWordVersion(193.5)).toBe('unknown')
+    expect(detectWordVersion(0x10000)).toBe('unknown')
   })
 })
