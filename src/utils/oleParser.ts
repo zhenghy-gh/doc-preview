@@ -329,22 +329,17 @@ export class OleParser {
       return this.readStream(caseInsensitive)
     }
 
-    logger.warn('搜索包含 "Word" 的流')
-    const wordEntries = directory.filter(e => e.name.toLowerCase().includes('word') && e.objectType === 2)
+    logger.warn('搜索以 WordDocument 为核心名称的流')
+    const wordEntries = directory.filter(e => {
+      if (e.objectType !== 2) return false
+      return e.name.toLowerCase().replace(/[\s_-]/g, '') === 'worddocument'
+    })
     if (wordEntries.length > 0) {
       logger.info(`找到 ${wordEntries.length} 个包含 Word 的流，尝试第一个: ${wordEntries[0].name}`)
       return this.readStream(wordEntries[0])
     }
 
-    logger.warn('搜索所有流对象')
-    const allStreams = directory.filter(e => e.objectType === 2 && e.size > 0)
-    if (allStreams.length > 0) {
-      const sorted = allStreams.sort((a, b) => b.size - a.size)
-      logger.warn(`尝试最大的流: ${sorted[0].name}, size=${sorted[0].size}`)
-      return this.readStream(sorted[0])
-    }
-
-    logger.error('未找到任何可用的流')
+    logger.error('未找到 WordDocument 流')
     return null
   }
 

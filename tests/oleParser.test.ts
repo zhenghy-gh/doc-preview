@@ -870,16 +870,23 @@ describe('OleParser', () => {
       expect(result).not.toBeNull()
     })
 
-    it('should find stream with "word" in the name', () => {
+    it('should find a normalized WordDocument stream name', () => {
       const buf = new ArrayBuffer(512)
       const view = new Uint8Array(buf)
       view[0] = 0xD0; view[1] = 0xCF; view[2] = 0x11; view[3] = 0xE0
       view[4] = 0xA1; view[5] = 0xB1; view[6] = 0x1A; view[7] = 0xE1
       const parser = new OleParser(buf)
 
-      const dirs = [makeEntry('MyWordStream', 2, 512)]
+      const dirs = [makeEntry('Word Document', 2, 512)]
       const result = parser.findWordDocumentStream(dirs)
       expect(result).not.toBeNull()
+    })
+
+    it('should not treat an unrelated largest stream as WordDocument', () => {
+      const parser = new OleParser(new ArrayBuffer(512))
+      const dirs = [makeEntry('Data', 2, 4096), makeEntry('SummaryInformation', 2, 1024)]
+
+      expect(parser.findWordDocumentStream(dirs)).toBeNull()
     })
 
     it('should return null when no streams found', () => {
