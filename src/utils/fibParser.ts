@@ -316,11 +316,11 @@ export function parseFib(data: Uint8Array): FibData | null {
 
     // rgFcLcbBlob starts after cbRgFcLcb
     const blobStart = fibRgLwEnd + 2
-    const blobSize = cbRgFcLcb * 8
 
     // For libwv/non-standard files, cbRgFcLcb may be invalid (e.g., 0xFFFF)
     // In this case, we still return the parsed rgCcp values for text extraction
-    if (blobStart + blobSize > data.length || cbRgFcLcb < 2 || cbRgFcLcb > 1000) {
+    const availablePairCount = Math.floor((data.length - blobStart) / 8)
+    if (cbRgFcLcb < 2 || cbRgFcLcb > availablePairCount) {
       logger.warn(`FIB blob无效(cbRgFcLcb=${cbRgFcLcb})，返回rgCcp供文本提取`)
       return {
         fcMin: 0, fcMac: 0, fcMinBase, fcMacBase, fcClx: 0, lcbClx: 0,

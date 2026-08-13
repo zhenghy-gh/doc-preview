@@ -169,6 +169,19 @@ describe('parseFib', () => {
     expect(result!.lcbClx).toBe(0x50)
   })
 
+  it('should accept a valid extended rgFcLcb blob beyond the old 1000-pair cap', () => {
+    const data = createFibData({
+      cbRgFcLcb: 1001,
+      fcClx: 0x300,
+      lcbClx: 0x50,
+    })
+    const result = parseFib(data)
+
+    expect(result).not.toBeNull()
+    expect(result!.fcClx).toBe(0x300)
+    expect(result!.lcbClx).toBe(0x50)
+  })
+
   it('should keep legacy fcMin/fcMac at 0 regardless of blob content', () => {
     const data = createFibData({ fcClx: 0x300, lcbClx: 0x50 })
     const result = parseFib(data)
