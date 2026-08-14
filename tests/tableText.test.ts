@@ -129,4 +129,188 @@ describe('tableText', () => {
       expect(renderNestedTableHtml([], undefined, [])).toBe('')
     })
   })
+
+  describe('splitTableCells edge cases', () => {
+    it('should keep the trailing empty cell when keepTrailingEmpty is set', () => {
+      expect(splitTableCells('A\u0007B\u0007', true)).toEqual(['A', 'B', ''])
+    })
+
+    it('should normalize non-breaking spaces to plain spaces', () => {
+      expect(splitTableCells('A\u00a0B\u0007C\u0007')).toEqual(['A B', 'C'])
+    })
+
+    it('should treat consecutive tabs as a single separator', () => {
+      expect(splitTableCells('A\t\tB')).toEqual(['A', 'B'])
+    })
+
+    it('should return null for falsy input', () => {
+      expect(splitTableCells('')).toBeNull()
+      expect(splitTableCells(null as unknown as string)).toBeNull()
+    })
+
+    it('should reject tab rows with only one non-empty cell', () => {
+      expect(splitTableCells('\tA\t')).toBeNull()
+    })
+  })
+
+  describe('renderTableHtml formatting options', () => {
+    it('should render header rows inside <thead>', () => {
+      const html = renderTableHtml(
+        [
+          ['Name', 'Age'],
+          ['Alice', '30'],
+          ['Bob', '25'],
+        ],
+        undefined,
+        1,
+      )
+      expect(html).toContain('<thead>')
+      expect(html).toContain('</thead>')
+      expect(html).toContain('<tbody>')
+      expect(html).toContain('<th')
+      // Body rows use td: 2 rows × 2 cols = 4
+      const tdCount = (html.match(/<td/g) || []).length
+      expect(tdCount).toBe(4)
+      // Header styling
+      expect(html).toContain('font-weight:bold')
+      expect(html).toContain('text-align:center')
+    })
+
+    it('should render a single non-empty header cell spanning all columns', () => {
+      const html = renderTableHtml(
+        [
+          ['Title', ''],
+          ['A', 'B'],
+        ],
+        undefined,
+        1,
+      )
+      expect(html).toContain('colspan="2"')
+    })
+
+    it('should render all rows as body when headerRowCount is 0', () => {
+      const html = renderTableHtml([['A', 'B'], ['C', 'D']])
+      expect(html).not.toContain('<thead>')
+      expect(html).toContain('<tbody>')
+    })
+
+    it('should not split thead when headerRowCount >= rows.length', () => {
+      const html = renderTableHtml([['A', 'B']], undefined, 2)
+      expect(html).not.toContain('<thead>')
+      expect(html).toContain('<tbody>')
+    })
+
+    it('should apply table borders and collapse when inside borders exist', () => {
+      const rowsInfo: any[] = [{
+        inTable: true,
+        borders: {
+          top: { borderType: 1, lineWidth: 8, colorIndex: 1 },
+          bottom: { borderType: 2, lineWidth: 8, colorIndex: 6 },
+          left: { borderType: 3, lineWidth: 8, colorIndex: 7 },
+          right: { borderType: 4, lineWidth: 8, colorIndex: 8 },
+          insideH: { borderType: 1, lineWidth: 4, colorIndex: 1 },
+          insideV: { borderType: 1, lineWidth: 4, colorIndex: 1 },
+        },
+      }]
+      const html = renderTableHtml([['A', 'B'], ['C', 'D']], rowsInfo)
+      expect(html).toContain('border-collapse:collapse')
+      expect(html).toContain('border-top:')
+      expect(html).toContain('border-bottom:')
+      expect(html).toContain('border-left:')
+      expect(html).toContain('border-right:')
+    })
+
+    it('should use default borders when no table info is provided', () => {
+      const html = renderTableHtml([['A', 'B']])
+      expect(html).toContain('border-collapse:collapse')
+      expect(html).toContain('border:1px solid #000000')
+      expect(html).toContain('padding:4px 8px')
+    })
+
+    it('should center a justified table', () => {
+      const rowsInfo: any[] = [{ inTable: true, justification: 'center' }]
+      const html = renderTableHtml([['A', 'B']], rowsInfo)
+      expect(html).toContain('margin-left:auto')
+      expect(html).toContain('margin-right:auto')
+    })
+
+    it('should right-align a table (indent is not applied when justified right)', () => {
+      const rowsInfo: any[] = [{ inTable: true, justification: 'right', indentTwips: 150 }]
+      const html = renderTableHtml([['A', 'B']], rowsInfo)
+      expect(html).toContain('margin-left:auto')
+      expect(html).toContain('margin-right:0')
+      // justification wins over indentTwips
+      expect(html).not.toContain('margin-left:10px')
+    })
+
+    it('should apply indent twips when not justified', () => {
+      const rowsInfo: any[] = [{ inTable: true, indentTwips: 150 }]
+      const html = renderTableHtml([['A', 'B']], rowsInfo)
+      // 150 twips / 15 = 10px
+      expect(html).toContain('margin-left:10px')
+    })
+
+    it('should apply cell borders and width', () => {
+      const rowsInfo: any[] = [{
+        inTable: true,
+        cells: [
+          {
+            borders: {
+              top: { borderType: 1, lineWidth: 4, colorIndex: 1 },
+            },
+            widthTwips: 300,
+          },
+        ],
+      }]
+      const html = renderTableHtml([['A', 'B']], rowsInfo)
+      expect(html).toContain('border-top:1px solid #000000')
+      expect(html).toContain('width:20px')
+    })
+  })
+
+  describe('merge cells (rowspan/colspan)', () => {
+    it('should compute rowspan for vertical merge restart', () => {
+      const rowsInfo: any[] = [
+        { inTable: true, cells: [{ verticalMerge: 'restart' }, {}] },
+        { inTable: true, cells: [{ verticalMerge: 'continue' }, {}] },
+        { inTable: true, cells: [{ verticalMerge: 'restart' }, {}] },
+      ]
+      const html = renderTableHtml([['A', 'x'], ['B', 'y'], ['C', 'z']], rowsInfo)
+      expect(html).toContain('rowspan="2"')
+      // Row 1: A (rowspan 2) + x; Row 2: B skipped, y rendered; Row 3: C + z → 5 td
+      const tdCount = (html.match(/<td/g) || []).length
+      expect(tdCount).toBe(5)
+    })
+
+    it('should compute colspan for horizontal merge restart', () => {
+      const rowsInfo: any[] = [
+        {
+          inTable: true,
+          cells: [{ horizontalMerge: 'restart' }, { horizontalMerge: 'continue' }, { horizontalMerge: 'continue' }],
+        },
+      ]
+      const html = renderTableHtml([['A', 'B', 'C']], rowsInfo)
+      expect(html).toContain('colspan="3"')
+      const tdCount = (html.match(/<td/g) || []).length
+      expect(tdCount).toBe(1)
+    })
+
+    it('should stop rowspan count at a non-continue cell', () => {
+      const rowsInfo: any[] = [
+        { inTable: true, cells: [{ verticalMerge: 'restart' }, {}] },
+        { inTable: true, cells: [{ verticalMerge: 'restart' }, {}] },
+      ]
+      const html = renderTableHtml([['A', 'x'], ['B', 'y']], rowsInfo)
+      expect(html).not.toContain('rowspan="2"')
+    })
+  })
+
+  describe('escapeHtml coverage', () => {
+    it('should escape quotes and apostrophes', () => {
+      const html = renderTableHtml([['say "hi" & \'bye\' <tag>']])
+      expect(html).toContain('&quot;hi&quot;')
+      expect(html).toContain('&#39;bye&#39;')
+      expect(html).toContain('&amp;')
+    })
+  })
 })
