@@ -1056,3 +1056,125 @@ describe('fallback text paths', () => {
     expect(result.error).toContain('progress boom')
   })
 })
+
+describe('parseWithFormat field assembly', () => {
+  /**
+   * A Word 97-style document with HYPERLINK/AUTHOR/PAGE/TOC/INDEX/REF
+   * fields, PlcfSed, and a single-piece CLX. The field CPs index the plain
+   * text directly (no control chars), so instruction extraction from the
+   * raw stream and result slicing from the extracted text stay aligned.
+   */
+  function buildOleWithFields(): ArrayBuffer {
+    const SECTOR = 512
+    const buf = new ArrayBuffer(SECTOR * 6)
+    const view = new Uint8Array(buf)
+    const w16 = (off: number, v: number) => { view[off] = v & 0xff; view[off + 1] = (v >> 8) & 0xff }
+    const w32 = (off: number, v: number) => {
+      view[off] = v & 0xff; view[off + 1] = (v >> 8) & 0xff
+      view[off + 2] = (v >> 16) & 0xff; view[off + 3] = (v >> 24) & 0xff
+    }
+    const END = 0xFFFFFFFE, FREE = 0xFFFFFFFF
+    view[0] = 0xD0; view[1] = 0xCF; view[2] = 0x11; view[3] = 0xE0
+    view[4] = 0xA1; view[5] = 0xB1; view[6] = 0x1A; view[7] = 0xE1
+    w16(26, 3); w16(30, 9); w16(32, 6)
+    w32(48, 1); w32(56, 4096)
+    w32(60, END); w32(64, 0); w32(68, END); w32(72, 0)
+    w32(76, 0)
+    for (let i = 1; i < 109; i++) w32(76 + i * 4, FREE)
+    // FAT: 0=FAT, 1=dir, 2->3=WordDocument, 4=0Table
+    const fatBase = SECTOR
+    w32(fatBase + 0 * 4, END); w32(fatBase + 1 * 4, END)
+    w32(fatBase + 2 * 4, 3); w32(fatBase + 3 * 4, END); w32(fatBase + 4 * 4, END)
+    for (let i = 5; i < 128; i++) w32(fatBase + i * 4, FREE)
+    // Directory
+    const dirBase = SECTOR * 2
+    const writeDir = (off: number, name: string, type: number, start: number, size: number) => {
+      for (let i = 0; i < name.length; i++) w16(off + i * 2, name.charCodeAt(i))
+      w16(off + 64, name.length * 2)
+      view[off + 66] = type
+      view[off + 67] = 1
+      w32(off + 116, start)
+      w32(off + 120, size)
+    }
+    writeDir(dirBase + 0 * 128, 'Root Entry', 5, END, 0)
+    writeDir(dirBase + 1 * 128, 'WordDocument', 2, 2, 1024)
+    writeDir(dirBase + 2 * 128, '0Table', 2, 4, 512)
+
+    // WordDocument stream (sectors 2-3)
+    const wdBase = SECTOR * 3
+    w16(0 + wdBase, 0xA5EC)
+    w16(2 + wdBase, 0x0101)
+    w16(10 + wdBase, 0)
+    w16(32 + wdBase, 0)
+    w16(34 + wdBase, 22)
+    const text = 'X HYPERLINK "a.com" Click AUTHOR John PAGE 1 TOC \\o "1" Head.....1 INDEX A\t1 REF _R1 \\h 1'
+    // FibBase fcMin/fcMac: text starts at character 200 (byte 400)
+    w32(24 + wdBase, 200)
+    w32(28 + wdBase, 200 + text.length)
+    w32(36 + 12 + wdBase, text.length) // ccpText
+    w16(124 + wdBase, 34) // cbRgFcLcb
+    // pair 6: fcPlcfSed/lcbPlcfSed -> 0Table offset 160, 16 bytes
+    w32(126 + 6 * 8 + wdBase, 160)
+    w32(126 + 6 * 8 + 4 + wdBase, 16)
+    // pair 16: fcPlcfFldMom/lcbPlcfFldMom -> 0Table offset 32, 112 bytes
+    w32(126 + 16 * 8 + wdBase, 32)
+    w32(126 + 16 * 8 + 4 + wdBase, 112)
+    // pair 33: fcClx/lcbClx -> 0Table offset 0
+    const clxSize = 1 + 4 + 4 * 2 + 8
+    w32(126 + 33 * 8 + wdBase, 0)
+    w32(126 + 33 * 8 + 4 + wdBase, clxSize)
+    // Text at offset 400
+    const textOffset = 400
+    for (let i = 0; i < text.length; i++) w16(textOffset + i * 2 + wdBase, text.charCodeAt(i))
+    w16(textOffset + text.length * 2 + wdBase, 0x0D)
+
+    // 0Table stream (sector 4 -> physical offset (4+1)*512)
+    const tblBase = SECTOR * 5
+    // CLX: bare Pcdt, single piece
+    view[tblBase + 0] = 0x02
+    w32(tblBase + 1, 16)
+    w32(tblBase + 5, 0)
+    w32(tblBase + 9, text.length)
+    w32(tblBase + 13 + 2, textOffset) // PCD fc (UTF-16LE)
+    // PlcfFld at offset 32: 6 fields, 19 CPs + 18 (ch, flt) pairs
+    const fldBase = tblBase + 32
+    const cps = [0, 19, 25, 25, 32, 37, 37, 42, 44, 44, 55, 66, 66, 72, 76, 76, 87, 89, 89]
+    const pairs: Array<[number, number]> = [
+      [0x13, 37], [0x14, 0], [0x15, 0],
+      [0x13, 1], [0x14, 0], [0x15, 0],
+      [0x13, 0], [0x14, 0], [0x15, 0],
+      [0x13, 19], [0x14, 0], [0x15, 0],
+      [0x13, 14], [0x14, 0], [0x15, 0],
+      [0x13, 0], [0x14, 0], [0x15, 0],
+    ]
+    cps.forEach((cp, i) => w32(fldBase + i * 4, cp))
+    pairs.forEach(([ch, flt], i) => {
+      view[fldBase + cps.length * 4 + i * 2] = ch
+      view[fldBase + cps.length * 4 + i * 2 + 1] = flt
+    })
+    // PlcfSed at offset 160: 1 section, cp [0, text.length], SED fn=0 fcSepx=END
+    const sedBase = tblBase + 160
+    w32(sedBase + 0, 0)
+    w32(sedBase + 4, text.length)
+    w16(sedBase + 8, 0)
+    w32(sedBase + 10, END)
+    w16(sedBase + 14, 0)
+    return buf
+  }
+
+  it('assembles hyperlinks, toc, index, fields, page fields, cross references and sections', () => {
+    const parser = new DocParser(buildOleWithFields())
+    const result = parser.parseWithFormat()
+    expect(result.success).toBe(true)
+    const doc = result.document
+    expect(doc.hyperlinks.length).toBe(1)
+    expect(doc.hyperlinks[0].url).toBe('a.com')
+    expect(doc.toc.length).toBeGreaterThan(0)
+    expect(doc.index.length).toBeGreaterThan(0)
+    expect(doc.documentFields.author).toBe('John')
+    expect(doc.pageFields.length).toBeGreaterThan(0)
+    expect(doc.crossReferences.length).toBe(1)
+    expect(doc.sections.length).toBe(1)
+    expect(doc.paragraphs.length).toBeGreaterThan(0)
+  })
+})

@@ -1250,19 +1250,30 @@ export class DocParser {
       logger.warn(`列表表解析失败: ${e}`)
     }
 
+    // Field CPs index document characters relative to the text start.
+    // FibBase fcMin is that start as a character offset, so slice the stream
+    // so byte offset == cp * bytesPerChar; otherwise instructions read from
+    // the FIB header instead of the text (fields in real docs were silently
+    // dropped). Falls back to the whole stream when fcMin is absent/zero.
+    const textBase = fib.fcMinBase !== undefined && fib.fcMinBase > 0 ? fib.fcMinBase : 0
+    const bytesPerChar = fib.fComplex ? 1 : 2
+    const fieldTextData = textBase > 0 && wordDocData && textBase * bytesPerChar <= wordDocData.length
+      ? wordDocData.subarray(textBase * bytesPerChar)
+      : wordDocData
+
     // Parse PlcfFld (field positions) and extract hyperlinks and TOC
     try {
       if (fib.lcbPlcfFldMom > 0 &&
           fib.fcPlcfFldMom + fib.lcbPlcfFldMom <= tableData.length) {
         const fldEntries = parsePlcfFld(tableData, fib.fcPlcfFldMom, fib.lcbPlcfFldMom)
         if (fldEntries.length > 0 && wordDocData && text) {
-          const links = extractHyperlinks(fldEntries, text, wordDocData)
+          const links = extractHyperlinks(fldEntries, text, fieldTextData)
           if (links.length > 0) {
             ;(hyperlinks as FieldRange[]).push(...links)
             logger.info(`解析到 ${links.length} 个超链接`)
           }
 
-          const allFields = extractAllFields(fldEntries, text, wordDocData)
+          const allFields = extractAllFields(fldEntries, text, fieldTextData)
           const tocFields = allFields.filter(f => f.flt === 19 && f.tocEntries && f.tocEntries.length > 0)
           for (const tocField of tocFields) {
             if (tocField.tocEntries) {
@@ -1283,7 +1294,7 @@ export class DocParser {
             logger.info(`解析到 ${indexEntries.length} 个索引条目`)
           }
 
-          const fields = extractDocumentFields(fldEntries, text, wordDocData)
+          const fields = extractDocumentFields(fldEntries, text, fieldTextData)
           const fieldCount = Object.keys(fields).length
           if (fieldCount > 0) {
             Object.assign(documentFields, fields)
@@ -1340,7 +1351,7 @@ export class DocParser {
           wordDocData && text) {
         const fldEntries = parsePlcfFld(tableData, fib.fcPlcfFldMom, fib.lcbPlcfFldMom)
         if (fldEntries.length > 0) {
-          const parsed = extractPageFields(fldEntries, text, wordDocData)
+          const parsed = extractPageFields(fldEntries, text, fieldTextData)
           if (parsed.length > 0) {
             pageFields = parsed
             logger.info(`解析到 ${pageFields.length} 个页码域（PAGE/NUMPAGES/SECTION）`)
@@ -1359,7 +1370,7 @@ export class DocParser {
           wordDocData && text) {
         const fldEntries = parsePlcfFld(tableData, fib.fcPlcfFldMom, fib.lcbPlcfFldMom)
         if (fldEntries.length > 0) {
-          const parsed = extractCrossReferences(fldEntries, text, wordDocData)
+          const parsed = extractCrossReferences(fldEntries, text, fieldTextData)
           if (parsed.length > 0) {
             crossReferences = parsed
             logger.info(`解析到 ${crossReferences.length} 个交叉引用（REF/NOTEREF）`)
