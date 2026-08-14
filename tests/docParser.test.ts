@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { DocParser, parseDocFileFromBuffer } from '../src/utils/docParser'
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import { DocParser, parseDocFileFromBuffer, parseDocFileWithFormat } from '../src/utils/docParser'
 
 describe('DocParser', () => {
   describe('parseDocFileFromBuffer', () => {
@@ -695,5 +695,54 @@ describe('DocParser', () => {
       expect(result.text).not.toContain('FootnoteContent')
       expect(result.text).not.toContain('HeaderContent')
     })
+  })
+})
+
+describe('parseDocFileWithFormat', () => {
+  class MockFileReader {
+    onload: ((e: { target: { result: ArrayBuffer } }) => void) | null = null
+    onerror: (() => void) | null = null
+    result: ArrayBuffer | null = null
+    static behavior: 'success' | 'error' | 'empty' = 'success'
+    readAsArrayBuffer(_file: File) {
+      setTimeout(() => {
+        if (MockFileReader.behavior === 'error') {
+          this.onerror?.()
+          return
+        }
+        const buf = new ArrayBuffer(0)
+        this.result = MockFileReader.behavior === 'empty' ? null : buf
+        this.onload?.({ target: { result: this.result! } })
+      }, 0)
+    }
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    MockFileReader.behavior = 'success'
+  })
+
+  it('should parse a file via FileReader', async () => {
+    vi.stubGlobal('FileReader', MockFileReader)
+    const file = { name: 'test.doc', size: 0 } as File
+    const result = await parseDocFileWithFormat(file)
+    expect(result.success).toBe(false) // empty buffer → parse failure
+    expect(result.error).toBeTruthy()
+  })
+
+  it('should resolve with a read error when FileReader fails', async () => {
+    vi.stubGlobal('FileReader', MockFileReader)
+    MockFileReader.behavior = 'error'
+    const result = await parseDocFileWithFormat({ name: 'x.doc' } as File)
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('文件读取失败')
+  })
+
+  it('should handle a null result buffer', async () => {
+    vi.stubGlobal('FileReader', MockFileReader)
+    MockFileReader.behavior = 'empty'
+    const result = await parseDocFileWithFormat({ name: 'x.doc' } as File)
+    expect(result.success).toBe(false)
+    expect(result.error).toBeTruthy()
   })
 })
