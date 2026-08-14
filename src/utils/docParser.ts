@@ -31,6 +31,7 @@ import { parseFib } from './fibParser'
 import type { FibData, RgCcp } from './fibParser'
 import { isTableRowText } from './tableText'
 import { extractImagesFromStream, imagesToDataUrls } from './imageExtractor'
+import type { ExtractedImage } from './imageExtractor'
 import { extractPicturesFromDataStream, parsePicfAt } from './pictureParser'
 import type { ParsedPicture } from './pictureParser'
 import { parseChpxRuns, parsePapxRuns, parseChpxRunsFromFkp, parsePapxRunsFromFkp, mergeCharFormatForParagraph } from './formatParser'
@@ -2106,7 +2107,7 @@ export class DocParser {
         candidates.push(wordDocData)
       }
 
-      let images: Array<{ format: string; data: Uint8Array }> = []
+      let images: ExtractedImage[] = []
       for (const candidate of candidates) {
         const found = extractImagesFromStream(candidate)
         for (const img of found) {
@@ -2121,7 +2122,7 @@ export class DocParser {
       // Dedupe by size + first 16 bytes (cheap and effective for embedded
       // images that may appear in both Data and WordDocument streams).
       const seen = new Set<string>()
-      const unique: typeof images = []
+      const unique: ExtractedImage[] = []
       for (const img of images) {
         const head = Array.from(img.data.subarray(0, Math.min(16, img.data.length)))
           .join(',')
@@ -2131,7 +2132,7 @@ export class DocParser {
         unique.push(img)
       }
 
-      return imagesToDataUrls(unique as any)
+      return imagesToDataUrls(unique)
     } catch (err) {
       logger.warn('图片提取失败:', err instanceof Error ? err.message : String(err))
       return []
@@ -2573,7 +2574,7 @@ export class DocParser {
         if (hasNonPicContent) {
           // Mixed content: keep the placeholder in the text but flag the paragraph
           // so list detection can ignore the placeholder when measuring length.
-          (para as any).__hasEmbeddedPic = true
+          para.__hasEmbeddedPic = true
         }
       }
     }
@@ -2924,7 +2925,7 @@ export class DocParser {
     for (let i = paragraphs.length - 1; i >= 0; i--) {
       const para = paragraphs[i]
       const text = para.text || ''
-      if (text.includes('\u0001') && (para as any).__hasEmbeddedPic) {
+      if (text.includes('\u0001') && para.__hasEmbeddedPic) {
         const textWithoutPic = text.replace(/\u0001/g, '')
         const picPara: any = {
           text: '\u0001',
