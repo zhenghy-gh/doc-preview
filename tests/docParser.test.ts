@@ -912,3 +912,46 @@ describe('encoding scoring helpers', () => {
     expect(result).toBe(true) // 8-bit compressed
   })
 })
+
+describe('detectEncodingFromBinary paragraph-marker fallback', () => {
+  const parser = new DocParser(new ArrayBuffer(512))
+
+  it('should classify 8-bit by 0x0D markers when null ratio is ambiguous', () => {
+    // nullRatio between 0.05 and 0.10 (ambiguous) → falls to 0x0D heuristic
+    // 8-bit text: 0x0D paragraph marks NOT followed by 0x00
+    const size = 9000
+    const data = new Uint8Array(size)
+    data.fill(0x41)
+    // ~6% nulls across the whole scan region (6952 bytes): 420 nulls
+    for (let i = 0; i < 420; i++) data[2048 + i * 16] = 0x00
+    // 8-bit paragraph marks: 0x0D NOT followed by 0x00
+    for (let i = 0; i < 20; i++) data[2048 + 100 + i * 20] = 0x0D
+    const result = (parser as any).detectEncodingFromBinary(data)
+    expect(result).toBe(true) // 8-bit
+  })
+
+  it('should classify UTF-16 by 0x0D markers followed by null', () => {
+    const size = 9000
+    const data = new Uint8Array(size)
+    data.fill(0x41)
+    // ~6% nulls across the scan region
+    for (let i = 0; i < 420; i++) data[2048 + i * 16] = 0x00
+    // UTF-16 paragraph marks: 0x0D 0x00
+    for (let i = 0; i < 20; i++) {
+      data[2048 + 100 + i * 20] = 0x0D
+      data[2048 + 101 + i * 20] = 0x00
+    }
+    const result = (parser as any).detectEncodingFromBinary(data)
+    expect(result).toBe(false) // UTF-16LE
+  })
+
+  it('should return null when no markers and ambiguous null ratio', () => {
+    const size = 9000
+    const data = new Uint8Array(size)
+    data.fill(0x41)
+    for (let i = 0; i < 420; i++) data[2048 + i * 16] = 0x00
+    // no 0x0D markers at all
+    const result = (parser as any).detectEncodingFromBinary(data)
+    expect(result).toBeNull()
+  })
+})
