@@ -235,6 +235,29 @@ describe('Clx Parser Robustness', () => {
     const result = (parser as any).parseClx(clx, textBytes)
     expect(result).toBe('Hello\n\nWorld')
   })
+
+  it('should skip out-of-bounds pieces and fall back to extractTextSimple', () => {
+    const parser = new DocParser(new ArrayBuffer(512))
+    const textBytes = new Uint8Array(20).fill(0x41)
+    // One piece whose byte range lies beyond the WordDocument stream
+    const pieces = [{ cpStart: 0, cpEnd: 100, fc: 10000, compressed: false }]
+    const n = pieces.length
+    const plcPcdSize = 4 * (n + 1) + 8 * n
+    const clx = new Uint8Array(1 + 4 + plcPcdSize)
+    const view = new DataView(clx.buffer)
+    let offset = 0
+    clx[offset++] = 0x02
+    view.setUint32(offset, plcPcdSize, true); offset += 4
+    view.setUint32(offset, 0, true); offset += 4
+    view.setUint32(offset, 100, true); offset += 4
+    offset += 2
+    view.setUint32(offset, 10000, true); offset += 4 // fc beyond stream
+    offset += 2
+
+    const result = (parser as any).parseClx(clx, textBytes)
+    // The piece is skipped; extractTextSimple falls back on the raw stream
+    expect(typeof result).toBe('string')
+  })
 })
 
 describe('Story splitting (splitPiecesByStory / parseClxWithStories)', () => {
