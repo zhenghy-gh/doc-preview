@@ -256,17 +256,119 @@ describe('styleParser', () => {
     })
   })
 
+  describe('parseStylesheet (spec STSH layout)', () => {
+    function writeUint16B(buffer: Uint8Array, offset: number, value: number): void {
+      buffer[offset] = value & 0xFF
+      buffer[offset + 1] = (value >> 8) & 0xFF
+    }
+
+    /**
+     * Build a spec-level STSH: LPStshi (cbStshi + STSHI) + rglpstd.
+     * @param stds Array of [stk, istdBase, cupx, name] tuples.
+     */
+    function buildSpecStsh(stds: Array<[number, number, number, string]>): Uint8Array {
+      const cbStdBase = 10
+      const cbStshi = 6 // cstd(2) + cbSTDBaseInFile(2) + flags(2)
+      const lpStshi = 2 + cbStshi
+      // Precompute rglpstd size
+      let stdsSize = 0
+      for (const [, , , name] of stds) {
+        stdsSize += 2 // cbStd
+        stdsSize += cbStdBase + 2 + name.length * 2 + 2 // STD base + cch + chars + null
+      }
+      const data = new Uint8Array(lpStshi + stdsSize + 8)
+      let pos = 0
+      writeUint16B(data, pos, cbStshi); pos += 2
+      writeUint16B(data, pos, stds.length); pos += 2 // cstd
+      writeUint16B(data, pos, cbStdBase); pos += 2
+      pos += 2 // flags
+
+      for (const [stk, istdBase, cupx, name] of stds) {
+        const stdStart = pos + 2
+        const cbStd = cbStdBase + 2 + name.length * 2 + 2
+        writeUint16B(data, pos, cbStd); pos += 2
+        writeUint16B(data, pos, 0) // sti = 0
+        writeUint16B(data, stdStart + 2, ((istdBase & 0x0FFF) << 4) | (stk & 0x0F))
+        writeUint16B(data, stdStart + 4, cupx & 0x0F)
+        writeUint16B(data, stdStart + 6, 0)
+        writeUint16B(data, stdStart + 8, 0)
+        // xstzName: cch = character count (UTF-16), chars, null terminator
+        writeUint16B(data, stdStart + cbStdBase, name.length)
+        for (let i = 0; i < name.length; i++) {
+          const code = name.charCodeAt(i)
+          data[stdStart + cbStdBase + 2 + i * 2] = code & 0xFF
+          data[stdStart + cbStdBase + 2 + i * 2 + 1] = (code >> 8) & 0xFF
+        }
+        pos = stdStart + cbStd
+      }
+      return data
+    }
+
+    it('should parse a spec-level stylesheet with paragraph styles', () => {
+      const data = buildSpecStsh([[1, 0x0FFF, 0, 'Normal'], [1, 0, 0, 'Heading 1']])
+      const result = parseStylesheet(data, 0, data.length)
+      expect(result.length).toBeGreaterThanOrEqual(2)
+      const normal = result.find(s => s.istd === 0)
+      const heading = result.find(s => s.istd === 1)
+      expect(normal?.name).toBe('Normal')
+      expect(normal?.type).toBe('paragraph')
+      expect(heading?.name).toBe('Heading 1')
+      expect(heading?.istdBase).toBe(0)
+    })
+
+    it('should parse a spec-level stylesheet with character styles', () => {
+      const data = buildSpecStsh([[2, 0x0FFF, 0, 'Emphasis']])
+      const result = parseStylesheet(data, 0, data.length)
+      const emph = result.find(s => s.istd === 0)
+      expect(emph?.name).toBe('Emphasis')
+      expect(emph?.type).toBe('character')
+    })
+
+    it('should handle empty slots (cbStd=0) with builtin names', () => {
+      // First slot empty, second slot a paragraph style
+      const data = buildSpecStsh([[1, 0x0FFF, 0, 'Normal']])
+      // Insert a zero cbStd entry before the real one
+      const shifted = new Uint8Array(data.length + 2)
+      shifted.set(data.subarray(0, 2 + 6), 0)
+      shifted[2 + 6] = 0
+      shifted[2 + 6 + 1] = 0
+      shifted.set(data.subarray(2 + 6), 2 + 8)
+      // Patch cstd to 2
+      shifted[2] = 2
+      shifted[3] = 0
+      const result = parseStylesheet(shifted, 0, shifted.length)
+      expect(result.length).toBeGreaterThanOrEqual(2)
+      expect(result[0].istd).toBe(0)
+      // Empty slot gets builtin name (Normal at istd 0)
+      expect(result[1].istd).toBe(1)
+    })
+
+    it('should fall back to legacy parser for non-spec layout', () => {
+      // cbStshi = 5 (< 6) → spec path rejected, legacy path reads cstd=5
+      const data = new Uint8Array(64)
+      writeUint16(data, 0, 5) // cstd (legacy) / cbStshi (spec)
+      writeUint16(data, 2, 28) // cbStd
+      // Rest is zeros → STD entries with cb=0 → builtin minimal entries
+      const result = parseStylesheet(data, 0, 64)
+      expect(result.length).toBeGreaterThan(0)
+    })
+  })
+
   describe('detectStyleSet', () => {
-    it('should detect Default style set with standard heading styles', () => {
+    it('should detect Default when heading styles exist with 5+ styles', () => {
+      // Heading 4/5 are headings but do NOT match the Default pattern list
+      // (which only covers Heading 1-3), so the fallback branch must kick in.
       const styles = [
-        { istd: 0, name: 'Normal', type: 'paragraph' as const },
-        { istd: 1, name: 'Heading 1', type: 'paragraph' as const },
-        { istd: 2, name: 'Heading 2', type: 'paragraph' as const },
-        { istd: 3, name: 'Heading 3', type: 'paragraph' as const },
+        { istd: 0, name: 'My Doc Style', type: 'paragraph' as const },
+        { istd: 1, name: 'Heading 4', type: 'paragraph' as const },
+        { istd: 2, name: 'Heading 5', type: 'paragraph' as const },
+        { istd: 3, name: 'Body Text', type: 'paragraph' as const },
+        { istd: 4, name: 'Title', type: 'paragraph' as const },
       ]
       const result = detectStyleSet(styles)
       expect(result).not.toBeNull()
       expect(result!.name).toBe('Default')
+      expect(result!.isCustom).toBe(false)
     })
 
     it('should detect Elegant style set', () => {
@@ -309,3 +411,4 @@ describe('styleParser', () => {
     })
   })
 })
+
