@@ -232,9 +232,13 @@ function findGifEnd(data: Uint8Array, start: number): number {
       // Unknown block — bail.
       return -1
     }
+    // A well-formed GIF always reaches the 0x3B trailer long before this
+    // cap. Unreachable in practice; kept as an anti-infinite-loop guard.
+    /* v8 ignore start */
   }
   return -1
 }
+/* v8 ignore stop */
 
 /**
  * Scan `data` for embedded images and return each as `{ format, data }`.

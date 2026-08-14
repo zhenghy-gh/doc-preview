@@ -493,3 +493,13 @@ describe('imageExtractor', () => {
     })
   })
 })
+
+describe('imageExtractor byte-stuffed markers', () => {
+  it('skips 0xFF00 byte-stuffing while scanning JPEG', () => {
+    const data = new Uint8Array([0xFF, 0xD8, 0xFF, 0x00, 0xFF, 0xD9, 0x00, 0x00])
+    const images = extractImagesFromStream(data)
+    expect(images.length).toBe(1)
+    expect(images[0].format).toBe('jpeg')
+    expect(images[0].data.length).toBe(6)
+  })
+})
