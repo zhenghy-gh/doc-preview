@@ -31,6 +31,9 @@ interface PictureInfo {
   cp?: number
 }
 
+/** 统一图片表示：结构化图片（PictureInfo）或纯 data URL 字符串。 */
+type PicSource = PictureInfo | string
+
 interface ParserOutput {
   success: boolean
   document?: { paragraphs: FormattedParagraphOutput[]; stories?: DocumentStories; images?: string[]; pictures?: PictureInfo[]; hyperlinks?: HyperlinkRange[]; toc?: TocEntry[]; index?: IndexEntry[]; properties?: DocumentProperties; docFlags?: DocumentFlags; wordVersion?: string; revisions?: RevisionMark[]; documentFields?: DocumentFields; bookmarks?: BookmarkRange[]; sections?: SectionInfo[]; pageFields?: PageFieldRange[]; crossReferences?: CrossReferenceRange[]; shapes?: ShapeInfo[]; equations?: EquationInfo[]; charts?: ChartInfo[]; wordArts?: WordArtInfo[]; styleSet?: { name: string; isCustom?: boolean } }
@@ -115,6 +118,8 @@ interface FormattedParagraphOutput {
   text: string
   charFormat: CharacterFormat
   paraFormat: ParagraphFormat
+  /** 段落在文档字符流中的起始 CP（解析器内部字段，用于超链接/图片/形状定位）。 */
+  _cpStart?: number
 }
 
 interface OutlineItem {
@@ -630,12 +635,12 @@ const storySections = computed<StorySection[]>(() => {
   // 如果有 headerPartsWithImages，优先使用（包含图片信息）
   if (stories.value.headerPartsWithImages) {
     const parts = stories.value.headerPartsWithImages
-    const partKeys = Object.keys(parts) as Array<string>
+    const partKeys = Object.keys(parts)
     for (const key of partKeys) {
       const content = parts[key]
       if (content && (content.text.trim() || content.images && content.images.length > 0)) {
         out.push({
-          key: `headerParts_${key}` as any,
+          key: `headerParts_${key}`,
           label: t('story.headerParts.' + key) || key,
           text: content.text.trim(),
           images: content.images?.map((img: { dataUrl: string; widthPx?: number; heightPx?: number; format: string }) => ({
@@ -650,12 +655,12 @@ const storySections = computed<StorySection[]>(() => {
   } else if (stories.value.headerParts) {
     // 如果只有 headerParts（无图片），按子范围类型展示页眉页脚
     const parts = stories.value.headerParts
-    const partKeys = Object.keys(parts) as Array<string>
+    const partKeys = Object.keys(parts)
     for (const key of partKeys) {
       const text = parts[key]
       if (text && text.trim()) {
         out.push({
-          key: `headerParts_${key}` as any,
+          key: `headerParts_${key}`,
           label: t('story.headerParts.' + key) || key,
           text: text.trim(),
         })
@@ -1061,6 +1066,8 @@ interface ParaWithList {
   text: string
   charFormat: CharacterFormat
   paraFormat: ParagraphFormat & { listType?: string; listStyle?: string; listLevel?: number }
+  /** 段落在文档字符流中的起始 CP（解析器内部字段）。 */
+  _cpStart?: number
 }
 
 /**
@@ -1324,13 +1331,13 @@ function renderParagraphHtml(
     // they would appear inside the list (e.g., between list items) instead of
     // after the entire list.
     if (pictures.value.length > 0 || images.value.length > 0) {
-      const allPics = pictures.value.length > 0 ? pictures.value : images.value.map(url => ({
+      const allPics: PicSource[] = pictures.value.length > 0 ? pictures.value : images.value.map(url => ({
         format: 'jpeg', dataUrl: url, widthPx: undefined, heightPx: undefined
       }))
       textWithLinks = textWithLinks.replace(/\u0001/g, () => {
         if (globalPicIdx < allPics.length) {
-          const pic = allPics[globalPicIdx++] as any
-          const src = pic.dataUrl || pic
+          const pic = allPics[globalPicIdx++]
+          const src = typeof pic === 'string' ? pic : pic.dataUrl
           const style = 'max-width:100%;height:auto;margin:8px 0;'
           return `<img src="${src}" alt="Embedded image" style="${style}" loading="lazy" />`
         }
@@ -1891,7 +1898,7 @@ const formatFormattedTextToHtml = (paragraphs: ParaWithList[], hyperlinks?: Hype
     // Track which section this paragraph belongs to and update column settings.
     // When the column count changes (section switch), finalize the current page
     // so that content with different column layouts stays in separate pages.
-    const paraCp = (para as any)._cpStart || 0
+    const paraCp = para._cpStart || 0
     const sec = findSectionForCp(paraCp)
     if (sec) {
       const newColumnCount = sec.columnCount || 1
@@ -1956,13 +1963,13 @@ const formatFormattedTextToHtml = (paragraphs: ParaWithList[], hyperlinks?: Hype
       // justFinishedList logic, not consumed by \u0001 placeholders inside the list).
       if (html.includes('\u0001')) {
         if (pictures.value.length > 0 || images.value.length > 0) {
-          const allPics = pictures.value.length > 0 ? pictures.value : images.value.map(url => ({
+          const allPics: PicSource[] = pictures.value.length > 0 ? pictures.value : images.value.map(url => ({
             format: 'jpeg', dataUrl: url, widthPx: undefined, heightPx: undefined
           }))
           html = html.replace(/\u0001/g, () => {
             if (globalPicIdx < allPics.length) {
-              const pic = allPics[globalPicIdx++] as any
-              const src = pic.dataUrl || pic
+              const pic = allPics[globalPicIdx++]
+              const src = typeof pic === 'string' ? pic : pic.dataUrl
               const style = 'max-width:100%;height:auto;margin:8px 0;'
               return `<img src="${src}" alt="Embedded image" style="${style}" loading="lazy" />`
             }
@@ -1986,7 +1993,7 @@ const formatFormattedTextToHtml = (paragraphs: ParaWithList[], hyperlinks?: Hype
       justFinishedList = true
     } else {
       const charFormat = para.charFormat || {} as CharacterFormat
-      const paraCpStart = (para as any)._cpStart || 0
+      const paraCpStart = para._cpStart || 0
       const paraCpEnd = paraCpStart + (text?.length || 0)
       const html = renderParagraphHtml(text, charFormat, paraFormat, paraCpStart, paraCpEnd, hyperlinks, revisions)
       const estimatedHeight = estimateParaHeight(text, charFormat)
@@ -2038,15 +2045,15 @@ const formatFormattedTextToHtml = (paragraphs: ParaWithList[], hyperlinks?: Hype
   // Render any remaining pictures that weren't consumed by \u0001 placeholders.
   // This handles floating images or images without a character position anchor.
   const usedPicCount = globalPicIdx
-  const allPics = pictures.value.length > 0 ? pictures.value : images.value.map(url => ({
+  const allPics: PicSource[] = pictures.value.length > 0 ? pictures.value : images.value.map(url => ({
     format: 'jpeg', dataUrl: url, widthPx: undefined, heightPx: undefined,
-    cp: undefined, floating: false
-  } as any))
+    cp: undefined, floating: false,
+  }))
   for (let pi = usedPicCount; pi < allPics.length; pi++) {
     const pic = allPics[pi]
     // Skip pictures that were already rendered inline (they have a valid cp)
-    if (pic.cp !== undefined && pic.cp >= 0) continue
-    const src = (pic as any).dataUrl || pic
+    if (typeof pic !== 'string' && pic.cp !== undefined && pic.cp >= 0) continue
+    const src = typeof pic === 'string' ? pic : pic.dataUrl
     const style = 'max-width:100%;height:auto;margin:8px 0;'
     const imgHtml = `<img src="${src}" alt="Embedded image" style="${style}" loading="lazy" />`
     addToPage(imgHtml, 200)
