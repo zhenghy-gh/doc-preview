@@ -1124,6 +1124,9 @@ describe('parseWithFormat field assembly', () => {
     // pair 16: fcPlcfFldMom/lcbPlcfFldMom -> 0Table offset 32, 112 bytes
     w32(126 + 16 * 8 + wdBase, 32)
     w32(126 + 16 * 8 + 4 + wdBase, 112)
+    // pair 12: PlcfBteChpx -> 0Table offset 270 (CHPX with a revision mark)
+    w32(126 + 12 * 8 + wdBase, 270)
+    w32(126 + 12 * 8 + 4 + wdBase, 15)
     // pairs 21-23: bookmarks (PlcfBkf/PlcfBkl/SttbfBkmk at 0Table 200/216/232)
     // pair 21 = fcSttbfBkmk, 22 = fcPlcfBkf, 23 = fcPlcfBkl
     w32(126 + 21 * 8 + wdBase, 232)
@@ -1140,6 +1143,41 @@ describe('parseWithFormat field assembly', () => {
     const textOffset = 400
     for (let i = 0; i < text.length; i++) w16(textOffset + i * 2 + wdBase, text.charCodeAt(i))
     w16(textOffset + text.length * 2 + wdBase, 0x0D)
+    // Office Art FDG (rectangle) after the text so shapes are detected
+    const recHeader = (off: number, recVer: number, recInstance: number, recType: number, recLen: number) => {
+      view[wdBase + off] = (recVer << 6) | ((recInstance >> 8) & 0x3F)
+      view[wdBase + off + 1] = recInstance & 0xff
+      view[wdBase + off + 2] = recType & 0xff
+      view[wdBase + off + 3] = (recType >> 8) & 0xff
+      w32(wdBase + off + 4, recLen)
+    }
+    let art = textOffset + text.length * 2 + 2
+    const spRecLen = 72
+    const spSize = 8 + spRecLen
+    const spContainerLen = spSize
+    const dgLen = 8 + spContainerLen
+    const fdgLen = 8 + dgLen
+    recHeader(art, 3, 0x00C0, 0xF000, fdgLen)
+    art += 8
+    recHeader(art, 3, 0, 0xF002, dgLen)
+    art += 8
+    recHeader(art, 3, 0, 0xF003, spContainerLen)
+    art += 8
+    recHeader(art, 3, 0, 0x0004, spRecLen)
+    art += 8
+    w32(wdBase + art, 0x50000001) // spid
+    w16(wdBase + art + 4, 0x0001) // grfSp: rectangle-ish
+    w32(wdBase + art + 8 + 4, 100)  // x
+    w32(wdBase + art + 8 + 8, 200)  // y
+    w32(wdBase + art + 8 + 28, 300) // width
+    w32(wdBase + art + 8 + 32, 400) // height
+    // Equation magic + UTF-16LE formula text
+    const eqMagic = [0xEF, 0xBF, 0xBD, 0xEF, 0xBF, 0xBD]
+    let eq = art + spSize
+    eqMagic.forEach((b, i) => { view[wdBase + eq + i] = b })
+    const eqn = '\\alpha'
+    for (let i = 0; i < eqn.length; i++) w16(wdBase + eq + 6 + i * 2, eqn.charCodeAt(i))
+    w16(wdBase + eq + 6 + eqn.length * 2, 0)
 
     // 0Table stream (sector 4 -> physical offset (4+1)*512)
     const tblBase = SECTOR * 5
@@ -1172,6 +1210,14 @@ describe('parseWithFormat field assembly', () => {
     w16(sedBase + 8, 0)
     w32(sedBase + 10, END)
     w16(sedBase + 14, 0)
+    // PlcfBteChpx at 270: one CHPX run over cp [0, 10] with a revision mark
+    const chpxBase = tblBase + 270
+    w32(chpxBase + 0, 0)
+    w32(chpxBase + 4, 10)
+    w16(chpxBase + 8, 5) // aPcb cb = 5; grpprl follows at +10 (offset 280)
+    view[chpxBase + 10] = 0x01 // sprmCFRMark (0x0801)
+    view[chpxBase + 11] = 0x08
+    view[chpxBase + 12] = 0x01 // toggle on -> insert revision
     // Bookmark tables: one bookmark over cp [0, 10]
     const bkfBase = tblBase + 200
     w32(bkfBase + 0, 0)
@@ -1208,6 +1254,10 @@ describe('parseWithFormat field assembly', () => {
     expect(doc.charts.length).toBe(1)
     expect(doc.charts[0].type).toBe('msgraph')
     expect(doc.wordArts.length).toBe(1)
+    expect(doc.shapes.length).toBe(1)
+    expect(doc.equations.length).toBe(1)
+    expect(doc.revisions.length).toBe(1)
+    expect(doc.revisions[0].type).toBe('insert')
     expect(doc.paragraphs.length).toBeGreaterThan(0)
   })
 })
