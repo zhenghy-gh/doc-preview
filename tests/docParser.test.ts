@@ -1114,11 +1114,11 @@ describe('parseWithFormat field assembly', () => {
     w16(32 + wdBase, 0)
     w16(34 + wdBase, 22)
     const text = 'X HYPERLINK "a.com" Click AUTHOR John PAGE 1 TOC \\o "1" Head.....1 INDEX A\t1 REF _R1 \\h 1'
-    // FibBase fcMin/fcMac: text starts at character 200 (byte 400)
-    w32(24 + wdBase, 200)
-    w32(28 + wdBase, 200 + text.length)
+    // FibBase fcMin/fcMac: text starts at character 300 (byte 600)
+    w32(24 + wdBase, 300)
+    w32(28 + wdBase, 300 + text.length)
     w32(36 + 12 + wdBase, text.length) // ccpText
-    w16(124 + wdBase, 34) // cbRgFcLcb
+    w16(124 + wdBase, 52) // cbRgFcLcb
     // pair 6: fcPlcfSed/lcbPlcfSed -> 0Table offset 160, 16 bytes
     w32(126 + 6 * 8 + wdBase, 160)
     w32(126 + 6 * 8 + 4 + wdBase, 16)
@@ -1136,12 +1136,15 @@ describe('parseWithFormat field assembly', () => {
     w32(126 + 22 * 8 + 4 + wdBase, 12)
     w32(126 + 23 * 8 + wdBase, 216)
     w32(126 + 23 * 8 + 4 + wdBase, 12)
+    // pair 51: SttbfRMark (revision authors) -> 0Table offset 300
+    w32(126 + 51 * 8 + wdBase, 300)
+    w32(126 + 51 * 8 + 4 + wdBase, 18)
     // pair 33: fcClx/lcbClx -> 0Table offset 0
     const clxSize = 1 + 4 + 4 * 2 + 8
     w32(126 + 33 * 8 + wdBase, 0)
     w32(126 + 33 * 8 + 4 + wdBase, clxSize)
-    // Text at offset 400
-    const textOffset = 400
+    // Text at offset 600 (after the 52-pair rgFcLcb blob ending at 542)
+    const textOffset = 600
     for (let i = 0; i < text.length; i++) w16(textOffset + i * 2 + wdBase, text.charCodeAt(i))
     w16(textOffset + text.length * 2 + wdBase, 0x0D)
     // Office Art FDG (rectangle) after the text so shapes are detected
@@ -1211,6 +1214,14 @@ describe('parseWithFormat field assembly', () => {
     w16(sedBase + 8, 0)
     w32(sedBase + 10, END)
     w16(sedBase + 14, 0)
+    // SttbfRMark at 300: one author 'Alice'
+    const rmarkBase = tblBase + 300
+    w16(rmarkBase + 0, 0xFFFF) // fExtend: unicode
+    w16(rmarkBase + 2, 1)      // cbSttb
+    w16(rmarkBase + 4, 6)      // cbString incl. terminator
+    const alice = 'Alice'
+    for (let i = 0; i < alice.length; i++) w16(rmarkBase + 6 + i * 2, alice.charCodeAt(i))
+    w16(rmarkBase + 6 + alice.length * 2, 0)
     // PlcfBteChpx at 270: one CHPX run over cp [0, 10] with a revision mark
     const chpxBase = tblBase + 270
     w32(chpxBase + 0, 0)
@@ -1268,6 +1279,7 @@ describe('parseWithFormat field assembly', () => {
     expect(doc.revisions.length).toBe(1)
     expect(doc.revisions[0].type).toBe('insert')
     expect(doc.revisions[0].timestamp).toBe(0x01020304)
+    expect(doc.revisions[0].author).toBe('Alice')
     expect(doc.paragraphs.length).toBeGreaterThan(0)
   })
 })
