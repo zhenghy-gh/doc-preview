@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseChpxRuns, parsePapxRuns, mergeCharFormatForParagraph } from '../src/utils/formatParser'
+import { parseChpxRuns, parsePapxRuns, mergeCharFormatForParagraph, parseChpxGrpprlWithFont, parsePapxGrpprl } from '../src/utils/formatParser'
 
 /**
  * Build a PlcfBteChpx test fixture from a list of (cpStart, bold, fontSize) tuples.
@@ -354,6 +354,248 @@ describe('formatParser', () => {
       const runs = parseChpxRuns(data, 0, data.length)
       const merged = mergeCharFormatForParagraph(runs, 0, 100)
       expect(merged.bold).toBeUndefined()
+    })
+  })
+
+  describe('parseChpxGrpprlWithFont (SPRM coverage)', () => {
+    function parseGrpprl(prls: number[]): ReturnType<typeof parseChpxGrpprlWithFont> {
+      return parseChpxGrpprlWithFont(new Uint8Array(prls), 0, prls.length)
+    }
+
+    it('should parse strikethrough, outline, shadow, smallCaps, allCaps, hidden', () => {
+      const r = parseGrpprl([
+        0x37, 0x08, 0x01, // sprmCFStrike (0x0837) on
+        0x38, 0x08, 0x01, // sprmCFOutline (0x0838) on
+        0x39, 0x08, 0x01, // sprmCFShadow (0x0839) on
+        0x3A, 0x08, 0x01, // sprmCFSmallCaps (0x083A) on
+        0x3B, 0x08, 0x01, // sprmCFCaps (0x083B) on
+        0x3C, 0x08, 0x01, // sprmCFVanish (0x083C) on
+      ])
+      expect(r.format.strikethrough).toBe(true)
+      expect(r.format.outline).toBe(true)
+      expect(r.format.shadow).toBe(true)
+      expect(r.format.smallCaps).toBe(true)
+      expect(r.format.allCaps).toBe(true)
+      expect(r.format.hidden).toBe(true)
+    })
+
+    it('should parse toggle-off operands', () => {
+      const r = parseGrpprl([
+        0x35, 0x08, 0x00, // bold off
+        0x36, 0x08, 0x00, // italic off
+      ])
+      expect(r.format.bold).toBe(false)
+      expect(r.format.italic).toBe(false)
+    })
+
+    it('should parse double strikethrough and superscript/subscript', () => {
+      const r = parseGrpprl([
+        0x53, 0x2A, 0x01, // sprmCDStrike (0x2A53)
+        0x45, 0x48, 0x05, 0x00, // sprmCHpsPos (0x4845) = +5 (superscript)
+      ])
+      expect(r.format.strikethrough).toBe(true)
+      expect(r.format.superscript).toBe(true)
+    })
+
+    it('should parse subscript from negative HpsPos and ISS', () => {
+      const r1 = parseGrpprl([0x45, 0x48, 0xFB, 0xFF]) // -5 → subscript
+      expect(r1.format.subscript).toBe(true)
+      const r2 = parseGrpprl([0x48, 0x2A, 0x02]) // ISS=2 → subscript
+      expect(r2.format.subscript).toBe(true)
+      const r3 = parseGrpprl([0x48, 0x2A, 0x01]) // ISS=1 → superscript
+      expect(r3.format.superscript).toBe(true)
+    })
+
+    it('should parse text color from ICO palette and COLORREF', () => {
+      const r1 = parseGrpprl([0x42, 0x2A, 0x06]) // ICO=6 → red
+      expect(r1.format.color).toBe('#FF0000')
+      const r2 = parseGrpprl([0x70, 0x68, 0x10, 0x20, 0x30, 0x00]) // COLORREF rgb(16,32,48)
+      expect(r2.format.color).toBe('rgb(16, 32, 48)')
+      const r3 = parseGrpprl([0x70, 0x68, 0x10, 0x20, 0x30, 0xFF]) // fAuto=0xFF → skip
+      expect(r3.format.color).toBeUndefined()
+    })
+
+    it('should parse highlight colors', () => {
+      const r = parseGrpprl([0x0C, 0x2A, 0x01]) // highlight yellow
+      expect(r.format.highlight).toBe('#FFFF00')
+      const r0 = parseGrpprl([0x0C, 0x2A, 0x00]) // highlight none
+      expect(r0.format.highlight).toBeUndefined()
+    })
+
+    it('should parse letter spacing and font indexes', () => {
+      const r = parseGrpprl([
+        0x40, 0x88, 0x64, 0x00, // sprmCDxaSpace (0x8840) = 100 twips → 5pt
+        0x4F, 0x4A, 0x02, 0x00, // ftc0 = 2
+        0x50, 0x4A, 0x05, 0x00, // ftc1 = 5
+      ])
+      expect(r.format.letterSpacing).toBe(5)
+      expect(r.fontIndex).toBe(2) // ASCII font wins
+    })
+
+    it('should parse East Asian font index when ASCII is absent', () => {
+      const r = parseGrpprl([
+        0x51, 0x4A, 0x07, 0x00, // ftc2 = 7
+        0x50, 0x4A, 0x05, 0x00, // ftc1 = 5
+      ])
+      expect(r.fontIndex).toBe(5) // ftc1 before ftc2
+    })
+
+    it('should parse revisions (insert/delete with author and timestamp)', () => {
+      const dttm = 0x12345678
+      const r = parseGrpprl([
+        0x01, 0x08, 0x01, // sprmCFRMark on
+        0x04, 0x48, 0x03, 0x00, // ibstRMark = 3
+        0x05, 0x68, dttm & 0xFF, (dttm >> 8) & 0xFF, (dttm >> 16) & 0xFF, (dttm >> 24) & 0xFF,
+      ])
+      expect(r.revision).toEqual({ type: 'insert', authorIndex: 3, timestamp: dttm })
+    })
+
+    it('should parse delete revisions', () => {
+      const r = parseGrpprl([
+        0x00, 0x08, 0x01, // sprmCFRMarkDel on
+        0x63, 0x48, 0x02, 0x00, // ibstRMarkDel = 2
+      ])
+      expect(r.revision).toEqual({ type: 'delete', authorIndex: 2 })
+    })
+
+    it('should parse special chars and picture locations', () => {
+      const r = parseGrpprl([
+        0x55, 0x08, 0x01, // sprmCFSpec on
+        0x03, 0x6A, 0x78, 0x56, 0x34, 0x12, // fcPic = 0x12345678
+      ])
+      expect(r.isSpecial).toBe(true)
+      expect(r.fcPic).toBe(0x12345678)
+    })
+
+    it('should parse kerning (consumed, no effect) and malformed SPRMs', () => {
+      const r = parseGrpprl([0x4B, 0x48, 0x10, 0x00]) // sprmCHpsKern
+      expect(r.format).toEqual({})
+      // Truncated SPRM (1 byte) — no crash
+      const r2 = parseGrpprl([0x35])
+      expect(r2.format).toEqual({})
+    })
+  })
+
+  describe('parsePapxGrpprl (PAPX SPRM coverage)', () => {
+    function parsePapx(prls: number[]): ReturnType<typeof parsePapxGrpprl> {
+      return parsePapxGrpprl(new Uint8Array(prls), 0, prls.length)
+    }
+
+    it('should parse page break, right indent, first line indent, spacing', () => {
+      const r = parsePapx([
+        0x07, 0x24, 0x01, // sprmPPageBreakBefore (0x2407) on
+        0x0E, 0x84, 0x64, 0x00, // sprmPDxaRight (0x840E) = 100 twips
+        0x11, 0x84, 0xC8, 0x00, // sprmPDxaLeft1 (0x8411) = 200 twips
+        0x13, 0xA4, 0xE8, 0x03, // sprmPDyaBefore (0xA413) = 1000 twips
+        0x14, 0xA4, 0xF4, 0x01, // sprmPDyaAfter (0xA414) = 500 twips
+      ])
+      expect(r.format.pageBreakBefore).toBe(true)
+      expect(r.format.rightIndent).toBeCloseTo(5) // 100/20
+      expect(r.format.firstLineIndent).toBeCloseTo(10)
+      expect(r.format.spaceBefore).toBeCloseTo(50)
+      expect(r.format.spaceAfter).toBeCloseTo(25)
+    })
+
+    it('should parse line spacing (LSPD)', () => {
+      // sprmPDyaLine (0x6412): dyaLine(2) + fMultLinespace(2)
+      const r = parsePapx([0x12, 0x64, 0xF4, 0x01, 0x01, 0x00])
+      expect(r.format.lineSpacing).toBeDefined()
+    })
+
+    it('should parse outline level, list level, and list format overrides', () => {
+      const r = parsePapx([
+        0x40, 0x26, 0x02, // sprmPOutlineLvl = 2
+        0x0A, 0x26, 0x01, // sprmPIlvl = 1
+        0x0B, 0x46, 0x05, 0x00, // sprmPIlfo = 5
+      ])
+      expect(r.format.outlineLevel).toBe(2)
+      expect(r.ilvl).toBe(1)
+      expect(r.ilfo).toBe(5)
+    })
+
+    it('should parse table flags and depth', () => {
+      const r = parsePapx([
+        0x16, 0x24, 0x01, // sprmPFInTable on
+        0x17, 0x24, 0x01, // sprmPFInnerTableCell on
+        0x49, 0x66, 0x02, 0x00, 0x00, 0x00, // sprmPItap = 2
+      ])
+      expect(r.table).toBeDefined()
+      expect(r.table!.inTable).toBe(true)
+      expect(r.table!.depth).toBe(2)
+    })
+
+    it('should parse table justification', () => {
+      // sprmTJC90 (0x5400): 2-byte justification
+      const r = parsePapx([0x00, 0x54, 0x01, 0x00])
+      expect(r.table).toBeDefined()
+      expect(r.table!.justification).toBe('center')
+    })
+
+    it('should parse legacy list fields', () => {
+      const r = parsePapx([
+        0x0D, 0x46, 0x03, 0x00, // sprmPIlvlLegacy (0x460D)
+        0x0E, 0x46, 0x07, 0x00, // sprmPIlstLegacy (0x460E)
+        0x0F, 0x46, 0x02, 0x00, // sprmPIlfoLegacy (0x460F)
+      ])
+      expect(r.ilvl).toBe(3)
+      expect(r.ilst).toBe(7)
+      expect(r.ilfo).toBe(2)
+    })
+
+    it('should parse paragraph borders', () => {
+      // sprmPBrcTop (0x6424): 4 bytes — width(1), type(1), ico(1), pad(1)
+      const r = parsePapx([0x24, 0x64, 0x08, 0x01, 0x06, 0x00])
+      expect(r.format.borders).toBeDefined()
+      expect(r.format.borders!.top).toEqual({ colorIndex: 6, lineWidth: 8, borderType: 1 })
+    })
+
+    it('should parse tab stops from sprmPChgTabs (0xC615)', () => {
+      // spra=6 variable: cb(1)=4 + cTabsDel(1)=0 + cTabsAdd(1)=1
+      //   + rgdxaAdd(2)=40tw + rgtbdAdd(1)=0
+      const r = parsePapx([0x15, 0xC6, 0x04, 0x00, 0x01, 0x28, 0x00, 0x00])
+      expect(r.format.tabs).toEqual([2])
+    })
+
+    it('should parse table definition cells', () => {
+      // sprmTDefTable (0xD608): cb16(2) + payload
+      // payload = itcMac(1) + rgdxa(2×(1+1)=4) + rgtc(1×20=20) = 25 bytes
+      // cb16 = payload + 1 = 26 = 0x1A → operandSize = 2 + 25 = 27
+      const prls = [0x08, 0xD6, 0x1A, 0x00, 0x01, 0x00, 0x00, 0xF4, 0x01]
+      // rgdxa: 2 entries × 2 bytes = 4 (left edge + right edge)
+      prls.push(0x00, 0x00, 0x64, 0x00)
+      // rgtc: 1 TC80 entry, 20 bytes (grfTc + 4×BRC80)
+      for (let i = 0; i < 20; i++) prls.push(0x00)
+      const r = parsePapx(prls)
+      expect(r.table).toBeDefined()
+      expect(r.table!.cells).toBeDefined()
+      expect(r.table!.cells!.length).toBe(1)
+      expect(r.table!.cells![0].verticalMerge).toBe('none')
+    })
+
+    it('should parse table definition with merge flags', () => {
+      // payload = itcMac(1) + rgdxa(3×2=6) + rgtc(2×20=40) = 47 → cb16 = 48
+      const prls = [0x08, 0xD6, 0x30, 0x00]
+      prls.push(0x02) // itcMac = 2
+      // rgdxa: 3 entries × 2 bytes
+      prls.push(0x00, 0x00, 0x64, 0x00, 0xC8, 0x00)
+      // TC[0]: grfTc = fVertMerge (0x20)
+      prls.push(0x20, 0x00)
+      for (let i = 0; i < 18; i++) prls.push(0x00)
+      // TC[1]: plain
+      for (let i = 0; i < 20; i++) prls.push(0x00)
+      const r = parsePapx(prls)
+      expect(r.table).toBeDefined()
+      expect(r.table!.cells![0].verticalMerge).toBe('continue')
+      expect(r.table!.cells![1].verticalMerge).toBe('none')
+    })
+
+    it('should parse table borders', () => {
+      // sprmTTableBorders (0xD605): cb(2) + 6×BRC80(4) → cb=25
+      const brc = [0x08, 0x01, 0x01, 0x00]
+      const prls = [0x05, 0xD6, 0x19, 0x00, ...brc, ...brc, ...brc, ...brc, ...brc, ...brc]
+      const r = parsePapx(prls)
+      expect(r.table).toBeDefined()
+      expect(r.table!.borders).toBeDefined()
     })
   })
 })
