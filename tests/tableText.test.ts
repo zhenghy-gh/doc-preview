@@ -314,3 +314,31 @@ describe('tableText', () => {
     })
   })
 })
+
+describe('tableText uncovered branches', () => {
+  it('stops colspan scan when the right neighbor is not a merge continue', () => {
+    const rowsInfo = [
+      { inTable: true, cells: [
+        { horizontalMerge: 'restart' },
+        { horizontalMerge: 'start' },
+        undefined,
+      ] },
+    ]
+    const html = renderTableHtml([['A', 'B', 'C']], rowsInfo as any)
+    expect(html).toContain('<td')
+    expect(html).not.toContain('colspan')
+  })
+
+  it('extends a header cell to the row end when later columns are empty', () => {
+    const html = renderTableHtml([['A', 'B', ''], ['X', 'Y', 'Z']], undefined, 1)
+    expect(html).toContain('<thead>')
+    // Last non-empty header cell gets colspan to fill the row
+    expect(html).toMatch(/<th colspan="2"[^>]*>B<\/th>/)
+  })
+
+  it('breaks out of the nested loop when a shallower depth appears', () => {
+    const html = renderNestedTableHtml([['A'], ['B'], ['C']], undefined, [1, 1, 0])
+    expect(html).toContain('<table')
+    expect(html).toContain('B')
+  })
+})
