@@ -553,3 +553,47 @@ describe('PCD prm field (piece-level CHPX association)', () => {
     expect(result.pieceMap.main[0].chpxIndex).toBe(7)
   })
 })
+
+describe('Story segment bounds', () => {
+  function buildClxWithExplicitPieces2(
+    pieces: Array<{ cpStart: number; cpEnd: number; fc: number; compressed?: boolean }>,
+  ): Uint8Array {
+    const n = pieces.length
+    const plcPcdSize = 4 * (n + 1) + 8 * n
+    const clxSize = 1 + 4 + plcPcdSize
+    const data = new Uint8Array(clxSize)
+    const view = new DataView(data.buffer)
+    let offset = 0
+    data[offset++] = 0x02
+    view.setUint32(offset, plcPcdSize, true); offset += 4
+    view.setUint32(offset, pieces[0].cpStart, true); offset += 4
+    for (let i = 0; i < n; i++) {
+      view.setUint32(offset, pieces[i].cpEnd, true); offset += 4
+    }
+    for (let i = 0; i < n; i++) {
+      offset += 2
+      const fc = pieces[i].compressed ? ((pieces[i].fc * 2) | 0x40000000) : pieces[i].fc
+      view.setUint32(offset, fc >>> 0, true); offset += 4
+      offset += 2
+    }
+    return data
+  }
+
+  it('should skip story segments whose byte range is out of bounds', () => {
+    const parser = new DocParser(new ArrayBuffer(512))
+    const textBytes = new Uint8Array(50).fill(0x41)
+    const rgCcp = {
+      ccpText: 5, ccpFtn: 0, ccpHdd: 0, ccpMcr: 0,
+      ccpAtn: 0, ccpEdn: 0, ccpTxbx: 0, ccpHdrTxbx: 0,
+    }
+    // Piece claims to be in the stream but its fc points far beyond it
+    const clx = buildClxWithExplicitPieces2([
+      { cpStart: 0, cpEnd: 5, fc: 10000 },
+    ])
+
+    const result = (parser as any).parseClxWithStories(clx, textBytes, rgCcp)
+    // The segment is out of bounds and skipped; parsing still succeeds
+    expect(result).not.toBeNull()
+    expect(result.stories.main).toBe('')
+  })
+})
