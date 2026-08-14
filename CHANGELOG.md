@@ -3,6 +3,31 @@
 All notable changes to `@zhenghy/doc-preview` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.3+] - 2026-08-14
+
+### Added
+- **Word 6/95 legacy SEPX support** — recover page size/margins/gutter from
+  old-format section SPRMs (0xB01F-0xB022, 0x9023-0x9024, 0xB025)
+- **JPEG/PNG dimension recovery** — parse real pixel dimensions from SOF /
+  IHDR markers when the PICF envelope lacks xExt/yExt
+- `fileName` now included in `parseDocFileFromBuffer` error messages
+
+### Fixed
+- `extractEquationsFromWordDocumentStream` never extracted any equation
+  (UTF-16 byte-scan terminated inside the first ASCII character)
+- `cleanWordFieldCodes` discarded the Chinese page-field replacement result
+- `bookmarkParser` / `sectionParser` rejected valid `fc=0` table offsets
+- `stripBinaryPrefix` kept stray CJK noise chars as body starts
+
+### Performance
+- `applyStructuralFormats` list-group scoring reduced from O(n²) to O(n);
+  1.5MB documents parse ~3.9× faster (422ms → ~108ms)
+
+### Tests
+- 582 → 830+ tests across 32 files; utils statement coverage ~74%
+- 7 parsers at 100% statement coverage; all `as any` assertions removed
+- Full real-document regression suite (28 samples)
+
 ## [0.3.1] - 2026-06-18
 
 > Note: 0.3.0 was previously published as a development snapshot. This 0.3.1
