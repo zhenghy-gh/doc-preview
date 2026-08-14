@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parsePlcfFld, extractHyperlinks, extractDocumentFields, extractPageFields, extractCrossReferences, parseIndexResult, parseTocInstruction } from '../src/utils/fieldParser'
+import { parsePlcfFld, extractHyperlinks, extractDocumentFields, extractPageFields, extractCrossReferences, parseIndexResult, parseTocInstruction, parseTocResult } from '../src/utils/fieldParser'
 
 function writeUint32(buffer: Uint8Array, offset: number, value: number): void {
   buffer[offset] = value & 0xFF
@@ -720,6 +720,83 @@ Banana`
       const opts = parseTocInstruction('TOC officer \\h')
       expect(opts.outlineLevels).toBeUndefined()
       expect(opts.hyperlinks).toBe(true)
+    })
+  })
+
+  describe('parseTocResult', () => {
+    it('should return empty array for empty result', () => {
+      expect(parseTocResult('')).toEqual([])
+      expect(parseTocResult('   \n   ')).toEqual([])
+    })
+
+    it('should parse dot-leader lines with page numbers', () => {
+      const entries = parseTocResult('Heading One.................12\nHeading Two.................34')
+      expect(entries).toHaveLength(2)
+      expect(entries[0].text).toBe('Heading One')
+      expect(entries[0].pageNumber).toBe('12')
+      expect(entries[1].text).toBe('Heading Two')
+      expect(entries[1].pageNumber).toBe('34')
+    })
+
+    it('should parse tab-separated lines', () => {
+      const entries = parseTocResult('Chapter 1\t5\nChapter 2\t6')
+      expect(entries).toHaveLength(2)
+      expect(entries[0].text).toBe('Chapter 1')
+      expect(entries[0].pageNumber).toBe('5')
+    })
+
+    it('should parse space-separated lines', () => {
+      const entries = parseTocResult('Chapter 1  5\nChapter 2  6')
+      expect(entries).toHaveLength(2)
+      expect(entries[0].text).toBe('Chapter 1')
+      expect(entries[0].pageNumber).toBe('5')
+    })
+
+    it('should handle lines without page numbers', () => {
+      const entries = parseTocResult('Just a heading')
+      expect(entries).toHaveLength(1)
+      expect(entries[0].text).toBe('Just a heading')
+      expect(entries[0].pageNumber).toBeUndefined()
+    })
+
+    it('should infer level from Heading N text', () => {
+      const entries = parseTocResult('Heading 1.................1\nHeading 3.................3')
+      expect(entries[0].level).toBe(1)
+      expect(entries[1].level).toBe(3)
+    })
+
+    it('should infer level from Chinese heading text', () => {
+      const entries = parseTocResult('标题2.................1')
+      expect(entries[0].level).toBe(2)
+    })
+
+    it('should clamp inferred levels to 1-9', () => {
+      expect(parseTocResult('Heading 99.................1')[0].level).toBe(9)
+      expect(parseTocResult('Heading 0.................1')[0].level).toBe(1)
+    })
+
+    it('should default level to 1 for non-heading text', () => {
+      const entries = parseTocResult('Introduction.................1')
+      expect(entries[0].level).toBe(1)
+    })
+  })
+
+  describe('parseIndexResult edge cases', () => {
+    it('should handle sub-terms without page numbers', () => {
+      const result = `Apple.................1
+  Red apple`
+      const entries = parseIndexResult(result)
+      expect(entries).toHaveLength(2)
+      expect(entries[1].mainTerm).toBe('Apple')
+      expect(entries[1].subTerm).toBe('Red apple')
+      expect(entries[1].pageNumber).toBeUndefined()
+    })
+
+    it('should handle text-only main terms', () => {
+      const entries = parseIndexResult('Apple')
+      expect(entries).toHaveLength(1)
+      expect(entries[0].mainTerm).toBe('Apple')
+      expect(entries[0].pageNumber).toBeUndefined()
     })
   })
 })
