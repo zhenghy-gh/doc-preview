@@ -147,6 +147,113 @@ describe('DocParser', () => {
     })
   })
 
+  describe('text cleaning helpers', () => {
+    const parser = new DocParser(new ArrayBuffer(512))
+
+    describe('replacePageFieldsInText', () => {
+      it('should replace instruction+result concatenations with the result', () => {
+        // In extracted text the 0x13/0x14/0x15 field markers are stripped, so
+        // instruction and result concatenate: "PAGE \\* MERGEFORMAT1".
+        const text = '第 PAGE \\* MERGEFORMAT1 页 共 NUMPAGES \\* MERGEFORMAT5 页'
+        const fields = [
+          { instruction: 'PAGE \\* MERGEFORMAT', result: '1' },
+          { instruction: 'NUMPAGES \\* MERGEFORMAT', result: '5' },
+        ]
+        const result = (parser as any).replacePageFieldsInText(text, fields)
+        expect(result).toBe('第 1 页 共 5 页')
+      })
+
+      it('should leave text untouched when no match is found', () => {
+        const result = (parser as any).replacePageFieldsInText('普通文本', [
+          { instruction: 'PAGE', result: '9' },
+        ])
+        expect(result).toBe('普通文本')
+      })
+
+      it('should skip fields with empty instruction+result', () => {
+        const result = (parser as any).replacePageFieldsInText('abc', [
+          { instruction: '', result: '' },
+        ])
+        expect(result).toBe('abc')
+      })
+    })
+
+    describe('cleanWordFieldCodes', () => {
+      it('should convert Chinese page field pattern to readable text', () => {
+        const result = (parser as any).cleanWordFieldCodes({
+          text: '第 PAGE 3 页 共 NUMPAGES 10 页',
+          charFormat: {},
+        })
+        expect(result.text).toBe('第 3 页 共 10 页')
+      })
+
+      it('should strip English field codes and clean multiple spaces', () => {
+        const result = (parser as any).cleanWordFieldCodes({
+          text: 'HYPERLINK "https://example.com" 显示文本  PAGE  DOCPROPERTY Author',
+          charFormat: {},
+        })
+        expect(result.text).not.toContain('HYPERLINK')
+        expect(result.text).not.toContain('PAGE')
+        expect(result.text).not.toContain('DOCPROPERTY')
+        expect(result.text).not.toContain('  ')
+      })
+
+      it('should drop charFormat.styles when text is modified', () => {
+        const result = (parser as any).cleanWordFieldCodes({
+          text: 'AUTHOR 内容',
+          charFormat: { styles: [{ start: 0, end: 6, style: { bold: true } }] },
+        })
+        expect(result.text).not.toContain('AUTHOR')
+        expect(result.charFormat.styles).toBeUndefined()
+      })
+
+      it('should keep original paragraph when nothing changes', () => {
+        const para = { text: '干净的正文内容', charFormat: { styles: [] } }
+        const result = (parser as any).cleanWordFieldCodes(para)
+        expect(result).toBe(para)
+      })
+
+      it('should remove HYPERLINK URLs and EMBED class names around placeholders', () => {
+        const result = (parser as any).cleanWordFieldCodes({
+          text: 'HYPERLINK "http://x.com"\u0001ChartDocumentMauris 正文内容',
+          charFormat: {},
+        })
+        expect(result.text).toContain('正文内容')
+        expect(result.text).not.toContain('HYPERLINK')
+        expect(result.text).not.toContain('http://')
+        expect(result.text).not.toContain('ChartDocument')
+      })
+    })
+
+    describe('hasSignificantContent', () => {
+      it('should accept table rows and Chinese/English content', () => {
+        expect((parser as any).hasSignificantContent('姓名\u0007年龄\u0007')).toBe(true)
+        expect((parser as any).hasSignificantContent('这是中文内容')).toBe(true)
+        expect((parser as any).hasSignificantContent('hello world foo')).toBe(true)
+      })
+
+      it('should reject short or meaningless text', () => {
+        expect((parser as any).hasSignificantContent('')).toBe(false)
+        expect((parser as any).hasSignificantContent('a')).toBe(false)
+        expect((parser as any).hasSignificantContent('!!!')).toBe(false)
+      })
+    })
+
+    describe('isValidChar', () => {
+      it('should accept CJK, ASCII and common punctuation', () => {
+        expect((parser as any).isValidChar('中'.charCodeAt(0))).toBe(true)
+        expect((parser as any).isValidChar('A'.charCodeAt(0))).toBe(true)
+        expect((parser as any).isValidChar(0x3001)).toBe(true) // 、
+      })
+
+      it('should reject control chars and exotic ranges', () => {
+        expect((parser as any).isValidChar(0x00)).toBe(false)
+        expect((parser as any).isValidChar(0x07)).toBe(false)
+        expect((parser as any).isValidChar(0xE000)).toBe(false)
+      })
+    })
+  })
+
   describe('CLX from table stream (0Table/1Table)', () => {
     // Builds a minimal OLE2 file with WordDocument + a table stream.
     // The WordDocument stream contains a FIB whose fcClx points into the table

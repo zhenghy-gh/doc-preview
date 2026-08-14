@@ -3552,7 +3552,7 @@ export class DocParser {
 
     const cleaned = text.replace(/ {2,}/g, ' ').replace(/，\s*，/g, '，').replace(/。\s*。/g, '。').replace(/：\s*：/g, '：').trim()
 
-    if (cleaned !== text) {
+    if (cleaned !== text || text !== para.text) {
       const newCharFormat = { ...para.charFormat }
       if (newCharFormat.styles && newCharFormat.styles.length > 0) delete newCharFormat.styles
       return { ...para, text: cleaned, charFormat: newCharFormat }
