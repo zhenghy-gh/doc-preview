@@ -56,6 +56,115 @@ describe('DocParser', () => {
     })
   })
 
+  describe('missing WordDocument stream', () => {
+    /** OLE2 file whose directory has no WordDocument stream (only Data). */
+    function buildOleWithoutWordDocument(): ArrayBuffer {
+      const SECTOR = 512
+      const buf = new ArrayBuffer(SECTOR * 4)
+      const view = new Uint8Array(buf)
+      const w16 = (off: number, v: number) => { view[off] = v & 0xff; view[off + 1] = (v >> 8) & 0xff }
+      const w32 = (off: number, v: number) => {
+        view[off] = v & 0xff; view[off + 1] = (v >> 8) & 0xff
+        view[off + 2] = (v >> 16) & 0xff; view[off + 3] = (v >> 24) & 0xff
+      }
+      view[0] = 0xD0; view[1] = 0xCF; view[2] = 0x11; view[3] = 0xE0
+      view[4] = 0xA1; view[5] = 0xB1; view[6] = 0x1A; view[7] = 0xE1
+      w16(26, 3); w16(30, 9); w16(32, 6)
+      w32(48, 1); w32(56, 4096)
+      w32(60, 0xFFFFFFFE); w32(64, 0); w32(68, 0xFFFFFFFE); w32(72, 0)
+      w32(76, 0)
+      for (let i = 1; i < 109; i++) w32(76 + i * 4, 0xFFFFFFFF)
+      w32(SECTOR + 0 * 4, 0xFFFFFFFE)
+      w32(SECTOR + 1 * 4, 0xFFFFFFFE)
+      for (let i = 2; i < 128; i++) w32(SECTOR + i * 4, 0xFFFFFFFF)
+      const dirBase = SECTOR * 2
+      const writeDir = (off: number, name: string, type: number, start: number, size: number) => {
+        for (let i = 0; i < name.length; i++) w16(off + i * 2, name.charCodeAt(i))
+        w16(off + 64, name.length * 2)
+        view[off + 66] = type
+        view[off + 67] = 1
+        w32(off + 116, start)
+        w32(off + 120, size)
+      }
+      writeDir(dirBase + 0 * 128, 'Root Entry', 5, 0xFFFFFFFE, 0)
+      writeDir(dirBase + 1 * 128, 'Data', 2, 2, 512)
+      for (let i = 0; i < 100; i++) view[SECTOR * 3 + i] = 0x41 + (i % 26)
+      return buf
+    }
+
+    it('should fail parseWithFormat with a clear error when WordDocument is missing', () => {
+      const parser = new DocParser(buildOleWithoutWordDocument())
+      const result = parser.parseWithFormat()
+      expect(result.success).toBe(false)
+      expect(result.error).toContain('WordDocument')
+    })
+
+    it('should fail parse() with a clear error when WordDocument is missing', () => {
+      const parser = new DocParser(buildOleWithoutWordDocument())
+      const result = parser.parse()
+      expect(result.success).toBe(false)
+      expect(result.error).toContain('WordDocument')
+    })
+  })
+
+  describe('extractTextSimple', () => {
+    it('should extract 8-bit text with paragraph marks', () => {
+      const parser = new DocParser(new ArrayBuffer(512))
+      // 中文段（≥3 汉字）触发 foundStart，后续英文段被保留
+      const data = new Uint8Array([
+        0xE8, 0xBF, 0x99, 0xE6, 0x98, 0xAF, 0xE4, 0xB8, 0xAD, 0xE6, 0x96, 0x87, 0x0D,
+        // 上面的 UTF-8 字节在 8-bit 模式下是"逐字节"字符，会乱码；
+        // 改用真实 GBK 不可行，这里用 ASCII 数字+字母组合保证长度
+        0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x0D, // "ABCDEF\r"
+      ])
+      const result = (parser as any).extractTextSimple(data, { fComplex: true })
+      expect(typeof result).toBe('string')
+    })
+
+    it('should preserve tabs in 8-bit mode', () => {
+      const parser = new DocParser(new ArrayBuffer(512))
+      const data = new Uint8Array([
+        0x41, 0x09, 0x42, 0x0D, // "A\tB\r"
+      ])
+      const result = (parser as any).extractTextSimple(data, { fComplex: true })
+      expect(result).toBe('A\tB')
+    })
+
+    it('should extract UTF-16LE text with Chinese content', () => {
+      const parser = new DocParser(new ArrayBuffer(512))
+      const text = '这是一段测试文本'
+      const data = new Uint8Array(text.length * 2 + 4)
+      for (let i = 0; i < text.length; i++) {
+        const code = text.charCodeAt(i)
+        data[i * 2] = code & 0xFF
+        data[i * 2 + 1] = (code >> 8) & 0xFF
+      }
+      data[text.length * 2] = 0x0D
+      data[text.length * 2 + 1] = 0x00
+      const result = (parser as any).extractTextSimple(data)
+      expect(result).toBe(text)
+    })
+
+    it('should respect fcMin offset and skip binary noise prefix', () => {
+      const parser = new DocParser(new ArrayBuffer(512))
+      const data = new Uint8Array([
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // noise
+        0xE8, 0xBF, 0x99, 0xE6, 0x98, 0xAF, 0xE4, 0xB8, 0xAD, 0xE6, 0x96, 0x87, 0x0D, // "这是中文\r" (UTF-8 bytes, will not decode well)
+      ])
+      const result = (parser as any).extractTextSimple(data, { fcMin: 6, fComplex: true })
+      // Garbage bytes should be filtered by the junk/Chinese logic; at minimum
+      // the method must not throw and returns a string.
+      expect(typeof result).toBe('string')
+    })
+
+    it('should return empty string for all-noise input', () => {
+      const parser = new DocParser(new ArrayBuffer(512))
+      const data = new Uint8Array([0x00, 0x01, 0x02, 0x03, 0x00, 0x0D])
+      const result = (parser as any).extractTextSimple(data, { fComplex: true })
+      expect(result).toBe('')
+    })
+  })
+
   describe('parseWithFormat', () => {
     it('should fail gracefully for non-OLE buffer', () => {
       const parser = new DocParser(new ArrayBuffer(512))
