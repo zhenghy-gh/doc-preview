@@ -46,6 +46,14 @@ describe('errorClassifier', () => {
       expect(result.retryable).toBe(false)
     })
 
+    it('英文环境下应返回英文 format 提示', () => {
+      const result = classifyError('File appears to be .docx', 'en')
+      expect(result.title).toBe('Unsupported file format')
+      expect(result.detail).toContain('OLE2/CFB')
+      expect(result.suggestions[0]).toContain('docx')
+      expect(result.retryable).toBe(false)
+    })
+
     it('OLE 签名无效应分类为 format', () => {
       const result = classifyError('Not a valid OLE2 file')
       expect(result.category).toBe('format')
@@ -73,6 +81,14 @@ describe('errorClassifier', () => {
       const result = classifyError('File is corrupt')
       expect(result.category).toBe('corrupted')
     })
+
+    it('英文环境下应返回英文 corrupted 提示', () => {
+      const result = classifyError('WordDocument stream not found', 'en')
+      expect(result.title).toBe('File may be corrupted')
+      expect(result.detail).toContain('file structure')
+      expect(result.suggestions[0]).toContain('re-downloading')
+      expect(result.retryable).toBe(true)
+    })
   })
 
   describe('classifyError - 内存不足', () => {
@@ -85,6 +101,14 @@ describe('errorClassifier', () => {
     it('maximum call stack 应分类为 memory', () => {
       const result = classifyError('Maximum call stack size exceeded')
       expect(result.category).toBe('memory')
+    })
+
+    it('英文环境下应返回英文 memory 提示', () => {
+      const result = classifyError('Out of memory', 'en')
+      expect(result.title).toBe('File too large')
+      expect(result.detail).toContain('memory')
+      expect(result.suggestions[0]).toContain('smaller file')
+      expect(result.retryable).toBe(false)
     })
   })
 
@@ -104,6 +128,14 @@ describe('errorClassifier', () => {
       const result = classifyError('解析失败: 未知错误')
       expect(result.category).toBe('parse')
     })
+
+    it('英文环境下应返回英文 parse 提示', () => {
+      const result = classifyError('Failed to parse FIB', 'en')
+      expect(result.title).toBe('Failed to parse document')
+      expect(result.detail).toContain('parsing')
+      expect(result.suggestions[0]).toContain('sub-format')
+      expect(result.retryable).toBe(true)
+    })
   })
 
   describe('classifyError - 未知错误', () => {
@@ -121,6 +153,19 @@ describe('errorClassifier', () => {
     it('null/undefined 应分类为 unknown', () => {
       const result = classifyError(null)
       expect(result.category).toBe('unknown')
+    })
+
+    it('英文环境下应返回英文 unknown 提示', () => {
+      const result = classifyError('some odd message', 'en')
+      expect(result.title).toBe('Unknown error')
+      expect(result.detail).toBe('some odd message')
+      expect(result.suggestions[0]).toContain('reloading')
+      expect(result.retryable).toBe(true)
+    })
+
+    it('空错误在英文环境下应有默认描述', () => {
+      const result = classifyError('', 'en')
+      expect(result.detail).toContain('unexpected error')
     })
   })
 
