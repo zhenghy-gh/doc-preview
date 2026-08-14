@@ -1329,7 +1329,16 @@ describe('libwv fallback mode', () => {
     for (let i = 0; i < 16; i++) jpegBytes.push(0x11)
     jpegBytes.push(0xFF, 0xD9)
     jpegBytes.forEach((b, i) => { view[jpeg + i] = b })
-    // 0Table (sector 7): all zeros -> format fallback finds nothing
+    // 0Table (sector 7): STTB Ffn header + one 'Times New Roman' FFN entry
+    // (cttb=1, cbFfn=49) so tryParseFormatsFromTableStream finds a font table
+    const tblBase = SECTOR * 8
+    w16(tblBase + 0, 1) // cttb
+    view[tblBase + 2] = 49 // FFN cbFfn
+    view[tblBase + 3] = 0
+    view[tblBase + 4] = 49 // entry[0] = cbFfn
+    const fname = 'Times New Roman'
+    for (let i = 0; i < fname.length; i++) w16(tblBase + 4 + 18 + i * 2, fname.charCodeAt(i))
+    w16(tblBase + 4 + 18 + fname.length * 2, 0)
     return buf
   }
 
@@ -1341,6 +1350,9 @@ describe('libwv fallback mode', () => {
     expect(texts).toContain('Hello libwv world')
     expect(result.document.pictures.length).toBeGreaterThan(0)
     expect(result.document.charts.length).toBe(1)
+    // Default font from the parsed font table applied to paragraphs
+    const para0 = (result.document.paragraphs as Array<{ charFormat?: { fontName?: string } }>)[0]
+    expect(para0.charFormat?.fontName).toBe('Times New Roman')
   })
 })
 
