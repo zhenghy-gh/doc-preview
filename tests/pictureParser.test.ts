@@ -1,5 +1,60 @@
 import { describe, it, expect } from 'vitest'
-import { parsePicfAt, extractPicturesFromDataStream } from '../src/utils/pictureParser'
+import { parsePicfAt, extractPicturesFromDataStream, picturesToDataUrls } from '../src/utils/pictureParser'
+
+// Minimal GIF89a: 1x1, no global color table, one image + trailer
+function buildMinimalGif(): Uint8Array {
+  const bytes: number[] = []
+  bytes.push(0x47, 0x49, 0x46, 0x38, 0x39, 0x61) // GIF89a
+  bytes.push(0x01, 0x00) // logical screen width
+  bytes.push(0x01, 0x00) // logical screen height
+  bytes.push(0x00) // packed: no global color table
+  bytes.push(0x00) // background color
+  bytes.push(0x00) // aspect ratio
+  bytes.push(0x2c) // image descriptor
+  bytes.push(0x00, 0x00, 0x00, 0x00) // left/top
+  bytes.push(0x01, 0x00, 0x01, 0x00) // width/height
+  bytes.push(0x00) // packed: no local color table
+  bytes.push(0x02) // LZW min code size
+  bytes.push(0x02, 0x44, 0x01) // data sub-block
+  bytes.push(0x00) // block terminator
+  bytes.push(0x3b) // trailer
+  return new Uint8Array(bytes)
+}
+
+// Minimal BMP: 1x1 24-bit
+function buildMinimalBmp(): Uint8Array {
+  const bytes: number[] = []
+  bytes.push(0x42, 0x4d) // 'BM'
+  const fileSize = 54 + 4 // header + 1 pixel (3 bytes) padded to 4
+  bytes.push(fileSize & 0xff, (fileSize >> 8) & 0xff, (fileSize >> 16) & 0xff, (fileSize >> 24) & 0xff)
+  bytes.push(0, 0, 0, 0) // reserved
+  bytes.push(54, 0, 0, 0) // pixel data offset
+  bytes.push(40, 0, 0, 0) // DIB header size
+  bytes.push(1, 0, 0, 0) // width
+  bytes.push(1, 0, 0, 0) // height
+  bytes.push(1, 0) // planes
+  bytes.push(24, 0) // bpp
+  bytes.push(0, 0, 0, 0) // compression
+  bytes.push(4, 0, 0, 0) // image size
+  bytes.push(0, 0, 0, 0) // x ppm
+  bytes.push(0, 0, 0, 0) // y ppm
+  bytes.push(0, 0, 0, 0) // colors used
+  bytes.push(0, 0, 0, 0) // important colors
+  bytes.push(0, 0, 0, 0) // pixel
+  return new Uint8Array(bytes)
+}
+
+// Minimal JPEG: SOI + APP0 + SOF + SOS + EOI
+function buildMinimalJpeg(): Uint8Array {
+  const bytes: number[] = []
+  bytes.push(0xff, 0xd8) // SOI
+  bytes.push(0xff, 0xe0) // APP0
+  bytes.push(0x00, 0x10) // length 16
+  bytes.push(0x4a, 0x46, 0x49, 0x46, 0x00) // 'JFIF\0'
+  bytes.push(0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00) // JFIF data
+  bytes.push(0xff, 0xd9) // EOI
+  return new Uint8Array(bytes)
+}
 
 // Build a minimal 1x1 PNG: 8-byte signature + IHDR + IDAT + IEND
 function buildMinimalPng(): Uint8Array {
@@ -165,6 +220,82 @@ describe('pictureParser', () => {
       expect(results.length).toBeGreaterThan(0)
       const pngResult = results.find(r => r.format === 'png')
       expect(pngResult).toBeDefined()
+    })
+
+    it('extracts a raw GIF without PICF envelope', () => {
+      const gif = buildMinimalGif()
+      // extractPicturesFromDataStream requires >= 64 bytes of input
+      const data = new Uint8Array(Math.max(gif.length + 20, 80))
+      data.set(gif, 10)
+
+      const results = extractPicturesFromDataStream(data)
+      const gifResult = results.find(r => r.format === 'gif')
+      expect(gifResult).toBeDefined()
+      expect(gifResult!.data.length).toBeGreaterThan(10)
+    })
+
+    it('extracts a raw BMP without PICF envelope', () => {
+      const bmp = buildMinimalBmp()
+      const data = new Uint8Array(Math.max(bmp.length + 20, 80))
+      data.set(bmp, 10)
+
+      const results = extractPicturesFromDataStream(data)
+      const bmpResult = results.find(r => r.format === 'bmp')
+      expect(bmpResult).toBeDefined()
+    })
+
+    it('extracts a raw JPEG without PICF envelope', () => {
+      const jpeg = buildMinimalJpeg()
+      const data = new Uint8Array(Math.max(jpeg.length + 20, 80))
+      data.set(jpeg, 10)
+
+      const results = extractPicturesFromDataStream(data)
+      const jpegResult = results.find(r => r.format === 'jpeg')
+      expect(jpegResult).toBeDefined()
+      expect(jpegResult!.data[jpegResult!.data.length - 2]).toBe(0xff)
+      expect(jpegResult!.data[jpegResult!.data.length - 1]).toBe(0xd9)
+    })
+
+    it('parses GIF wrapped in PICF envelope', () => {
+      const gif = buildMinimalGif()
+      const picf = buildPicfEnvelope(0x000f, 30, 30, gif)
+
+      const results = extractPicturesFromDataStream(picf)
+      const gifResult = results.find(r => r.format === 'gif')
+      expect(gifResult).toBeDefined()
+      expect(gifResult!.widthPx).toBe(30)
+      expect(gifResult!.heightPx).toBe(30)
+    })
+
+    it('parses BMP wrapped in PICF envelope', () => {
+      const bmp = buildMinimalBmp()
+      const picf = buildPicfEnvelope(0x0003, 40, 40, bmp)
+
+      const results = extractPicturesFromDataStream(picf)
+      const bmpResult = results.find(r => r.format === 'bmp')
+      expect(bmpResult).toBeDefined()
+      expect(bmpResult!.widthPx).toBe(40)
+    })
+
+    it('parses JPEG wrapped in PICF envelope with EOI detection', () => {
+      const jpeg = buildMinimalJpeg()
+      const picf = buildPicfEnvelope(0x0008, 50, 50, jpeg)
+
+      const results = extractPicturesFromDataStream(picf)
+      const jpegResult = results.find(r => r.format === 'jpeg')
+      expect(jpegResult).toBeDefined()
+      // EOI should be found, trimming the picf trailing zeros
+      expect(jpegResult!.data[jpegResult!.data.length - 1]).toBe(0xd9)
+    })
+
+    it('does not produce data URLs for unknown formats', () => {
+      const pics = [
+        { format: 'png' as const, data: new Uint8Array([1, 2, 3]), type: 'png' as const, dataOffset: 0 },
+        { format: 'unknown' as const, data: new Uint8Array([4, 5]), type: 'unknown' as const, dataOffset: 1 },
+      ]
+      const urls = picturesToDataUrls(pics)
+      expect(urls).toHaveLength(1)
+      expect(urls[0]).toContain('data:image/png;base64,')
     })
   })
 })
