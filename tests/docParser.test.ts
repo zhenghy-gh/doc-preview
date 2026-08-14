@@ -1343,10 +1343,10 @@ describe('libwv fallback mode', () => {
 })
 
 describe('CLX-unreachable fallback paths', () => {
-  /** WordDocument with an out-of-range CLX pointer and 8-bit text at offset 2048. */
-  function buildNoClxOle(fcMinBase: number, fcMacBase: number, utf16Text = false): ArrayBuffer {
+  /** WordDocument with an out-of-range CLX pointer and text at offset 2048. */
+  function buildNoClxOle(fcMinBase: number, fcMacBase: number, utf16Text = false, customText?: string): ArrayBuffer {
     const SECTOR = 512
-    const buf = new ArrayBuffer(SECTOR * 8)
+    const buf = new ArrayBuffer(SECTOR * 9)
     const view = new Uint8Array(buf)
     const w16 = (off: number, v: number) => { view[off] = v & 0xff; view[off + 1] = (v >> 8) & 0xff }
     const w32 = (off: number, v: number) => {
@@ -1385,7 +1385,9 @@ describe('CLX-unreachable fallback paths', () => {
     w16(10 + wdBase, 0)
     w16(32 + wdBase, 0)
     w16(34 + wdBase, 22)
-    const text = 'Hello fallback'
+    // Consecutive duplicate paragraph (consecutive-dedup branch) and a
+    // 12-char tandem repeat (removeInternalDuplicates branch)
+    const text = customText ?? 'Hello libwv world\r\nHello libwv world\r\nabcdefghijklabcdefghijkl\r\n'
     w32(24 + wdBase, fcMinBase)
     w32(28 + wdBase, fcMacBase)
     w32(36 + 12 + wdBase, text.length) // ccpText
@@ -1406,11 +1408,12 @@ describe('CLX-unreachable fallback paths', () => {
   }
 
   it('falls back to the FibBase fcMin/fcMac range when CLX is unreachable', () => {
-    const parser = new DocParser(buildNoClxOle(2048, 2048 + 14))
+    // span == ccpText (8-bit): fcMinBase=2048, text is 61 chars
+    const parser = new DocParser(buildNoClxOle(2048, 2048 + 61))
     const result = parser.parseWithFormat()
     expect(result.success).toBe(true)
     const texts = (result.document.paragraphs as Array<{ text: string }>).map(p => p.text).join(' ')
-    expect(texts).toContain('Hello fallback')
+    expect(texts).toContain('Hello libwv world')
   })
 
   it('falls back to binary encoding detection when CLX is unreachable', () => {
@@ -1418,7 +1421,14 @@ describe('CLX-unreachable fallback paths', () => {
     const result = parser.parseWithFormat()
     expect(result.success).toBe(true)
     const texts = (result.document.paragraphs as Array<{ text: string }>).map(p => p.text).join(' ')
-    expect(texts).toContain('Hello fallback')
+    expect(texts).toContain('Hello libwv world')
+  })
+
+  it('keeps a few paragraphs when no significant start is found', () => {
+    const parser = new DocParser(buildNoClxOle(2048, 2048 + 9, false, 'ab\r\ncd\r\n'))
+    const result = parser.parseWithFormat()
+    expect(result.success).toBe(true)
+    expect((result.document.paragraphs as Array<{ text: string }>).length).toBeGreaterThan(0)
   })
 })
 
