@@ -63,6 +63,31 @@ describe('OleParser', () => {
       const parser = new OleParser(buf)
       expect(parser.detectFormat()).toBe('unknown')
     })
+
+    it('should detect XML format from the header', () => {
+      const buf = new ArrayBuffer(512)
+      const view = new Uint8Array(buf)
+      const xmlHeader = '<?xml version="1.0"'
+      for (let i = 0; i < xmlHeader.length; i++) view[i] = xmlHeader.charCodeAt(i)
+      const parser = new OleParser(buf)
+      expect(parser.detectFormat()).toBe('xml')
+    })
+
+    it('should return the XML-specific error message', () => {
+      const buf = new ArrayBuffer(512)
+      const view = new Uint8Array(buf)
+      const xmlHeader = '<?xml version="1.0"'
+      for (let i = 0; i < xmlHeader.length; i++) view[i] = xmlHeader.charCodeAt(i)
+      const parser = new OleParser(buf)
+      expect(parser.getFormatErrorString()).toContain('XML')
+    })
+
+    it('should return the OLE-specific error message for OLE files that fail later', () => {
+      const sig = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]
+      const parser = new OleParser(createBuffer(sig))
+      // detectFormat returns 'ole', so the default branch of getFormatErrorString
+      expect(parser.getFormatErrorString()).toContain('OLE')
+    })
   })
 
   describe('isOleFile', () => {
@@ -288,8 +313,50 @@ describe('OleParser', () => {
       expect(fat[2]).toBe(-2)   // ENDOFCHAIN
     })
 
-    it('should read additional FAT sectors from the DIFAT sector chain', () => {
+    it('should filter out-of-range DIFAT entries and read the valid FAT', () => {
+      const buf = new ArrayBuffer(1024) // header + 1 sector
+      const view = new Uint8Array(buf)
+      view[0] = 0xD0; view[1] = 0xCF; view[2] = 0x11; view[3] = 0xE0
+      view[4] = 0xA1; view[5] = 0xB1; view[6] = 0x1A; view[7] = 0xE1
+      view[30] = 0x09 // 512-byte sectors
+
+      // DIFAT[0] = 99 (out of range), DIFAT[1] = 0 (valid FAT sector)
+      view[76] = 99
+      view[80] = 0x00; view[81] = 0x00; view[82] = 0x00; view[83] = 0x00
+      // FAT sector 0: entry 0 = ENDOFCHAIN
+      view[512] = 0xFE; view[513] = 0xFF; view[514] = 0xFF; view[515] = 0xFF
+
+      const parser = new OleParser(buf)
+      const header = parser.parseHeader()
+      const fat = parser.getFatSectors(header)
+      // The out-of-range sector is dropped; sector 0 is read normally
+      expect(header.difat).toContain(0)
+      expect(header.difat).not.toContain(99)
+      expect(fat[0]).toBe(-2)
+    })
+
+    it('should stop a directory FAT chain that forms a cycle', () => {
+      // header + 2 sectors: FAT at 0, directory at 1
       const sectorSize = 512
+      const buf = new ArrayBuffer(sectorSize * 3)
+      const view = new Uint8Array(buf)
+      view[0] = 0xD0; view[1] = 0xCF; view[2] = 0x11; view[3] = 0xE0
+      view[4] = 0xA1; view[5] = 0xB1; view[6] = 0x1A; view[7] = 0xE1
+      view[26] = 0x03; view[30] = 0x09; view[48] = 0x01 // first directory sector = 1
+      view[76] = 0x00 // DIFAT[0] = sector 0 (FAT)
+      // FAT: sector 0 → ENDOFCHAIN, sector 1 → 1 (self-cycle)
+      view[sectorSize] = 0xFE; view[sectorSize + 1] = 0xFF
+      view[sectorSize + 4] = 0x01; view[sectorSize + 5] = 0x00
+      view[sectorSize + 6] = 0x00; view[sectorSize + 7] = 0x00
+
+      const parser = new OleParser(buf)
+      const header = parser.parseHeader()
+      const dirs = parser.getDirectorySectors(header, parser.getFatSectors(header))
+      // Cycle detected → at most the entries from one sector
+      expect(dirs.length).toBeLessThanOrEqual(4)
+    })
+
+    it('should read additional FAT sectors from the DIFAT sector chain', () => {      const sectorSize = 512
       const totalSectors = 140
       const buf = new ArrayBuffer((totalSectors + 1) * sectorSize)
       const view = new Uint8Array(buf)
