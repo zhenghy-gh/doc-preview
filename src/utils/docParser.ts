@@ -2248,16 +2248,12 @@ export class DocParser {
             Array.from(slice) as unknown as number[],
           )
         }
-        const mime =
-          pic.format === 'png'
-            ? 'image/png'
-            : pic.format === 'jpeg'
-              ? 'image/jpeg'
-              : pic.format === 'gif'
-                ? 'image/gif'
-                : pic.format === 'bmp'
-                  ? 'image/bmp'
-                  : 'application/octet-stream'
+        let mime: string
+        if (pic.format === 'png') mime = 'image/png'
+        else if (pic.format === 'jpeg') mime = 'image/jpeg'
+        else if (pic.format === 'gif') mime = 'image/gif'
+        else if (pic.format === 'bmp') mime = 'image/bmp'
+        else mime = 'application/octet-stream'
         const dataUrl = `data:${mime};base64,${btoa(binary)}`
 
         const item: {

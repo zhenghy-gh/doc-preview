@@ -1330,6 +1330,18 @@ describe('libwv fallback mode', () => {
     for (let i = 0; i < 16; i++) jpegBytes.push(0x11)
     jpegBytes.push(0xFF, 0xD9)
     jpegBytes.forEach((b, i) => { view[jpeg + i] = b })
+    // A minimal PNG (signature + IHDR + IDAT + IEND) after the JPEG
+    const pngBase = jpeg + jpegBytes.length
+    const pngBytes: number[] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
+    pngBytes.push(0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52)
+    for (let i = 0; i < 13; i++) pngBytes.push(0)
+    for (let i = 0; i < 4; i++) pngBytes.push(0)
+    pngBytes.push(0, 0, 0, 8, 0x49, 0x44, 0x41, 0x54)
+    for (let i = 0; i < 8; i++) pngBytes.push(0)
+    for (let i = 0; i < 4; i++) pngBytes.push(0)
+    pngBytes.push(0, 0, 0, 0, 0x49, 0x45, 0x4E, 0x44)
+    for (let i = 0; i < 4; i++) pngBytes.push(0)
+    pngBytes.forEach((b, i) => { view[pngBase + i] = b })
     // 0Table (sector 7): STTB Ffn header + one 'Times New Roman' FFN entry
     // (cttb=1, cbFfn=49) so tryParseFormatsFromTableStream finds a font table
     const tblBase = SECTOR * 8
@@ -1349,7 +1361,9 @@ describe('libwv fallback mode', () => {
     expect(result.success).toBe(true)
     const texts = (result.document.paragraphs as Array<{ text: string }>).map(p => p.text).join(' ')
     expect(texts).toContain('Hello libwv world')
-    expect(result.document.pictures.length).toBeGreaterThan(0)
+    const pics = result.document.pictures as Array<{ format: string }>
+    expect(pics.some(p => p.format === 'jpeg')).toBe(true)
+    expect(pics.some(p => p.format === 'png')).toBe(true)
     expect(result.document.charts.length).toBe(1)
     expect(texts).toContain('A\u0007B')
     expect(texts).toContain('E\u0007F')
@@ -1511,5 +1525,53 @@ describe('form feed page breaks', () => {
     expect(result.success).toBe(true)
     const texts = (result.document.paragraphs as Array<{ text: string; paraFormat?: { pageBreakBefore?: boolean } }>).map(p => p.text)
     expect(texts.join(' ')).toContain('Hello')
+  })
+})
+
+describe('readClxData WordDocument fallback', () => {
+  it('falls back to the WordDocument stream when the table stream is too small', () => {
+    const SECTOR = 512
+    const buf = new ArrayBuffer(SECTOR * 4)
+    const view = new Uint8Array(buf)
+    const w16 = (off: number, v: number) => { view[off] = v & 0xff; view[off + 1] = (v >> 8) & 0xff }
+    const w32 = (off: number, v: number) => {
+      view[off] = v & 0xff; view[off + 1] = (v >> 8) & 0xff
+      view[off + 2] = (v >> 16) & 0xff; view[off + 3] = (v >> 24) & 0xff
+    }
+    const END = 0xFFFFFFFE, FREE = 0xFFFFFFFF
+    view[0] = 0xD0; view[1] = 0xCF; view[2] = 0x11; view[3] = 0xE0
+    view[4] = 0xA1; view[5] = 0xB1; view[6] = 0x1A; view[7] = 0xE1
+    w16(26, 3); w16(30, 9); w16(32, 6)
+    w32(48, 1); w32(56, 4096)
+    w32(60, END); w32(64, 0); w32(68, END); w32(72, 0)
+    w32(76, 0)
+    for (let i = 1; i < 109; i++) w32(76 + i * 4, FREE)
+    const fatBase = SECTOR
+    w32(fatBase + 0 * 4, END); w32(fatBase + 1 * 4, END)
+    w32(fatBase + 2 * 4, END)
+    for (let i = 3; i < 128; i++) w32(fatBase + i * 4, FREE)
+    const dirBase = SECTOR * 2
+    const writeDir = (off: number, name: string, type: number, start: number, size: number) => {
+      for (let i = 0; i < name.length; i++) w16(off + i * 2, name.charCodeAt(i))
+      w16(off + 64, name.length * 2)
+      view[off + 66] = type
+      view[off + 67] = 1
+      w32(off + 116, start)
+      w32(off + 120, size)
+    }
+    writeDir(dirBase + 0 * 128, 'Root Entry', 5, END, 0)
+    writeDir(dirBase + 1 * 128, 'WordDocument', 2, 2, 512)
+    writeDir(dirBase + 2 * 128, '0Table', 2, 3, 16)
+    // WordDocument stream: marker bytes so the subarray is distinguishable
+    for (let i = 0; i < 32; i++) view[SECTOR * 3 + i] = 0xAB
+    const parser = new DocParser(buf) as any
+    const header = parser.ole.parseHeader()
+    const fat = parser.ole.getFatSectors(header)
+    const dir = parser.ole.getDirectorySectors(header, fat)
+    const ws = parser.ole.findWordDocumentStream(dir)
+    const clx = parser.readClxData({ lcbClx: 32, fcClx: 0, fWhichTblStm: 0 }, ws.data, dir)
+    expect(clx).not.toBeNull()
+    expect(clx!.length).toBe(32)
+    expect(clx![0]).toBe(0xAB)
   })
 })
