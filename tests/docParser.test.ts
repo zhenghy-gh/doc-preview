@@ -843,3 +843,72 @@ describe('parseDocFileFromBuffer with file name', () => {
     expect(result.error).not.toContain('（文件:')
   })
 })
+
+describe('encoding scoring helpers', () => {
+  const parser = new DocParser(new ArrayBuffer(512))
+
+  it('scoreRawParagraphs should score English and Chinese content', () => {
+    const paras = [
+      { text: 'This is a paragraph with several english words here' },
+      { text: '这是一段包含多个中文词汇的测试文本内容' },
+      { text: 'short' },
+    ]
+    const score = (parser as any).scoreRawParagraphs(paras)
+    expect(score).toBeGreaterThan(0)
+    // English word bonus (30) + length bonus + punctuation bonus
+    expect(score).toBeGreaterThanOrEqual(40)
+  })
+
+  it('scoreRawParagraphs should return 0 for empty or short input', () => {
+    expect((parser as any).scoreRawParagraphs([])).toBe(0)
+    expect((parser as any).scoreRawParagraphs(null)).toBe(0)
+    expect((parser as any).scoreRawParagraphs([{ text: 'abc' }])).toBe(0)
+  })
+
+  it('scoreRawParagraphs should give capital-letter bonus', () => {
+    const paras = [{ text: 'Capitalized Start Of Sentence' }]
+    const score = (parser as any).scoreRawParagraphs(paras)
+    // 4 english words (30) + length (min(29/2,50)=14.5) + capital (5) = 49.5
+    expect(score).toBe(49.5)
+  })
+
+  it('scorePlainText should score paragraph text', () => {
+    const score = (parser as any).scorePlainText('First paragraph here.\n\nSecond one with more words.')
+    expect(score).toBeGreaterThan(0)
+  })
+
+  it('scorePlainText should return 0 for empty text', () => {
+    expect((parser as any).scorePlainText('')).toBe(0)
+    expect((parser as any).scorePlainText('   \n\n  ')).toBe(0)
+  })
+
+  it('scorePlainText should handle CJK content', () => {
+    const score = (parser as any).scorePlainText('这是第一段测试文本。\n\n这是第二段也有内容。')
+    expect(score).toBeGreaterThan(0)
+  })
+
+  it('detectEncodingFromBinary should classify UTF-16LE by null ratio', () => {
+    // UTF-16LE: every ASCII char followed by 0x00. The scan starts at
+    // offset 2048, so pad the buffer to at least that size.
+    const prefix = new Uint8Array(2048)
+    const bytes: number[] = []
+    for (const ch of 'Hello world this is a test of the encoding detector') {
+      bytes.push(ch.charCodeAt(0), 0)
+    }
+    const data = new Uint8Array(prefix.length + bytes.length)
+    data.set(prefix, 0)
+    data.set(new Uint8Array(bytes), prefix.length)
+    const result = (parser as any).detectEncodingFromBinary(data)
+    expect(result).toBe(false) // UTF-16LE
+  })
+
+  it('detectEncodingFromBinary should classify 8-bit by null ratio', () => {
+    // Fill the pre-scan region with 0x41 so the null ratio is not polluted
+    const text = 'Hello world this is a test of the encoding detector'
+    const data = new Uint8Array(2048 + text.length)
+    data.fill(0x41)
+    for (let i = 0; i < text.length; i++) data[2048 + i] = text.charCodeAt(i)
+    const result = (parser as any).detectEncodingFromBinary(data)
+    expect(result).toBe(true) // 8-bit compressed
+  })
+})
