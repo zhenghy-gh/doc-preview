@@ -211,9 +211,15 @@ export function extractEquationsFromWordDocumentStream(data: Uint8Array): Equati
     }
     if (!match) continue
 
+    // Scan UTF-16LE code units after the magic; stop at a 0x0000 terminator.
+    // (Previously this scanned byte-by-byte for a single 0x00, which always
+    // terminated inside the first ASCII character's zero high byte, so the
+    // extracted range was never longer than ~7 bytes and no equation could
+    // ever be produced.)
     let endOffset = offset + eqnMagic.length
-    while (endOffset < data.length && data[endOffset] !== 0) {
-      endOffset++
+    while (endOffset + 1 < data.length) {
+      if (data[endOffset] === 0 && data[endOffset + 1] === 0) break
+      endOffset += 2
     }
 
     if (endOffset - offset > 10 && endOffset - offset < 2000) {
