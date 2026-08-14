@@ -491,13 +491,13 @@ describe('listParser', () => {
         { listType: 'ordered' as const, listLevel: 0, listId: 1 },
       ]
       const result = computeListContinuity(paras)
-      // 注意：listId 不同的相邻列表会被分到不同的块中
-      // 但我们的连续块收集逻辑是按 listType 收集的，不看 listId
-      // 所以所有 5 个都是同一个块，startAt 由第一个 listId 决定
-      // 这是一个已知的简化：连续块只看 listType
-      // 实际应用中，不同 listId 的列表通常不会连续出现
-      // 这里验证第一个 listId 的计数
+      // listId 不同的相邻列表形成独立块：listId=1 的块(1,1) → listId=2
+      // 的块从 1 重新开始 → 回到 listId=1 时按计数器续接为 3
       expect(result[0].startAt).toBe(1)
+      expect(result[1].startAt).toBe(1)
+      expect(result[2].startAt).toBe(1)
+      expect(result[3].startAt).toBe(1)
+      expect(result[4].startAt).toBe(3)
     })
 
     it('should always start at 1 for unordered lists', () => {
