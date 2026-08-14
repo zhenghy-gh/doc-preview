@@ -465,6 +465,21 @@ describe('OleParser', () => {
       expect(dirs).toEqual([])
     })
 
+    it('should reject reserved CFB directory object types', () => {
+      const sectorSize = 512
+      const buf = new ArrayBuffer(sectorSize * 3)
+      const view = new Uint8Array(buf)
+      view[26] = 0x03; view[30] = 0x09; view[48] = 0x01; view[76] = 0x00
+      view[sectorSize] = 0xFE; view[sectorSize + 1] = 0xFF
+      view[sectorSize + 4] = 0xFE; view[sectorSize + 5] = 0xFF
+      const dirOffset = sectorSize * 2
+      writeDirectoryEntry(view, dirOffset, 'Reserved', 3, 0, 0)
+
+      const parser = new OleParser(buf)
+      const header = parser.parseHeader()
+      expect(parser.getDirectorySectors(header, parser.getFatSectors(header))).toEqual([])
+    })
+
     it('should read v4 directory stream sizes as 64-bit values with a safe cap', () => {
       const sectorSize = 4096
       const buf = new ArrayBuffer(sectorSize * 3)

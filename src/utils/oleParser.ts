@@ -664,7 +664,7 @@ export class OleParser {
         return null
       }
 
-      if (objectType < 1 || objectType > 5) {
+      if (objectType !== 1 && objectType !== 2 && objectType !== 5) {
         logger.warn(`无效的 objectType: ${objectType}，跳过此条目`)
         return null
       }

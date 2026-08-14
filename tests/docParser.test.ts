@@ -65,6 +65,55 @@ describe('DocParser', () => {
     })
   })
 
+  describe('stripBinaryPrefix (CJK noise)', () => {
+    const para = (text: string) => ({ text, charFormat: {} })
+
+    it('should not treat a single stray CJK noise char as the body start', () => {
+      // FIB noise decodes to control chars plus an occasional CJK char; the
+      // old strategy (first CJK char) would keep the noise char as the start.
+      const parser = new DocParser(new ArrayBuffer(512))
+      const result = (parser as any).stripBinaryPrefix(para('\u0002龿\u0002这是真实的中文正文内容'))
+      expect(result.text).toBe('这是真实的中文正文内容')
+    })
+
+    it('should prefer a 4+ CJK body run over a short noise run', () => {
+      const parser = new DocParser(new ArrayBuffer(512))
+      // Two noise CJK chars (short run) followed by the real body run of 4+.
+      const result = (parser as any).stripBinaryPrefix(para('\u0002龿龿\u0002这是真实的中文正文内容'))
+      expect(result.text).toBe('这是真实的中文正文内容')
+    })
+
+    it('should keep CJK text that already starts at position 0', () => {
+      const parser = new DocParser(new ArrayBuffer(512))
+      const result = (parser as any).stripBinaryPrefix(para('这是真实的中文正文内容'))
+      expect(result.text).toBe('这是真实的中文正文内容')
+    })
+
+    it('should not strip ASCII leading text before CJK', () => {
+      // English body followed by a Chinese paragraph: the CJK run starts inside
+      // the longest valid ASCII run, so it must not be chosen as the body start.
+      const parser = new DocParser(new ArrayBuffer(512))
+      const result = (parser as any).stripBinaryPrefix(para('Introduction这是正文'))
+      expect(result.text).toBe('Introduction这是正文')
+    })
+
+    it('should realign charFormat styles after stripping', () => {
+      const parser = new DocParser(new ArrayBuffer(512))
+      const result = (parser as any).stripBinaryPrefix({
+        text: '\u0002龿\u0002这是真实的中文正文内容',
+        charFormat: { styles: [
+          { start: 0, end: 5, style: { bold: true } },
+          { start: 4, end: 12, style: { italic: true } },
+        ] },
+      })
+      expect(result.text).toBe('这是真实的中文正文内容')
+      expect(result.charFormat.styles).toEqual([
+        { start: 0, end: 2, style: { bold: true } },
+        { start: 1, end: 9, style: { italic: true } },
+      ])
+    })
+  })
+
   describe('table-like extraction', () => {
     it('should preserve tab characters in compressed text ranges', () => {
       const parser = new DocParser(new ArrayBuffer(512))

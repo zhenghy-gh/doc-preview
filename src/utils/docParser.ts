@@ -3375,8 +3375,13 @@ export class DocParser {
 
     // Strategy 2: first English capital-letter word start
     let firstCapitalWordStart = -1
-    // Strategy 3: first CJK character
-    let firstCjkStart = -1
+    // Strategy 3: first continuous CJK run (2+ chars). A single stray CJK
+    // character is common in FIB binary noise and must NOT be treated as the
+    // body start; runs of 4+ characters are the strongest signal (AGENTS.md:
+    // "定位第一个连续 4+ 中文字符").
+    const cjkRuns: Array<{ start: number; len: number }> = []
+    let currentCjkRun = 0
+    let currentCjkRunStart = 0
 
     for (let i = 0; i < text.length; i++) {
       const charCode = text.charCodeAt(i)
@@ -3403,11 +3408,17 @@ export class DocParser {
         }
       }
 
-      // Track first CJK character
-      if (firstCjkStart === -1 && charCode >= 0x4E00 && charCode <= 0x9FFF) {
-        firstCjkStart = i
+      // Track continuous CJK runs (flush on non-CJK char)
+      if (charCode >= 0x4E00 && charCode <= 0x9FFF) {
+        if (currentCjkRun === 0) currentCjkRunStart = i
+        currentCjkRun++
+      } else {
+        if (currentCjkRun >= 2) cjkRuns.push({ start: currentCjkRunStart, len: currentCjkRun })
+        currentCjkRun = 0
       }
     }
+    // Flush a trailing CJK run (text ends with CJK chars)
+    if (currentCjkRun >= 2) cjkRuns.push({ start: currentCjkRunStart, len: currentCjkRun })
 
     // Choose the best start position
     let candidates: Array<{ pos: number; reason: string; score: number }> = []
@@ -3423,9 +3434,17 @@ export class DocParser {
       candidates.push({ pos: firstCapitalWordStart, reason: 'capitalWord', score: 20 + nearLongest })
     }
 
-    // Prefer CJK starts after position 0
-    if (firstCjkStart && firstCjkStart > 0 && firstCjkStart < longestValidRunStart) {
-      candidates.push({ pos: firstCjkStart, reason: 'cjk', score: 25 })
+    // Prefer the first continuous CJK run after position 0. Only runs of 2+
+    // chars count; a 4+ char run (the body itself) outranks a short noise run.
+    if (cjkRuns.length > 0) {
+      const strongRun = cjkRuns.find(r => r.len >= 4)
+      const chosen = strongRun || cjkRuns[0]
+      // Allow chosen.start == longestValidRunStart (CJK body preceded by noise
+      // is itself the longest valid run); reject starts inside an earlier
+      // ASCII run (e.g. English text before a Chinese paragraph).
+      if (chosen.start > 0 && chosen.start <= longestValidRunStart) {
+        candidates.push({ pos: chosen.start, reason: strongRun ? 'cjkRun' : 'cjkRunShort', score: strongRun ? 40 : 24 })
+      }
     }
 
     if (candidates.length > 0) {
