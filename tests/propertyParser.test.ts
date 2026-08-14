@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseSummaryInformation, hasProperties } from '../src/utils/propertyParser'
+import { parseSummaryInformation, parseDocumentSummaryInformation, hasProperties, mergeProperties } from '../src/utils/propertyParser'
 
 /**
  * Build a minimal SummaryInformation stream with given properties.
@@ -35,12 +35,24 @@ function buildSummaryStream(properties: Array<{ id: number; type: number; value:
     } else if (prop.type === 0x001F) { // LPWSTR
       const strLen = (prop.value as string).length * 2 + 2
       sectionDataSize += 4 + strLen
+    } else if (prop.type === 0x0000 || prop.type === 0x0001) { // EMPTY / NULL
+      sectionDataSize += 0
     } else if (prop.type === 0x0002) { // I2
       sectionDataSize += 2
     } else if (prop.type === 0x0003) { // I4
       sectionDataSize += 4
+    } else if (prop.type === 0x0004) { // R4
+      sectionDataSize += 4
+    } else if (prop.type === 0x0005) { // R8
+      sectionDataSize += 8
+    } else if (prop.type === 0x000B) { // BOOL
+      sectionDataSize += 2
     } else if (prop.type === 0x0040 || prop.type === 0x0014) { // FILETIME / I8
       sectionDataSize += 8
+    } else if (prop.type === 0x0041) { // BLOB
+      sectionDataSize += 4 + (prop.value as number[]).length
+    } else { // unknown types default to 4 bytes
+      sectionDataSize += 4
     }
   }
 
@@ -99,9 +111,31 @@ function buildSummaryStream(properties: Array<{ id: number; type: number; value:
     } else if (prop.type === 0x0003) { // I4
       view.setInt32(valueOffset, prop.value as number, true)
       valueOffset += 4
+    } else if (prop.type === 0x0004) { // R4
+      view.setFloat32(valueOffset, prop.value as number, true)
+      valueOffset += 4
+    } else if (prop.type === 0x0005) { // R8
+      view.setFloat64(valueOffset, prop.value as number, true)
+      valueOffset += 8
+    } else if (prop.type === 0x000B) { // BOOL
+      view.setUint16(valueOffset, prop.value ? 0xFFFF : 0, true)
+      valueOffset += 2
     } else if (prop.type === 0x0040 || prop.type === 0x0014) { // FILETIME / I8
       view.setBigInt64(valueOffset, BigInt(prop.value as number), true)
       valueOffset += 8
+    } else if (prop.type === 0x0041) { // BLOB
+      const bytes = prop.value as number[]
+      view.setUint32(valueOffset, bytes.length, true) // blob length
+      valueOffset += 4
+      for (let j = 0; j < bytes.length; j++) {
+        data[valueOffset + j] = bytes[j]
+      }
+      valueOffset += bytes.length
+    } else if (prop.type === 0x0000 || prop.type === 0x0001) {
+      // EMPTY / NULL — no value bytes
+    } else {
+      // Unknown type — write 4 placeholder bytes
+      valueOffset += 4
     }
   }
 
@@ -254,6 +288,156 @@ describe('propertyParser', () => {
       view.setUint32(52, 200, true) // count=200 (exceeds limit)
       expect(parseSummaryInformation(data)).toBeNull()
     })
+
+    it('should parse appName (LPSTR) and thumbnail (BLOB)', () => {
+      const data = buildSummaryStream([
+        { id: 0x18, type: 0x001E, value: 'Microsoft Word' },
+        { id: 0x11, type: 0x0041, value: [1, 2, 3, 4, 5] },
+      ])
+      const result = parseSummaryInformation(data)
+      expect(result?.appName).toBe('Microsoft Word')
+      expect(result?.thumbnail).toBeInstanceOf(Uint8Array)
+      expect(Array.from(result!.thumbnail!)).toEqual([1, 2, 3, 4, 5])
+    })
+
+    it('should parse R4 and R8 numeric properties', () => {
+      // editTime uses R8 (0x0005); revisionNumber uses I4 — use unknown ids
+      // so values are still decoded through the generic property value parser.
+      const data = buildSummaryStream([
+        { id: 0x99, type: 0x0004, value: 1.5 },
+        { id: 0x98, type: 0x0005, value: 2.25 },
+      ])
+      // These IDs are not mapped to fields, so parsing should still succeed
+      // without throwing (values flow through parsePropertyValue).
+      const result = parseSummaryInformation(data)
+      expect(result).not.toBeNull()
+    })
+
+    it('should parse BOOL property values', () => {
+      const data = buildSummaryStream([
+        { id: 0x97, type: 0x000B, value: true },
+      ])
+      const result = parseSummaryInformation(data)
+      expect(result).not.toBeNull()
+    })
+
+    it('should parse template, lastAuthor and revisionNumber', () => {
+      const data = buildSummaryStream([
+        { id: 0x07, type: 0x001E, value: 'Normal.dotm' },
+        { id: 0x08, type: 0x001E, value: 'Jane' },
+        { id: 0x09, type: 0x001E, value: '3' },
+      ])
+      const result = parseSummaryInformation(data)
+      expect(result?.template).toBe('Normal.dotm')
+      expect(result?.lastAuthor).toBe('Jane')
+      expect(result?.revisionNumber).toBe('3')
+    })
+
+    it('should parse editTime and convert from 100ns units to minutes', () => {
+      const data = buildSummaryStream([
+        { id: 0x0A, type: 0x0040, value: 600000000 }, // 1 minute in 100ns units
+      ])
+      const result = parseSummaryInformation(data)
+      expect(result?.editTime).toBe(1)
+    })
+
+    it('should parse FILETIME timestamps as raw 100ns counts', () => {
+      // The parser stores FILETIME values as raw 100ns-since-1601 counts;
+      // DocPreview converts them for display.
+      const data = buildSummaryStream([
+        { id: 0x0C, type: 0x0040, value: 133479360000000000 },
+        { id: 0x0D, type: 0x0040, value: 133479366000000000 },
+      ])
+      const result = parseSummaryInformation(data)
+      expect(result?.createdTime).toBe(133479360000000000)
+      expect(result?.lastSavedTime).toBe(133479366000000000)
+    })
+
+    it('should parse lastPrinted FILETIME', () => {
+      const data = buildSummaryStream([
+        { id: 0x0B, type: 0x0040, value: 133479360000000000 },
+      ])
+      const result = parseSummaryInformation(data)
+      expect(result?.lastPrinted).toBe(133479360000000000)
+    })
+
+    it('should handle empty and null property values', () => {
+      // VT_EMPTY (0x0000) and VT_NULL (0x0001) — size 0
+      const data = buildSummaryStream([
+        { id: 0x02, type: 0x0000, value: null },
+        { id: 0x03, type: 0x0001, value: null },
+        { id: 0x04, type: 0x0002, value: 42 }, // I2
+      ])
+      const result = parseSummaryInformation(data)
+      expect(result).not.toBeNull()
+      expect(result?.title).toBeUndefined()
+      expect(result?.subject).toBeUndefined()
+      expect(result?.author).toBeUndefined()
+    })
+
+    it('should skip unknown property types with a default size', () => {
+      // Type 0x9999 unknown → skipped with size 4
+      const data = buildSummaryStream([
+        { id: 0x02, type: 0x001E, value: 'Known' },
+        { id: 0x03, type: 0x9999, value: null },
+      ])
+      const result = parseSummaryInformation(data)
+      expect(result?.title).toBe('Known')
+    })
+  })
+
+  describe('parseDocumentSummaryInformation', () => {
+    it('should return null for empty data', () => {
+      expect(parseDocumentSummaryInformation(new Uint8Array(0))).toBeNull()
+    })
+
+    it('should return null for invalid byte order', () => {
+      const data = new Uint8Array(56)
+      data[0] = 0x12; data[1] = 0x34
+      expect(parseDocumentSummaryInformation(data)).toBeNull()
+    })
+
+    it('should parse extended properties (category, company, manager)', () => {
+      const data = buildSummaryStream([
+        { id: 0x02, type: 0x001E, value: 'Research' },
+        { id: 0x0F, type: 0x001E, value: 'ACME Corp' },
+        { id: 0x0E, type: 0x001E, value: 'Dr. Smith' },
+        { id: 0x04, type: 0x0003, value: 12345 },
+        { id: 0x05, type: 0x0003, value: 200 },
+        { id: 0x06, type: 0x0003, value: 50 },
+        { id: 0x13, type: 0x000B, value: true },
+      ])
+      const result = parseDocumentSummaryInformation(data)
+      expect(result?.category).toBe('Research')
+      expect(result?.company).toBe('ACME Corp')
+      expect(result?.manager).toBe('Dr. Smith')
+      expect(result?.byteCount).toBe(12345)
+      expect(result?.lineCount).toBe(200)
+      expect(result?.paragraphCount).toBe(50)
+      expect(result?.sharedDoc).toBe(true)
+    })
+
+    it('should parse slide/note/hidden counts and charCountWithSpaces', () => {
+      const data = buildSummaryStream([
+        { id: 0x07, type: 0x0003, value: 3 },
+        { id: 0x08, type: 0x0003, value: 4 },
+        { id: 0x09, type: 0x0003, value: 1 },
+        { id: 0x11, type: 0x0003, value: 999 },
+      ])
+      const result = parseDocumentSummaryInformation(data)
+      expect(result?.slideCount).toBe(3)
+      expect(result?.noteCount).toBe(4)
+      expect(result?.hiddenCount).toBe(1)
+      expect(result?.charCountWithSpaces).toBe(999)
+    })
+
+    it('should parse presentationFormat', () => {
+      const data = buildSummaryStream([
+        { id: 0x03, type: 0x001E, value: 'On-screen Show' },
+      ])
+      const result = parseDocumentSummaryInformation(data)
+      expect(result?.presentationFormat).toBe('On-screen Show')
+    })
   })
 
   describe('hasProperties', () => {
@@ -283,6 +467,21 @@ describe('propertyParser', () => {
 
     it('should return true when multiple properties are present', () => {
       expect(hasProperties({ title: 'Test', pageCount: 5, wordCount: 100 })).toBe(true)
+    })
+  })
+
+  describe('mergeProperties', () => {
+    it('should merge base and extended, extended wins', () => {
+      const merged = mergeProperties(
+        { title: 'Base', author: 'A' },
+        { title: 'Extended', pageCount: 10 },
+      )
+      expect(merged).toEqual({ title: 'Extended', author: 'A', pageCount: 10 })
+    })
+
+    it('should return copy of base when extended is empty', () => {
+      const merged = mergeProperties({ title: 'Base' }, {})
+      expect(merged).toEqual({ title: 'Base' })
     })
   })
 })

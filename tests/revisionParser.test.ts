@@ -158,6 +158,30 @@ describe('revisionParser', () => {
       expect(authors.length).toBe(1)
       expect(authors[0]).toBe('Bob')
     })
+
+    it('should parse an 8-bit (non-Unicode) STTB', () => {
+      // fExtend = 0x0000 → 8-bit compressed strings
+      const data = new Uint8Array([
+        0x00, 0x00,             // fExtend = 0 (8-bit)
+        0x02, 0x00,             // cbSttb = 2
+        0x05, 0x00, 0x41, 0x6C, 0x69, 0x63, 0x65, // cbString=5, "Alice"
+        0x03, 0x00, 0x42, 0x6F, 0x62,             // cbString=3, "Bob"
+      ])
+      const authors = parseSttbfRMark(data, 0, data.length)
+      expect(authors).toEqual(['Alice', 'Bob'])
+    })
+
+    it('should handle truncated 8-bit string data gracefully', () => {
+      // 8-bit STTB claiming 2 authors but second string runs past the end
+      const data = new Uint8Array([
+        0x00, 0x00,             // fExtend = 0 (8-bit)
+        0x02, 0x00,             // cbSttb = 2
+        0x03, 0x00, 0x42, 0x6F, 0x62, // "Bob"
+        0x10, 0x00, 0x41,       // cbString=16 but only 1 byte follows
+      ])
+      const authors = parseSttbfRMark(data, 0, data.length)
+      expect(authors).toEqual(['Bob'])
+    })
   })
 
   describe('parseRmrk', () => {
