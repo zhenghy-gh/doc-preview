@@ -2653,6 +2653,18 @@ export class DocParser {
     // 3. Prefer groups that come AFTER at least one body paragraph (not right after title)
     // bestGroup is also used by Step 4 to place image paragraphs after the list.
     if (candidateGroups.length > 0) {
+      // Precompute a prefix count of "body" paragraphs (length > LIST_ITEM_MAX_LEN,
+      // ignoring a leading \u0001 placeholder) so the per-group `slice + filter`
+      // below is O(1) instead of O(paragraphs) — with many candidate groups this
+      // turned an O(n) pass into an O(n²) one (e.g. 27.5k paragraphs / 2.7k groups
+      // cost ~290ms).
+      const prefixBodyCounts = new Int32Array(paragraphs.length + 1)
+      for (let i = 0; i < paragraphs.length; i++) {
+        let t = paragraphs[i].text
+        if (t.startsWith('\u0001')) t = t.substring(1)
+        prefixBodyCounts[i + 1] = prefixBodyCounts[i] + (t.length > LIST_ITEM_MAX_LEN ? 1 : 0)
+      }
+
       // Filter groups with at least 3 items and reasonable length uniformity
       // CV > 0.6 means highly variable lengths — unlikely to be a real list
       const validGroups = candidateGroups.filter(g => g.count >= 3 && g.cv <= 0.6)
@@ -2663,11 +2675,7 @@ export class DocParser {
           score += (1 - g.cv) * 20 // uniformity is important
 
           // Bonus if group comes after at least 1 body paragraph
-          const prefixBodyCount = paragraphs.slice(0, g.start).filter(p => {
-            let t = p.text
-            if (t.startsWith('\u0001')) t = t.substring(1)
-            return t.length > LIST_ITEM_MAX_LEN
-          }).length
+          const prefixBodyCount = prefixBodyCounts[g.start]
           if (prefixBodyCount >= 1) score += 15
 
           return { ...g, score }
@@ -2687,11 +2695,7 @@ export class DocParser {
           const avgLen = bestGroup.avgLen
 
           if (firstLen >= avgLen * 1.3) {
-            const hasBodyBefore = paragraphs.slice(0, bestGroup.start).some(p => {
-              let t = p.text
-              if (t.startsWith('\u0001')) t = t.substring(1)
-              return t.length > LIST_ITEM_MAX_LEN
-            })
+            const hasBodyBefore = prefixBodyCounts[bestGroup.start] > 0
 
             if (hasBodyBefore) {
               bestGroup = {
@@ -2798,10 +2802,11 @@ export class DocParser {
     }
     
     // Apply body paragraph styling to remaining non-list paragraphs
+    const _subtitleSet = new Set(subtitleLines)
     for (let i = 0; i < paragraphs.length; i++) {
       if (paragraphs[i].paraFormat?.listType) continue
       if (paragraphs[i].charFormat?.fontSize === 28) continue // Skip title
-      if (subtitleLines.includes(i)) continue // Skip subtitle lines
+      if (_subtitleSet.has(i)) continue // Skip subtitle lines
       if (paragraphs[i].text.length === 0) continue // Skip empty paragraphs
       
       const len = paragraphs[i].text.length
