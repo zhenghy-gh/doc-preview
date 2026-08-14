@@ -249,3 +249,56 @@ describe('extractSections', () => {
     })
   })
 })
+
+describe('extractSections variable-length SEPX operands', () => {
+  it('stops when a variable-length operand offset is past EOF', () => {
+    // PlcfSed (16 bytes at offset 16) pointing at a SEPX whose grpprl is
+    // exactly the spra=6 sprm 0xC000 with no operand bytes left.
+    const fcPlcfSed = 16
+    const fcSepx = 8
+    const tableBuf = new Array(fcPlcfSed + 16).fill(0)
+    writeDword(tableBuf, fcPlcfSed + 0, 0)
+    writeDword(tableBuf, fcPlcfSed + 4, 100)
+    writeWord(tableBuf, fcPlcfSed + 8, 0)
+    writeDword(tableBuf, fcPlcfSed + 10, fcSepx)
+    writeWord(tableBuf, fcPlcfSed + 14, 0)
+    // SEPX at fcSepx: cb=2, grpprl = [0x00, 0xC0] (sprm 0xC000)
+    const wordBuf = [0, 0, 0, 0, 0, 0, 0, 0, 0x02, 0x00, 0x00, 0xC0]
+    const sections = extractSections(
+      new Uint8Array(tableBuf),
+      new Uint8Array(wordBuf),
+      fcPlcfSed,
+      16,
+    )
+    expect(sections.length).toBe(1)
+    expect(sections[0].pageWidthPt).toBeUndefined()
+  })
+
+  it('reads a variable-length operand length when bytes remain', () => {
+    const fcPlcfSed = 16
+    const fcSepx = 8
+    const tableBuf = new Array(fcPlcfSed + 16).fill(0)
+    writeDword(tableBuf, fcPlcfSed + 0, 0)
+    writeDword(tableBuf, fcPlcfSed + 4, 100)
+    writeWord(tableBuf, fcPlcfSed + 8, 0)
+    writeDword(tableBuf, fcPlcfSed + 10, fcSepx)
+    writeWord(tableBuf, fcPlcfSed + 14, 0)
+    // One trailing byte after the 0xC000 sprm: length prefix 0xAA.
+    const wordBuf = [0, 0, 0, 0, 0, 0, 0, 0, 0x02, 0x00, 0x00, 0xC0, 0xAA]
+    const sections = extractSections(
+      new Uint8Array(tableBuf),
+      new Uint8Array(wordBuf),
+      fcPlcfSed,
+      16,
+    )
+    expect(sections.length).toBe(1)
+  })
+})
+
+describe('extractSections unknown SPRM', () => {
+  it('skips unknown section SPRMs via the default case', () => {
+    const { tableData, wordDocData, fcPlcfSed, lcbPlcfSed } = buildSectionData(100, 20, [0x00, 0x01, 0x05])
+    const sections = extractSections(tableData, wordDocData, fcPlcfSed, lcbPlcfSed)
+    expect(sections.length).toBe(1)
+  })
+})
