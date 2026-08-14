@@ -1183,11 +1183,11 @@ describe('parseWithFormat field assembly', () => {
     const eqn = '\\alpha'
     for (let i = 0; i < eqn.length; i++) w16(wdBase + eq + 6 + i * 2, eqn.charCodeAt(i))
     w16(wdBase + eq + 6 + eqn.length * 2, 0)
-    // Embedded-chart OLE magic at stream offset 900 with >500 non-zero bytes
+    // Embedded-chart OLE magic at stream offset 920 with >500 non-zero bytes
     // so extractChartsFromWordDocumentStream finds a chart
     const chartMagic = [0xD0, 0xCF, 0x11, 0xE0]
-    chartMagic.forEach((b, i) => { view[wdBase + 900 + i] = b })
-    for (let i = 0; i < 596; i++) view[wdBase + 904 + i] = 0x42
+    chartMagic.forEach((b, i) => { view[wdBase + 920 + i] = b })
+    for (let i = 0; i < 576; i++) view[wdBase + 924 + i] = 0x42
 
     // 0Table stream (sector 5 -> physical offset (5+1)*512)
     const tblBase = SECTOR * 6
