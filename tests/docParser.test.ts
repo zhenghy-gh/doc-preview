@@ -1126,7 +1126,7 @@ describe('parseWithFormat field assembly', () => {
     w32(126 + 16 * 8 + 4 + wdBase, 112)
     // pair 12: PlcfBteChpx -> 0Table offset 270 (CHPX with a revision mark)
     w32(126 + 12 * 8 + wdBase, 270)
-    w32(126 + 12 * 8 + 4 + wdBase, 15)
+    w32(126 + 12 * 8 + 4 + wdBase, 25)
     // pairs 21-23: bookmarks (PlcfBkf/PlcfBkl/SttbfBkmk at 0Table 200/216/232)
     // pair 21 = fcSttbfBkmk, 22 = fcPlcfBkf, 23 = fcPlcfBkl
     w32(126 + 21 * 8 + wdBase, 232)
@@ -1214,10 +1214,18 @@ describe('parseWithFormat field assembly', () => {
     const chpxBase = tblBase + 270
     w32(chpxBase + 0, 0)
     w32(chpxBase + 4, 10)
-    w16(chpxBase + 8, 5) // aPcb cb = 5; grpprl follows at +10 (offset 280)
+    // grpprl: CFRMark on, then IBST_RMARK (author 0) and DTTM_RMARK
+    w16(chpxBase + 8, 15) // aPcb cb = 15; grpprl (13 bytes) follows at +10
     view[chpxBase + 10] = 0x01 // sprmCFRMark (0x0801)
     view[chpxBase + 11] = 0x08
     view[chpxBase + 12] = 0x01 // toggle on -> insert revision
+    view[chpxBase + 13] = 0x04 // sprmCIbstRMark (0x4804)
+    view[chpxBase + 14] = 0x48
+    view[chpxBase + 15] = 0x00 // author index 0
+    view[chpxBase + 16] = 0x00
+    view[chpxBase + 17] = 0x05 // sprmCDttmRMark (0x6805)
+    view[chpxBase + 18] = 0x68
+    w32(chpxBase + 19, 0x01020304) // dttm timestamp
     // Bookmark tables: one bookmark over cp [0, 10]
     const bkfBase = tblBase + 200
     w32(bkfBase + 0, 0)
@@ -1258,6 +1266,7 @@ describe('parseWithFormat field assembly', () => {
     expect(doc.equations.length).toBe(1)
     expect(doc.revisions.length).toBe(1)
     expect(doc.revisions[0].type).toBe('insert')
+    expect(doc.revisions[0].timestamp).toBe(0x01020304)
     expect(doc.paragraphs.length).toBeGreaterThan(0)
   })
 })
@@ -1410,5 +1419,74 @@ describe('CLX-unreachable fallback paths', () => {
     expect(result.success).toBe(true)
     const texts = (result.document.paragraphs as Array<{ text: string }>).map(p => p.text).join(' ')
     expect(texts).toContain('Hello fallback')
+  })
+})
+
+describe('form feed page breaks', () => {
+  it('splits paragraphs on embedded form feeds with real CHPX runs', () => {
+    const SECTOR = 512
+    const buf = new ArrayBuffer(SECTOR * 5)
+    const view = new Uint8Array(buf)
+    const w16 = (off: number, v: number) => { view[off] = v & 0xff; view[off + 1] = (v >> 8) & 0xff }
+    const w32 = (off: number, v: number) => {
+      view[off] = v & 0xff; view[off + 1] = (v >> 8) & 0xff
+      view[off + 2] = (v >> 16) & 0xff; view[off + 3] = (v >> 24) & 0xff
+    }
+    const END = 0xFFFFFFFE, FREE = 0xFFFFFFFF
+    view[0] = 0xD0; view[1] = 0xCF; view[2] = 0x11; view[3] = 0xE0
+    view[4] = 0xA1; view[5] = 0xB1; view[6] = 0x1A; view[7] = 0xE1
+    w16(26, 3); w16(30, 9); w16(32, 6)
+    w32(48, 1); w32(56, 4096)
+    w32(60, END); w32(64, 0); w32(68, END); w32(72, 0)
+    w32(76, 0)
+    for (let i = 1; i < 109; i++) w32(76 + i * 4, FREE)
+    const fatBase = SECTOR
+    for (let i = 0; i < 4; i++) w32(fatBase + i * 4, END)
+    for (let i = 4; i < 128; i++) w32(fatBase + i * 4, FREE)
+    const dirBase = SECTOR * 2
+    const writeDir = (off: number, name: string, type: number, start: number, size: number) => {
+      for (let i = 0; i < name.length; i++) w16(off + i * 2, name.charCodeAt(i))
+      w16(off + 64, name.length * 2)
+      view[off + 66] = type
+      view[off + 67] = 1
+      w32(off + 116, start)
+      w32(off + 120, size)
+    }
+    writeDir(dirBase + 0 * 128, 'Root Entry', 5, END, 0)
+    writeDir(dirBase + 1 * 128, 'WordDocument', 2, 2, 512)
+    writeDir(dirBase + 2 * 128, '0Table', 2, 3, 512)
+    const wdBase = SECTOR * 3
+    w16(0 + wdBase, 0xA5EC)
+    w16(2 + wdBase, 0x0101)
+    w16(10 + wdBase, 0)
+    w16(32 + wdBase, 0)
+    w16(34 + wdBase, 22)
+    const text = 'Hello\fWorld'
+    w32(36 + 12 + wdBase, text.length) // ccpText
+    w16(124 + wdBase, 34)
+    // pair 12: PlcfBteChpx with one empty-CHPX run over cp [0, 11]
+    w32(126 + 12 * 8 + wdBase, 120)
+    w32(126 + 12 * 8 + 4 + wdBase, 12)
+    const clxSize = 1 + 4 + 4 * 2 + 8
+    w32(126 + 33 * 8 + wdBase, 0)
+    w32(126 + 33 * 8 + 4 + wdBase, clxSize)
+    const textOffset = 400
+    for (let i = 0; i < text.length; i++) w16(textOffset + i * 2 + wdBase, text.charCodeAt(i))
+    w16(textOffset + text.length * 2 + wdBase, 0x0D)
+    const tblBase = SECTOR * 4
+    view[tblBase + 0] = 0x02
+    w32(tblBase + 1, 16)
+    w32(tblBase + 5, 0)
+    w32(tblBase + 9, text.length)
+    w32(tblBase + 13 + 2, textOffset)
+    // PlcfBteChpx at 120: aCP [0,11], aPcb [2], CHPX cb=2 (empty grpprl)
+    w32(tblBase + 120, 0)
+    w32(tblBase + 124, 11)
+    w16(tblBase + 128, 2)
+    const parser = new DocParser(buf)
+    const result = parser.parseWithFormat()
+    expect(result.success).toBe(true)
+    const texts = (result.document.paragraphs as Array<{ text: string; paraFormat?: { pageBreakBefore?: boolean } }>).map(p => p.text)
+    expect(texts.join(' ')).toContain('Hello')
   })
 })
