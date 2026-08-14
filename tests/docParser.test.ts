@@ -1312,6 +1312,13 @@ describe('libwv fallback mode', () => {
     const textStreamOffset = 2048
     for (let i = 0; i < text.length; i++) w16(wdBase + textStreamOffset + i * 2, text.charCodeAt(i))
     w16(wdBase + textStreamOffset + text.length * 2, 0x0D)
+    // A tiny JPEG right after the text so extractPictures finds it by
+    // scanning the WordDocument stream (libwv embeds images inline).
+    let jpeg = wdBase + textStreamOffset + (text.length + 1) * 2
+    const jpegBytes: number[] = [0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10]
+    for (let i = 0; i < 16; i++) jpegBytes.push(0x11)
+    jpegBytes.push(0xFF, 0xD9)
+    jpegBytes.forEach((b, i) => { view[jpeg + i] = b })
     // 0Table (sector 7): all zeros -> format fallback finds nothing
     return buf
   }
@@ -1322,6 +1329,7 @@ describe('libwv fallback mode', () => {
     expect(result.success).toBe(true)
     const texts = (result.document.paragraphs as Array<{ text: string }>).map(p => p.text).join(' ')
     expect(texts).toContain('Hello libwv world')
+    expect(result.document.pictures.length).toBeGreaterThan(0)
   })
 })
 
