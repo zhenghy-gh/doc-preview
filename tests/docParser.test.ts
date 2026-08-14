@@ -1211,3 +1211,66 @@ describe('parseWithFormat field assembly', () => {
     expect(doc.paragraphs.length).toBeGreaterThan(0)
   })
 })
+
+describe('libwv fallback mode', () => {
+  /** WordDocument with no CLX: lcbClx=0, ccpText>0, text at stream offset 2048. */
+  function buildLibwvOle(): ArrayBuffer {
+    const SECTOR = 512
+    const buf = new ArrayBuffer(SECTOR * 9)
+    const view = new Uint8Array(buf)
+    const w16 = (off: number, v: number) => { view[off] = v & 0xff; view[off + 1] = (v >> 8) & 0xff }
+    const w32 = (off: number, v: number) => {
+      view[off] = v & 0xff; view[off + 1] = (v >> 8) & 0xff
+      view[off + 2] = (v >> 16) & 0xff; view[off + 3] = (v >> 24) & 0xff
+    }
+    const END = 0xFFFFFFFE, FREE = 0xFFFFFFFF
+    view[0] = 0xD0; view[1] = 0xCF; view[2] = 0x11; view[3] = 0xE0
+    view[4] = 0xA1; view[5] = 0xB1; view[6] = 0x1A; view[7] = 0xE1
+    w16(26, 3); w16(30, 9); w16(32, 6)
+    w32(48, 1); w32(56, 4096)
+    w32(60, END); w32(64, 0); w32(68, END); w32(72, 0)
+    w32(76, 0)
+    for (let i = 1; i < 109; i++) w32(76 + i * 4, FREE)
+    const fatBase = SECTOR
+    w32(fatBase + 0 * 4, END); w32(fatBase + 1 * 4, END)
+    w32(fatBase + 2 * 4, 3); w32(fatBase + 3 * 4, 4)
+    w32(fatBase + 4 * 4, 5); w32(fatBase + 5 * 4, 6)
+    w32(fatBase + 6 * 4, END); w32(fatBase + 7 * 4, END)
+    for (let i = 8; i < 128; i++) w32(fatBase + i * 4, FREE)
+    const dirBase = SECTOR * 2
+    const writeDir = (off: number, name: string, type: number, start: number, size: number) => {
+      for (let i = 0; i < name.length; i++) w16(off + i * 2, name.charCodeAt(i))
+      w16(off + 64, name.length * 2)
+      view[off + 66] = type
+      view[off + 67] = 1
+      w32(off + 116, start)
+      w32(off + 120, size)
+    }
+    writeDir(dirBase + 0 * 128, 'Root Entry', 5, END, 0)
+    writeDir(dirBase + 1 * 128, 'WordDocument', 2, 2, 2560)
+    writeDir(dirBase + 2 * 128, '0Table', 2, 7, 512)
+    const wdBase = SECTOR * 3
+    w16(0 + wdBase, 0xA5EC)
+    w16(2 + wdBase, 0x0101)
+    w16(10 + wdBase, 0)
+    w16(32 + wdBase, 0)
+    w16(34 + wdBase, 22)
+    const text = 'Hello libwv world'
+    w32(36 + 12 + wdBase, text.length) // ccpText
+    w16(124 + wdBase, 34) // cbRgFcLcb: all pairs zero (no CLX, no tables)
+    // Text at stream offset 2048 (libwv convention), 5-sector WordDocument
+    const textStreamOffset = 2048
+    for (let i = 0; i < text.length; i++) w16(wdBase + textStreamOffset + i * 2, text.charCodeAt(i))
+    w16(wdBase + textStreamOffset + text.length * 2, 0x0D)
+    // 0Table (sector 7): all zeros -> format fallback finds nothing
+    return buf
+  }
+
+  it('parses a libwv-style document through the no-CLX fallback', () => {
+    const parser = new DocParser(buildLibwvOle())
+    const result = parser.parseWithFormat()
+    expect(result.success).toBe(true)
+    const texts = (result.document.paragraphs as Array<{ text: string }>).map(p => p.text).join(' ')
+    expect(texts).toContain('Hello libwv world')
+  })
+})
