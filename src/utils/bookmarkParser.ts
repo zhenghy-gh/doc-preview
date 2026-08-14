@@ -18,7 +18,7 @@ function parsePlcfBkf(
   fc: number,
   lcb: number,
 ): Array<{ cpStart: number; bklIndex: number }> {
-  if (fc === 0 || lcb === 0 || fc + lcb > data.length) return []
+  if (fc === undefined || fc < 0 || lcb === undefined || lcb <= 0 || fc + lcb > data.length) return []
 
   // BKF 结构为 4 字节（Word 97+），所以 n = lcb / (4 + 4) - 1... 实际上：
   // PlcfBkf = aFC[(n+1) * 4] + aBKF[n * 4]
@@ -60,7 +60,7 @@ function parsePlcfBkl(
   fc: number,
   lcb: number,
 ): number[] {
-  if (fc === 0 || lcb === 0 || fc + lcb > data.length) return []
+  if (fc === undefined || fc < 0 || lcb === undefined || lcb <= 0 || fc + lcb > data.length) return []
 
   const n = Math.floor((lcb - 4) / 8)
   if (n <= 0) return []
@@ -93,7 +93,7 @@ function parseSttbfBkmk(
   fc: number,
   lcb: number,
 ): string[] {
-  if (fc === 0 || lcb === 0 || fc + lcb > data.length) return []
+  if (fc === undefined || fc < 0 || lcb === undefined || lcb <= 0 || fc + lcb > data.length) return []
 
   let offset = fc
   const fExtend = data[offset] | (data[offset + 1] << 8)
