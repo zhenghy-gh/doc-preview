@@ -1108,3 +1108,35 @@ describe('OleParser header bounds', () => {
     expect(parserAny._getString(60, 20)).toBe('')
   })
 })
+
+describe('OleParser mini-stream safety', () => {
+  it('should stop a cyclic mini-stream chain without infinite looping', () => {
+    const parser = new OleParser(new ArrayBuffer(512))
+    // miniFat: sector 0 → 0 (self-cycle)
+    const miniFat = [0, 0, 0, 0]
+    const rootStream = new Uint8Array(256)
+    const result = (parser as any).readMiniStream(
+      { name: 'Cyclic', objectType: 2, startSector: 0, size: 128, nameLength: 6 },
+      rootStream,
+      miniFat,
+      { miniSectorSizePower: 6 }, // 64-byte mini sectors
+    )
+    // The cycle guard limits iterations; reading completes without hanging
+    expect(result.size).toBeLessThanOrEqual(128)
+  })
+
+  it('should stop when a mini sector offset is out of bounds', () => {
+    const parser = new OleParser(new ArrayBuffer(512))
+    // sector 0 reads fine (64 bytes); miniFat[0]=10 points beyond the
+    // 256-byte root stream → second iteration breaks out
+    const miniFat = [10, -2]
+    const rootStream = new Uint8Array(256)
+    const result = (parser as any).readMiniStream(
+      { name: 'Oob', objectType: 2, startSector: 0, size: 200, nameLength: 3 },
+      rootStream,
+      miniFat,
+      { miniSectorSizePower: 6 },
+    )
+    expect(result.size).toBe(64)
+  })
+})
