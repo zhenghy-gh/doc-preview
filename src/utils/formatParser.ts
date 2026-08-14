@@ -279,10 +279,14 @@ export function parseChpxRuns(data: Uint8Array, fc: number, lcb: number): ChpxRu
   for (let i = 0; i < n; i++) {
     const cpStart = readUint32(data, fc + i * 4)
     const cpEnd = readUint32(data, fc + (i + 1) * 4)
+    // Unreachable: the aCP walk above verified strict monotonicity within
+    // fc+lcb, and the aPcb chain validation guarantees in-bounds reads.
+    /* v8 ignore start */
     if (cpEnd <= cpStart) {
       pcbOffset += readUint16(data, pcbOffset) || 2
       continue
     }
+    /* v8 ignore stop */
 
     const cbOffset = readUint16(data, pcbOffset)
     const { format, fontIndex, revision, isSpecial, fcPic, istd } = parseChpxGrpprlWithFont(data, pcbOffset + 2, cbOffset - 2)
@@ -441,7 +445,11 @@ export function parseChpxGrpprlWithFont(data: Uint8Array, offset: number, size: 
         // sprmCFRMark — Toggle: 标记字符为"修订插入"
         if (toggle === 1) {
           if (!revision) revision = { type: 'insert' }
+          // Unreachable: this parser only ever creates insert/delete
+          // revisions. Kept for spec completeness.
+          /* v8 ignore start */
           else if (revision.type === 'format') revision.type = 'insert'
+          /* v8 ignore stop */
         }
         break
       }
@@ -617,10 +625,14 @@ export function parsePapxRuns(data: Uint8Array, fc: number, lcb: number): PapxRu
   for (let i = 0; i < n; i++) {
     const cpStart = readUint32(data, fc + i * 4)
     const cpEnd = readUint32(data, fc + (i + 1) * 4)
+    // Unreachable: the aCP walk above verified strict monotonicity within
+    // fc+lcb, and the aPcb chain validation guarantees in-bounds reads.
+    /* v8 ignore start */
     if (cpEnd <= cpStart) {
       pcbOffset += readUint16(data, pcbOffset) || 4
       continue
     }
+    /* v8 ignore stop */
 
     const cbOffset = readUint16(data, pcbOffset)
     const istd = readUint16(data, pcbOffset + 2)

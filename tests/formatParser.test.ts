@@ -599,3 +599,51 @@ describe('formatParser', () => {
     })
   })
 })
+
+describe('formatParser extra SPRM branches', () => {
+  function parseGrpprl(prls: number[]): ReturnType<typeof parseChpxGrpprlWithFont> {
+    return parseChpxGrpprlWithFont(new Uint8Array(prls), 0, prls.length)
+  }
+
+  it('should clear outline and shadow on toggle 0', () => {
+    const r = parseGrpprl([0x38, 0x08, 0x00, 0x39, 0x08, 0x00])
+    expect(r.format.outline).toBe(false)
+    expect(r.format.shadow).toBe(false)
+  })
+
+  it('should create an insert revision from sprmCFRMark', () => {
+    const r = parseGrpprl([0x01, 0x08, 0x01])
+    expect(r.revision).toEqual({ type: 'insert' })
+  })
+
+  it('should create a delete revision from sprmCFRMarkDel and DTTM', () => {
+    const r = parseGrpprl([0x00, 0x08, 0x01, 0x64, 0x68, 0x04, 0x03, 0x02, 0x01])
+    expect(r.revision).toEqual({ type: 'delete', timestamp: 0x01020304 })
+  })
+
+  it('should parse istd and in-table SPRMs from a Papx grpprl', () => {
+    const r = parsePapxGrpprl(new Uint8Array([0x00, 0x46, 0x01, 0x00, 0x16, 0x24, 0x01]), 0, 7)
+    expect(r.table).toEqual({ inTable: true })
+  })
+})
+
+describe('formatParser revision and table branches', () => {
+  function parseGrpprl(prls: number[]): ReturnType<typeof parseChpxGrpprlWithFont> {
+    return parseChpxGrpprlWithFont(new Uint8Array(prls), 0, prls.length)
+  }
+
+  it('should downgrade an insert revision to delete on sprmCFRMarkDel', () => {
+    const r = parseGrpprl([0x01, 0x08, 0x01, 0x00, 0x08, 0x01])
+    expect(r.revision).toEqual({ type: 'delete' })
+  })
+
+  it('should keep an existing table object when TTP follows inTable', () => {
+    const r = parsePapxGrpprl(new Uint8Array([0x17, 0x24, 0x01, 0x16, 0x24, 0x01]), 0, 6)
+    expect(r.table).toEqual({ inTable: true })
+  })
+
+  it('should map table justification value 2 to right', () => {
+    const r = parsePapxGrpprl(new Uint8Array([0x00, 0x54, 0x02, 0x00]), 0, 4)
+    expect(r.table).toEqual({ inTable: true, justification: 'right' })
+  })
+})
