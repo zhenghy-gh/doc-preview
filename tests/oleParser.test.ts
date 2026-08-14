@@ -1172,3 +1172,172 @@ describe('OleParser MiniFAT chain safety', () => {
     expect(miniFat.length).toBeGreaterThan(0)
   })
 })
+
+describe('OleParser extended DIFAT chain', () => {
+  it('should stop a cyclic extended DIFAT chain', () => {
+    const sectorSize = 512
+    const buf = new ArrayBuffer(sectorSize * 3)
+    const view = new Uint8Array(buf)
+    const setU32 = (off: number, value: number) => {
+      view[off] = value & 0xff
+      view[off + 1] = (value >> 8) & 0xff
+      view[off + 2] = (value >> 16) & 0xff
+      view[off + 3] = (value >> 24) & 0xff
+    }
+    view[0] = 0xD0; view[1] = 0xCF; view[2] = 0x11; view[3] = 0xE0
+    view[4] = 0xA1; view[5] = 0xB1; view[6] = 0x1A; view[7] = 0xE1
+    view[26] = 0x03
+    view[30] = 0x09
+    // firstDifatSector = 1, difatSectorsCount = 2
+    setU32(68, 1)
+    setU32(72, 2)
+    // DIFAT sector 1 lives at physical offset (1 + 1) * sectorSize = 1024.
+    // Its first entry is a valid FAT sector, and its trailing next-pointer
+    // points back at sector 1 itself, forming a cycle.
+    const d1 = (1 + 1) * sectorSize
+    setU32(d1, 1) // FAT sector entry
+    setU32(d1 + 4, 2) // another FAT sector entry
+    setU32(d1 + (sectorSize / 4 - 1) * 4, 1) // next DIFAT sector = 1 (self)
+
+    const parser = new OleParser(buf)
+    const header = parser.parseHeader()
+    // The cyclic chain must terminate without hanging
+    expect(Array.isArray(header.difat)).toBe(true)
+  })
+
+  it('should stop when the extended DIFAT sector is out of bounds', () => {
+    const sectorSize = 512
+    const buf = new ArrayBuffer(sectorSize * 2)
+    const view = new Uint8Array(buf)
+    const setU32 = (off: number, value: number) => {
+      view[off] = value & 0xff
+      view[off + 1] = (value >> 8) & 0xff
+      view[off + 2] = (value >> 16) & 0xff
+      view[off + 3] = (value >> 24) & 0xff
+    }
+    view[0] = 0xD0; view[1] = 0xCF; view[2] = 0x11; view[3] = 0xE0
+    view[4] = 0xA1; view[5] = 0xB1; view[6] = 0x1A; view[7] = 0xE1
+    view[26] = 0x03
+    view[30] = 0x09
+    // firstDifatSector = 99 (out of bounds), count = 1
+    setU32(68, 99)
+    setU32(72, 1)
+
+    const parser = new OleParser(buf)
+    const header = parser.parseHeader()
+    expect(header).not.toBeNull()
+  })
+})
+
+describe('OleParser defensive robustness', () => {
+  function makeOleBuffer(
+    size: number,
+    opts: { majorVersion?: number; sectorSizePower?: number; firstDifatSector?: number; difatSectorsCount?: number; firstMiniFatSector?: number; miniFatSectorsCount?: number; firstDirectorySector?: number } = {},
+  ) {
+    const buf = new ArrayBuffer(Math.max(size, 512))
+    const view = new Uint8Array(buf)
+    const sig = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]
+    for (let i = 0; i < sig.length; i++) view[i] = sig[i]
+    const setU32 = (off: number, v: number) => {
+      view[off] = v & 0xff
+      view[off + 1] = (v >> 8) & 0xff
+      view[off + 2] = (v >> 16) & 0xff
+      view[off + 3] = (v >> 24) & 0xff
+    }
+    view[26] = opts.majorVersion ?? 3
+    view[30] = opts.sectorSizePower ?? 9
+    if (opts.firstDifatSector !== undefined) setU32(68, opts.firstDifatSector)
+    if (opts.difatSectorsCount !== undefined) setU32(72, opts.difatSectorsCount)
+    if (opts.firstMiniFatSector !== undefined) setU32(60, opts.firstMiniFatSector)
+    if (opts.miniFatSectorsCount !== undefined) setU32(64, opts.miniFatSectorsCount)
+    if (opts.firstDirectorySector !== undefined) setU32(48, opts.firstDirectorySector)
+    return { buf, view, setU32 }
+  }
+
+  function makeHeader(overrides: Partial<import('../src/utils/oleParser').OleHeader> = {}): import('../src/utils/oleParser').OleHeader {
+    return {
+      minorVersion: 0,
+      majorVersion: 3,
+      byteOrder: 0xfffe,
+      sectorSizePower: 9,
+      miniSectorSizePower: 6,
+      directorySectorsCount: 0,
+      fatSectorsCount: 0,
+      firstDirectorySector: 0,
+      miniStreamCutoffSize: 4096,
+      firstMiniFatSector: 0,
+      miniFatSectorsCount: 0,
+      difatSectorsCount: 0,
+      firstDifatSector: 0,
+      difat: [],
+      ...overrides,
+    }
+  }
+
+  it('getFatSectors: skips a FAT sector that lies outside the file', () => {
+    const { buf } = makeOleBuffer(1024)
+    const parser = new OleParser(buf)
+    const header = makeHeader({ difat: [999] })
+    const fat = parser.getFatSectors(header)
+    expect(fat.length).toBe(1) // totalSectors = (1024 - 512) / 512
+    expect(fat[0]).toBe(-1)
+  })
+
+  it('getDirectorySectors: stops when the directory sector is out of bounds', () => {
+    const { buf } = makeOleBuffer(1024, { firstDirectorySector: 1 })
+    const parser = new OleParser(buf)
+    const header = parser.parseHeader()
+    const dir = parser.getDirectorySectors(header, [-1, 2])
+    expect(dir).toEqual([])
+  })
+
+  it('readRegularStream: stops when the sector offset is out of bounds', () => {
+    const { buf } = makeOleBuffer(1024)
+    const parser = new OleParser(buf)
+    const header = parser.parseHeader()
+    const entry: import('../src/utils/oleParser').DirectoryEntry = { name: 'x', objectType: 2, startSector: 1, size: 100, nameLength: 2 }
+    const result = (parser as any).readRegularStream(entry, header, [-1, 2])
+    expect(result.size).toBe(0)
+  })
+
+  it('getMiniFatSectors: stops a cyclic MiniFAT chain', () => {
+    const { buf } = makeOleBuffer(2048, { firstMiniFatSector: 1, miniFatSectorsCount: 3 })
+    const parser = new OleParser(buf)
+    const header = parser.parseHeader()
+    const miniFat = parser.getMiniFatSectors(header, [-1, 2, 1, -1])
+    expect(miniFat.length).toBe(3 * 128)
+  })
+
+  it('getMiniFatSectors: stops when the MiniFAT sector is out of bounds', () => {
+    const { buf } = makeOleBuffer(1024, { firstMiniFatSector: 999, miniFatSectorsCount: 1 })
+    const parser = new OleParser(buf)
+    const header = parser.parseHeader()
+    const fat = new Array(1000).fill(-1)
+    fat[999] = 2
+    const miniFat = parser.getMiniFatSectors(header, fat)
+    expect(miniFat.length).toBe(128)
+  })
+
+  it('readMiniStream: stops when the mini sector offset is out of bounds', () => {
+    const { buf } = makeOleBuffer(1024)
+    const parser = new OleParser(buf)
+    const header = parser.parseHeader()
+    const entry: import('../src/utils/oleParser').DirectoryEntry = { name: 'x', objectType: 2, startSector: 100, size: 100, nameLength: 2 }
+    const rootData = new Uint8Array(64)
+    const miniFat = new Array(200).fill(-1)
+    miniFat[100] = 101
+    const result = (parser as any).readMiniStream(entry, rootData, miniFat, header)
+    expect(result.size).toBe(0)
+  })
+
+  it('_readDirectoryStreamSize: truncates a 64-bit size beyond MAX_SAFE_INTEGER', () => {
+    const { buf, setU32 } = makeOleBuffer(512, { majorVersion: 4, sectorSizePower: 12 })
+    // 2^53 + 1 > Number.MAX_SAFE_INTEGER (2^53 - 1)
+    setU32(200, 1) // low 32 bits: 2^53 mod 2^32 = 0, +1
+    setU32(204, 2097152) // high 32 bits: 2^21
+    const parser = new OleParser(buf)
+    parser.parseHeader()
+    const size = (parser as any)._readDirectoryStreamSize(200)
+    expect(size).toBe(512)
+  })
+})

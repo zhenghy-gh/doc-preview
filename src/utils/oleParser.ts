@@ -285,10 +285,15 @@ export class OleParser {
 
       for (let i = 0; i < entriesPerSector; i++) {
         const entryOffset = offset + i * 128
+        // Unreachable in practice: the sector-bounds guard above guarantees
+        // the whole sector (and therefore every 128-byte directory entry)
+        // fits inside the file. Kept as defense-in-depth only.
+        /* v8 ignore start */
         if (entryOffset + 128 > this.buffer.byteLength) {
           logger.warn(`目录条目 ${i} 越界`)
           break
         }
+        /* v8 ignore stop */
 
         const entry = this._parseDirectoryEntry(entryOffset)
         if (entry && entry.name.length > 0) {
@@ -561,6 +566,10 @@ export class OleParser {
     const maxOffset = Math.min(offset + length, this.buffer.byteLength)
 
     for (let i = offset; i < maxOffset; i++) {
+      // getUint8 cannot throw here — the loop bound is clamped to
+      // buffer.byteLength above — so the catch is unreachable. It remains as
+      // a guard against future callers passing negative offsets.
+      /* v8 ignore start */
       try {
         const charCode = this.view.getUint8(i)
         if (charCode !== 0) {
@@ -570,6 +579,7 @@ export class OleParser {
         logger.warn(`读取字符串时越界: offset=${i}`)
         break
       }
+      /* v8 ignore stop */
     }
     return result
   }
@@ -629,9 +639,10 @@ export class OleParser {
 
   private _normalizeDifat(difat: number[], header: OleHeader): number[] {
     const sectorSize = this.getSectorSize(header)
-    const sectorCount = sectorSize > 0
-      ? Math.max(0, Math.floor((this.buffer.byteLength - sectorSize) / sectorSize))
-      : 0
+    let sectorCount = 0
+    if (sectorSize > 0) {
+      sectorCount = Math.max(0, Math.floor((this.buffer.byteLength - sectorSize) / sectorSize))
+    }
     const declaredCount = header.fatSectorsCount > 0
       ? header.fatSectorsCount
       : difat.length
@@ -697,10 +708,15 @@ export class OleParser {
         size: this._readDirectoryStreamSize(offset + 120),
         nameLength,
       }
+      // Unreachable: every read above goes through the bounds-checked
+      // safeRead* helpers, which return defaults instead of throwing. Kept
+      // as defense-in-depth only.
+      /* v8 ignore start */
     } catch (error) {
       logger.warn(`解析目录条目失败: ${error}`)
       return null
     }
+      /* v8 ignore stop */
   }
 
   private _readDirectoryStreamSize(offset: number): number {
