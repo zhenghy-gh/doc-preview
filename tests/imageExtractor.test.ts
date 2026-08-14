@@ -185,6 +185,277 @@ describe('imageExtractor', () => {
       const images = extractImagesFromStream(bmp)
       expect(images.length).toBe(0)
     })
+
+    it('should handle a JPEG with byte-stuffed 0xFF00 inside the scan data', () => {
+      // SOI + SOS + entropy data containing FF 00 (escaped) + EOI
+      const jpeg = new Uint8Array([
+        0xFF, 0xD8,             // SOI
+        0xFF, 0xDA, 0x00, 0x08, // SOS marker + length
+        0x01, 0x01, 0x00, 0x00, // component fields (4 bytes)
+        0x11, 0x22,             // entropy data
+        0xFF, 0x00,             // byte-stuffed 0xFF (escaped, not a marker)
+        0x33, 0x44,             // more entropy
+        0xFF, 0xD9,             // EOI
+      ])
+      const images = extractImagesFromStream(jpeg)
+      expect(images.length).toBe(1)
+      expect(images[0].format).toBe('jpeg')
+      // EOI found — slice ends at the EOI
+      expect(images[0].data[images[0].data.length - 1]).toBe(0xD9)
+    })
+
+    it('should handle a JPEG with filler 0xFF bytes before a marker', () => {
+      const jpeg = new Uint8Array([
+        0xFF, 0xD8,             // SOI
+        0xFF, 0xFF, 0xE0,       // filler FF + APP0 marker
+        0x00, 0x04,             // APP0 length
+        0x12, 0x34,             // payload
+        0xFF, 0xD9,             // EOI
+      ])
+      const images = extractImagesFromStream(jpeg)
+      expect(images.length).toBe(1)
+      expect(images[0].data[images[0].data.length - 1]).toBe(0xD9)
+    })
+
+    it('should fall back to full slice for a truncated JPEG with SOS but no EOI', () => {
+      // SOI + SOS + entropy data, truncated (no EOI) — findJpegEnd returns
+      // data.length as a best-effort slice.
+      const jpeg = new Uint8Array([
+        0xFF, 0xD8,
+        0xFF, 0xDA, 0x00, 0x08,
+        0x01, 0x01, 0x00, 0x00,
+        0x11, 0x22, 0x33,
+      ])
+      const images = extractImagesFromStream(jpeg)
+      expect(images.length).toBe(1)
+      expect(images[0].format).toBe('jpeg')
+      expect(images[0].data.length).toBe(jpeg.length)
+    })
+
+    it('should handle a JPEG with standalone markers (RST/DNL)', () => {
+      // SOI + DNL (0xDC standalone w/ length) + EOI
+      const jpeg = new Uint8Array([
+        0xFF, 0xD8,
+        0xFF, 0xDC, 0x00, 0x04, // DNL marker + length
+        0x00, 0x01,
+        0xFF, 0xD9,
+      ])
+      const images = extractImagesFromStream(jpeg)
+      expect(images.length).toBe(1)
+      expect(images[0].data[images[0].data.length - 1]).toBe(0xD9)
+    })
+
+    it('should skip a JPEG with a segment whose length is invalid', () => {
+      const jpeg = new Uint8Array([
+        0xFF, 0xD8,
+        0xFF, 0xE0, 0x00, 0x01, // APP0 with invalid length < 2
+        0xFF, 0xD9,
+      ])
+      const images = extractImagesFromStream(jpeg)
+      expect(images.length).toBe(0)
+    })
+
+    it('should extract a GIF with a global color table', () => {
+      // GIF87a with GCT flag set and a 2-color (2-entry) table
+      // packed = 0x80 → N=0 → 2^(0+1) = 2 entries × 3 bytes = 6 bytes
+      const gif = new Uint8Array([
+        0x47, 0x49, 0x46, 0x38, 0x37, 0x61,
+        0x01, 0x00, 0x01, 0x00,
+        0x80, // packed: GCT flag, N=0
+        0x00, 0x00,
+        // GCT: 2 entries × 3 bytes
+        0xFF, 0x00, 0x00,
+        0x00, 0xFF, 0x00,
+        0x2C, // image descriptor
+        0x00, 0x00, 0x00, 0x00,
+        0x01, 0x00, 0x01, 0x00,
+        0x00,
+        0x02,
+        0x02, 0x4C, 0x01,
+        0x00,
+        0x3B, // trailer
+      ])
+      const images = extractImagesFromStream(gif)
+      expect(images.length).toBe(1)
+      expect(images[0].format).toBe('gif')
+      expect(images[0].data[images[0].data.length - 1]).toBe(0x3B)
+    })
+
+    it('should extract a GIF with an extension block', () => {
+      // GIF89a with a comment extension (0x21 0xFE) before the image
+      const gif = new Uint8Array([
+        0x47, 0x49, 0x46, 0x38, 0x39, 0x61,
+        0x01, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00,
+        0x21, 0xFE,             // extension introducer + comment label
+        0x03, 0x41, 0x42, 0x43, // sub-block: "ABC"
+        0x00,                   // block terminator
+        0x2C,
+        0x00, 0x00, 0x00, 0x00,
+        0x01, 0x00, 0x01, 0x00,
+        0x00,
+        0x02,
+        0x02, 0x4C, 0x01,
+        0x00,
+        0x3B,
+      ])
+      const images = extractImagesFromStream(gif)
+      expect(images.length).toBe(1)
+      expect(images[0].format).toBe('gif')
+      expect(images[0].data[images[0].data.length - 1]).toBe(0x3B)
+    })
+
+    it('should extract a GIF with a local color table', () => {
+      // Image descriptor with LCT flag set, packed = 0x80 → N=0 → 2 entries
+      const gif = new Uint8Array([
+        0x47, 0x49, 0x46, 0x38, 0x37, 0x61,
+        0x01, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00,
+        0x2C,
+        0x00, 0x00, 0x00, 0x00,
+        0x01, 0x00, 0x01, 0x00,
+        0x80, // packed: LCT flag, N=0
+        0xFF, 0x00, 0x00,
+        0x00, 0xFF, 0x00,
+        0x02,
+        0x02, 0x4C, 0x01,
+        0x00,
+        0x3B,
+      ])
+      const images = extractImagesFromStream(gif)
+      expect(images.length).toBe(1)
+      expect(images[0].format).toBe('gif')
+      expect(images[0].data[images[0].data.length - 1]).toBe(0x3B)
+    })
+
+    it('should skip a GIF with an unknown block type', () => {
+      const gif = new Uint8Array([
+        0x47, 0x49, 0x46, 0x38, 0x37, 0x61,
+        0x01, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00,
+        0x7F, // invalid block type (not 0x21, 0x2C, or 0x3B)
+        0x3B,
+      ])
+      const images = extractImagesFromStream(gif)
+      expect(images.length).toBe(0)
+    })
+
+    it('should skip a GIF with an unterminated image data block', () => {
+      const gif = new Uint8Array([
+        0x47, 0x49, 0x46, 0x38, 0x37, 0x61,
+        0x01, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00,
+        0x2C,
+        0x00, 0x00, 0x00, 0x00,
+        0x01, 0x00, 0x01, 0x00,
+        0x00,
+        0x02,
+        0x02, 0x4C, 0x01,
+        // no block terminator, no trailer
+      ])
+      const images = extractImagesFromStream(gif)
+      expect(images.length).toBe(0)
+    })
+
+    it('should skip a PNG with more than 10000 chunks (defensive cap)', () => {
+      // Signature + a chunk whose length would require walking past the cap.
+      // Build a stream of tiny IEND-less chunks; findPngEnd's cap returns -1.
+      const sig = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
+      const bytes: number[] = [...sig]
+      // 10001 zero-length 'ABCD' chunks — parser must stop at the cap
+      for (let i = 0; i < 10001; i++) {
+        bytes.push(0, 0, 0, 0, 0x41, 0x42, 0x43, 0x44, 0, 0, 0, 0)
+      }
+      const images = extractImagesFromStream(new Uint8Array(bytes))
+      expect(images.length).toBe(0)
+    })
+
+    it('should handle a JPEG with 0xFF00 inside a segment payload', () => {
+      // APP0 segment whose payload contains FF 00 — must not be treated as marker
+      const jpeg = new Uint8Array([
+        0xFF, 0xD8,
+        0xFF, 0xE0, 0x00, 0x06, // APP0 length 6
+        0xFF, 0x00, 0x12, 0x34, // payload with stuffed FF
+        0xFF, 0xD9,
+      ])
+      const images = extractImagesFromStream(jpeg)
+      expect(images.length).toBe(1)
+      expect(images[0].data[images[0].data.length - 1]).toBe(0xD9)
+    })
+
+    it('should handle multiple filler 0xFF bytes inside scan data', () => {
+      const jpeg = new Uint8Array([
+        0xFF, 0xD8,
+        0xFF, 0xDA, 0x00, 0x08,
+        0x01, 0x01, 0x00, 0x00,
+        0x11,
+        0xFF, 0xFF, 0xFF, 0xD9, // multiple filler FFs then EOI
+      ])
+      const images = extractImagesFromStream(jpeg)
+      expect(images.length).toBe(1)
+      expect(images[0].data[images[0].data.length - 1]).toBe(0xD9)
+    })
+
+    it('should skip a JPEG with standalone marker and invalid following length', () => {
+      // RST0 (0xD0) is standalone, then a marker with a too-short buffer
+      const jpeg = new Uint8Array([
+        0xFF, 0xD8,
+        0xFF, 0xD0, // standalone RST0
+        0xFF, 0xE0, // APP0 without enough bytes for length
+        0xFF, 0xD9,
+      ])
+      const images = extractImagesFromStream(jpeg)
+      expect(images.length).toBe(0)
+    })
+
+    it('should handle non-marker bytes after a standalone marker (main loop increment)', () => {
+      // SOI + RST0 (FF D0) + non-FF byte + EOI — after skipping the
+      // standalone marker the parser must step past the non-FF byte.
+      const jpeg = new Uint8Array([
+        0xFF, 0xD8,
+        0xFF, 0xD0, // standalone RST0
+        0x01, 0x02, // non-FF bytes
+        0xFF, 0xD9,
+      ])
+      const images = extractImagesFromStream(jpeg)
+      expect(images.length).toBe(1)
+      expect(images[0].data[images[0].data.length - 1]).toBe(0xD9)
+    })
+
+    it('should handle 0xFF00 escaped byte in the top-level scan after SOS', () => {
+      // SOS then entropy with FF 00 (escaped) — outer loop sees FF 00 and skips
+      const jpeg = new Uint8Array([
+        0xFF, 0xD8,
+        0xFF, 0xDA, 0x00, 0x08,
+        0x01, 0x01, 0x00, 0x00,
+        0x11, 0x22,
+        0xFF, 0x00, // escaped FF in entropy
+        0x33,
+        0xFF, 0xD9, // EOI
+      ])
+      const images = extractImagesFromStream(jpeg)
+      expect(images.length).toBe(1)
+      expect(images[0].data[images[0].data.length - 1]).toBe(0xD9)
+    })
+
+    it('should bail out of a GIF with too many blocks (defensive cap)', () => {
+      // Build a GIF with a trailer that the parser never reaches because the
+      // block walk runs past maxIterations — practically it will hit the
+      // end-of-data return first; construct a long chain of extension blocks
+      // without a trailer.
+      const bytes: number[] = [
+        0x47, 0x49, 0x46, 0x38, 0x37, 0x61,
+        0x01, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00,
+      ]
+      // ~2000 comment extension blocks (each 8 bytes) — parser walks them all
+      // then hits end-of-data and returns -1
+      for (let i = 0; i < 2000; i++) {
+        bytes.push(0x21, 0xFE, 0x02, 0x41, 0x42, 0x00)
+      }
+      const images = extractImagesFromStream(new Uint8Array(bytes))
+      expect(images.length).toBe(0)
+    })
   })
 
   describe('imageFormatMime', () => {
