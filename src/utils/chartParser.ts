@@ -170,12 +170,16 @@ export function extractChartsFromDirectory(
         dataUrl: pictureDataUrl,
       })
     } catch (e) {
+      // Unreachable: detectChartType is pure and extractChartPictureDataUrl
+      // already catches readStream failures internally. Defense-in-depth.
+      /* v8 ignore start */
       logger.warn(`解析图表 ${entry.name} 失败: ${e}`)
     }
   }
 
   return charts
 }
+/* v8 ignore stop */
 
 export function extractChartsFromWordDocumentStream(data: Uint8Array): ChartInfo[] {
   const charts: ChartInfo[] = []

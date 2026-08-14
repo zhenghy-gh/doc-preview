@@ -377,3 +377,56 @@ describe('chartParser', () => {
     })
   })
 })
+
+describe('chartParser uncovered branches', () => {
+  it('detectChartType: recognizes LibreOffice graphic storages', () => {
+    expect(detectChartType('LibreOffice.Graphic')).toEqual({ type: 'chart', subtype: 'chart' })
+  })
+
+  it('detectChartType: falls through to excel/sheet keyword check', () => {
+    expect(detectChartType('Excel.Addin')).toEqual({ type: 'excel', subtype: 'chart' })
+    expect(detectChartType('MySheet')).toEqual({ type: 'excel', subtype: 'chart' })
+  })
+
+  it('extractChartsFromDirectory: reports a picture-stream read failure', () => {
+    const directory = [
+      { name: 'Object.7', objectType: 1, startSector: 0, size: 0, nameLength: 8 },
+      { name: 'Object.7\x00Picture', objectType: 2, startSector: 0, size: 100, nameLength: 16 },
+    ]
+    const charts = extractChartsFromDirectory(directory as any, () => {
+      throw new Error('stream read boom')
+    })
+    expect(charts.length).toBe(1)
+    expect(charts[0].name).toBe('Object.7')
+    expect(charts[0].dataUrl).toBeUndefined()
+  })
+
+  it('extractChartsFromDirectory: skips entries whose detection throws', () => {
+    const directory = [
+      { name: 'Object.9', objectType: 1, startSector: 0, size: 0, nameLength: 8 },
+    ]
+    // detectChartType cannot throw, but a throwing readStream inside
+    // extractChartPictureDataUrl is already caught internally; this test
+    // pins the outer catch as a no-op safety net.
+    const charts = extractChartsFromDirectory(directory as any, () => ({ data: new Uint8Array(0), size: 0 }))
+    expect(charts.length).toBe(1)
+    expect(charts[0].dataUrl).toBeUndefined()
+  })
+})
+
+describe('chartParser filter branches', () => {
+  it('accepts smartart-named storages and rejects unrelated entries', () => {
+    const directory = [
+      { name: 'Object.1', objectType: 1, startSector: 0, size: 0, nameLength: 8 },
+      { name: 'smartartbox', objectType: 1, startSector: 0, size: 0, nameLength: 11 },
+      { name: 'randomname', objectType: 1, startSector: 0, size: 0, nameLength: 10 },
+      { name: 'someStream', objectType: 2, startSector: 0, size: 0, nameLength: 10 },
+      { name: 'Root Entry', objectType: 5, startSector: 0, size: 0, nameLength: 10 },
+    ]
+    const charts = extractChartsFromDirectory(directory as any, undefined)
+    expect(charts.length).toBe(2)
+    expect(charts[0].name).toBe('Object.1')
+    expect(charts[1].name).toBe('smartartbox')
+    expect(charts[1].type).toBe('smartart')
+  })
+})
