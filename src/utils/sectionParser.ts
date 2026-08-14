@@ -122,7 +122,7 @@ function parsePlcfSed(
   fc: number,
   lcb: number,
 ): SedEntry[] {
-  if (fc === 0 || lcb === 0 || fc + lcb > data.length) return []
+  if (fc === undefined || fc < 0 || lcb === undefined || lcb <= 0 || fc + lcb > data.length) return []
 
   const n = Math.floor((lcb - 4) / 12)
   if (n <= 0) return []
@@ -279,7 +279,7 @@ export function extractSections(
 ): SectionInfo[] {
   if (!tableData || tableData.length === 0) return []
   if (!wordDocData || wordDocData.length === 0) return []
-  if (fcPlcfSed === 0 || lcbPlcfSed === 0) return []
+  if (fcPlcfSed === undefined || fcPlcfSed < 0 || lcbPlcfSed === undefined || lcbPlcfSed <= 0) return []
 
   const sedEntries = parsePlcfSed(tableData, fcPlcfSed, lcbPlcfSed)
   if (sedEntries.length === 0) return []

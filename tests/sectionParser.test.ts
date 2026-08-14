@@ -74,9 +74,28 @@ describe('extractSections', () => {
     expect(result).toEqual([])
   })
 
-  it('should return empty when fcPlcfSed is 0', () => {
-    const result = extractSections(new Uint8Array(64), new Uint8Array(64), 0, 16)
+  it('should return empty when fcPlcfSed is negative', () => {
+    const result = extractSections(new Uint8Array(64), new Uint8Array(64), -1, 16)
     expect(result).toEqual([])
+  })
+
+  it('should parse sections when fcPlcfSed is 0 (table start)', () => {
+    // PlcfSed at offset 0: 1 section → 2 CPs + 1 SED, then SEPX in wordDocData
+    const tableData = new Uint8Array(32)
+    writeDword(tableData, 0, 0) // aFC[0]
+    writeDword(tableData, 4, 40) // aFC[1]
+    writeWord(tableData, 8, 0)
+    writeDword(tableData, 10, 0x100) // fcSepx
+    writeWord(tableData, 14, 0)
+
+    const wordDocData = new Uint8Array(0x200)
+    writeWord(wordDocData, 0x100, 4) // cb = 4
+    const grpprl = [...wordSprm(0xB002, 11906)] // A4 width
+    for (let i = 0; i < grpprl.length; i++) wordDocData[0x102 + i] = grpprl[i]
+
+    const sections = extractSections(tableData, wordDocData, 0, 16)
+    expect(sections).toHaveLength(1)
+    expect(sections[0].pageWidthPt).toBe(595.3)
   })
 
   it('should parse a single section with A4 page size', () => {
