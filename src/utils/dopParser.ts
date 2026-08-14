@@ -93,8 +93,12 @@ export function parseDop(data: Uint8Array): DopData | null {
     )
 
     return result
+    // Unreachable: data.length >= 2 is guaranteed above, and plain array
+    // reads cannot throw. Kept as defense-in-depth only.
+    /* v8 ignore start */
   } catch (error) {
     logger.error(`DOP 解析错误: ${error}`)
     return null
   }
 }
+/* v8 ignore stop */

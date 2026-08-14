@@ -222,3 +222,50 @@ describe('parseWithWorker', () => {
     expect(MockWorker.instances[0].posted[0].maxScanBytes).toBe(777)
   })
 })
+
+describe('parseWithWorker timeout and crash paths', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.useRealTimers()
+  })
+
+  it('should fall back to main-thread parsing when the worker times out', async () => {
+    class SilentWorker {
+      onmessage: ((e: { data: any }) => void) | null = null
+      onerror: (() => void) | null = null
+      terminated = false
+      postMessage() { /* never responds */ }
+      terminate() { this.terminated = true }
+    }
+    vi.stubGlobal('Worker', SilentWorker)
+    vi.useFakeTimers()
+    const promise = parseWithWorker(buildValidOleBuffer())
+    await vi.advanceTimersByTimeAsync(30_000)
+    const result = await promise
+    expect(result.success).toBe(true)
+    expect(result.text).toContain('Hello World')
+    expect(MockWorker.instances.length).toBe(0)
+  })
+
+  it('should report failure when main-thread fallback parsing throws', async () => {
+    class ThrowingWorker {
+      constructor() {
+        throw new Error('workers unsupported')
+      }
+    }
+    vi.stubGlobal('Worker', ThrowingWorker)
+    vi.resetModules()
+    vi.doMock('../src/utils/docParser', () => ({
+      DocParser: class {
+        constructor() {
+          throw new Error('synthetic crash')
+        }
+      },
+    }))
+    const { parseWithWorker: reloaded } = await import('../src/utils/parseWithWorker')
+    const result = await reloaded(new ArrayBuffer(64))
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('synthetic crash')
+    vi.doUnmock('../src/utils/docParser')
+  })
+})
