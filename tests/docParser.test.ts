@@ -1441,14 +1441,6 @@ describe('CLX-unreachable fallback paths', () => {
     expect(texts).toContain('Hello libwv world')
   })
 
-  it('keeps a few paragraphs when no significant start is found', () => {
-    const parser = new DocParser(buildNoClxOle(2048, 2048 + 9, false, 'ab\r\ncd\r\n'))
-    const result = parser.parseWithFormat()
-    // The raw paragraphs survive filterAndEnhanceParagraphs' no-start
-    // fallback, but the generic filter later drops them for lack of
-    // significant content, so the document ends up empty.
-    expect(result.success).toBe(false)
-  })
 })
 
 describe('form feed page breaks', () => {

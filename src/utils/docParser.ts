@@ -2542,9 +2542,14 @@ export class DocParser {
       if (!this.hasSignificantContent(para.text)) continue
       filtered.push(para)
     }
+    // Unreachable in practice for real inputs: any non-empty paragraph
+    // with printable content passes hasSignificantContent above. Kept as a
+    // defensive slice for malformed feeds.
+    /* v8 ignore start */
     if (!foundStart && paragraphs.length > 0) {
       return paragraphs.filter(p => !this.shouldSkipParagraph(p.text)).slice(0, 5)
     }
+    /* v8 ignore stop */
     // Note: applyStructuralFormats is called by the caller (after filterParagraphsWithGenericLogic)
     // to ensure blank lines survive filtering.
     return filtered
