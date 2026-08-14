@@ -1067,7 +1067,7 @@ describe('parseWithFormat field assembly', () => {
    */
   function buildOleWithFields(): ArrayBuffer {
     const SECTOR = 512
-    const buf = new ArrayBuffer(SECTOR * 8)
+    const buf = new ArrayBuffer(SECTOR * 9)
     const view = new Uint8Array(buf)
     const w16 = (off: number, v: number) => { view[off] = v & 0xff; view[off + 1] = (v >> 8) & 0xff }
     const w32 = (off: number, v: number) => {
@@ -1087,8 +1087,8 @@ describe('parseWithFormat field assembly', () => {
     w32(fatBase + 0 * 4, END); w32(fatBase + 1 * 4, 6)
     w32(fatBase + 2 * 4, 3); w32(fatBase + 3 * 4, 4)
     w32(fatBase + 4 * 4, END); w32(fatBase + 5 * 4, END)
-    w32(fatBase + 6 * 4, END)
-    for (let i = 7; i < 128; i++) w32(fatBase + i * 4, FREE)
+    w32(fatBase + 6 * 4, END); w32(fatBase + 7 * 4, END)
+    for (let i = 8; i < 128; i++) w32(fatBase + i * 4, FREE)
     // Directory
     const dirBase = SECTOR * 2
     const writeDir = (off: number, name: string, type: number, start: number, size: number) => {
@@ -1106,6 +1106,7 @@ describe('parseWithFormat field assembly', () => {
     // Directory chain continues at sector 6 (physical 3584)
     const dirBase2 = SECTOR * 7
     writeDir(dirBase2 + 0 * 128, 'WordArt.1', 1, END, 0)
+    writeDir(dirBase2 + 1 * 128, 'Data', 2, 7, 512)
 
     // WordDocument stream (sectors 2-3)
     const wdBase = SECTOR * 3
@@ -1228,6 +1229,29 @@ describe('parseWithFormat field assembly', () => {
     const alice = 'Alice'
     for (let i = 0; i < alice.length; i++) w16(rmarkBase + 6 + i * 2, alice.charCodeAt(i))
     w16(rmarkBase + 6 + alice.length * 2, 0)
+    // Data stream (sector 7, physical 4096): a second FDG for
+    // extractShapesFromDataStream
+    const dataBase = SECTOR * 8
+    const dRec = (off: number, recVer: number, recInstance: number, recType: number, recLen: number) => {
+      view[dataBase + off] = (recVer << 6) | ((recInstance >> 8) & 0x3F)
+      view[dataBase + off + 1] = recInstance & 0xff
+      view[dataBase + off + 2] = recType & 0xff
+      view[dataBase + off + 3] = (recType >> 8) & 0xff
+      w32(dataBase + off + 4, recLen)
+    }
+    const dSpLen = 72
+    const dSpSize = 8 + dSpLen
+    const dSpcLen = dSpSize
+    const dDgLen = 8 + dSpcLen
+    const dFdgLen = 8 + dDgLen
+    dRec(0, 3, 0x00C0, 0xF000, dFdgLen)
+    dRec(8, 3, 0, 0xF002, dDgLen)
+    dRec(16, 3, 0, 0xF003, dSpcLen)
+    dRec(24, 3, 0, 0x0004, dSpLen)
+    w32(dataBase + 32, 0x50000002) // spid
+    w16(dataBase + 36, 0x0001)
+    w32(dataBase + 40 + 4, 10); w32(dataBase + 40 + 8, 20)
+    w32(dataBase + 40 + 28, 30); w32(dataBase + 40 + 32, 40)
     // PlcfBteChpx at 270: one CHPX run over cp [0, 10] with a revision mark
     const chpxBase = tblBase + 270
     w32(chpxBase + 0, 0)
@@ -1279,7 +1303,7 @@ describe('parseWithFormat field assembly', () => {
     expect(doc.bookmarks[0].name).toBe('MyBookmark')
     expect(doc.charts[0].type).toBe('msgraph')
     expect(doc.wordArts.length).toBe(1)
-    expect(doc.shapes.length).toBe(1)
+    expect(doc.shapes.length).toBe(2) // WordDocument FDG + Data stream FDG
     expect(doc.equations.length).toBe(1)
     expect(doc.revisions.length).toBe(1)
     expect(doc.revisions[0].type).toBe('insert')
