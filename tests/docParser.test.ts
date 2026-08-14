@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { DocParser, parseDocFileFromBuffer, parseDocFileWithFormat } from '../src/utils/docParser'
+import { DocParser, parseDocFileFromBuffer, parseDocFileWithFormat, parseDocFile } from '../src/utils/docParser'
 
 describe('DocParser', () => {
   describe('parseDocFileFromBuffer', () => {
@@ -784,5 +784,62 @@ describe('parseDocFileWithFormat', () => {
     const result = await parseDocFileWithFormat({ name: 'x.doc' } as File)
     expect(result.success).toBe(false)
     expect(result.error).toBeTruthy()
+  })
+})
+
+describe('parseDocFile (plain text path)', () => {
+  class MockFileReader2 {
+    onload: ((e: { target: { result: ArrayBuffer } }) => void) | null = null
+    onerror: (() => void) | null = null
+    static behavior: 'success' | 'error' = 'success'
+    readAsArrayBuffer(_file: File) {
+      setTimeout(() => {
+        if (MockFileReader2.behavior === 'error') {
+          this.onerror?.()
+          return
+        }
+        this.onload?.({ target: { result: new ArrayBuffer(0) } })
+      }, 0)
+    }
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    MockFileReader2.behavior = 'success'
+  })
+
+  it('should parse text via FileReader and fail gracefully on empty buffer', async () => {
+    vi.stubGlobal('FileReader', MockFileReader2)
+    const result = await parseDocFile({ name: 'test.doc' } as File)
+    expect(result.success).toBe(false)
+    expect(result.error).toBeTruthy()
+  })
+
+  it('should resolve with a read error when FileReader fails', async () => {
+    vi.stubGlobal('FileReader', MockFileReader2)
+    MockFileReader2.behavior = 'error'
+    const result = await parseDocFile({ name: 'x.doc' } as File)
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('文件读取失败')
+  })
+})
+
+describe('parseDocFileFromBuffer with file name', () => {
+  it('should keep failing gracefully even with an oversized sector size', () => {
+    // OLE signature with sector size power 12 (4096-byte sectors) in a
+    // 512-byte buffer — must fail gracefully, never throw.
+    const buf = new ArrayBuffer(512)
+    const view = new Uint8Array(buf)
+    view[0] = 0xD0; view[1] = 0xCF; view[2] = 0x11; view[3] = 0xE0
+    view[4] = 0xA1; view[5] = 0xB1; view[6] = 0x1A; view[7] = 0xE1
+    view[30] = 12
+    const result = parseDocFileFromBuffer(buf, 'broken.doc')
+    expect(result.success).toBe(false)
+  })
+
+  it('should not include a file name when omitted', () => {
+    const result = parseDocFileFromBuffer(new ArrayBuffer(0))
+    expect(result.success).toBe(false)
+    expect(result.error).not.toContain('（文件:')
   })
 })

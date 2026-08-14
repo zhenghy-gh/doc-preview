@@ -3798,19 +3798,20 @@ export function parseDocFile(file: File, debug: boolean = false): Promise<{ text
 /**
  * Parse a .doc file from an ArrayBuffer and return the formatted document.
  * @param buffer - The .doc file as ArrayBuffer.
- * @param _fileName - Optional file name (for logging).
+ * @param fileName - Optional file name, included in error messages for diagnosis.
  * @returns The parse result with paragraphs and text.
  */
 export function parseDocFileFromBuffer(
   buffer: ArrayBuffer,
-  _fileName?: string
+  fileName?: string
 ): { success: boolean; document?: any; text?: string; error?: string } {
   try {
     const parser = new DocParser(buffer)
     return parser.parseWithFormat()
   } catch (error) {
     const message = error instanceof Error ? error.message : '未知错误'
-    return { success: false, error: `解析失败: ${message}` }
+    const fileHint = fileName ? `（文件: ${fileName}）` : ''
+    return { success: false, error: `解析失败${fileHint}: ${message}` }
   }
 }
 
