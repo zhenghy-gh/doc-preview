@@ -254,6 +254,46 @@ describe('DocParser', () => {
       const result = (parser as any).extractTextFromRange(data, 0, data.length, false)
       expect(result).toBe('A\u0007B\u0007\n')
     })
+
+    it('should truncate compressed text at a binary signature', () => {
+      const parser = new DocParser(new ArrayBuffer(512))
+      // ASCII text + paragraph mark, then a PNG signature on the next line
+      const prefix = 'This is plain text content'
+      const data = new Uint8Array([
+        ...prefix.split('').map(c => c.charCodeAt(0)),
+        0x0D, // paragraph break — truncation keeps text up to this point
+        0x89, 0x50, 0x4E, 0x47, // PNG signature bytes
+        0x41, 0x42, 0x43,
+      ])
+      const result = (parser as any).extractTextFromRange(data, 0, data.length, true)
+      // Text before the signature (up to the last paragraph break) is kept;
+      // the truncation slices up to (not including) the break.
+      expect(result).toBe('This is plain text content')
+    })
+
+    it('should truncate UTF-16 text at a binary signature', () => {
+      const parser = new DocParser(new ArrayBuffer(512))
+      const prefix = 'Some body text here'
+      const bytes: number[] = []
+      for (const ch of prefix) {
+        const code = ch.charCodeAt(0)
+        bytes.push(code & 0xFF, (code >> 8) & 0xFF)
+      }
+      // UTF-16LE "PNG" (0x5047 = 'GP'...) — use a raw JPEG signature FFD8FF in UTF-16
+      // which the signature list catches via '\xFF\xD8\xFF' on the decoded chars
+      bytes.push(0xFF, 0xD8, 0xFF, 0x00, 0x41, 0x00)
+      const data = new Uint8Array(bytes)
+      const result = (parser as any).extractTextFromRange(data, 0, data.length, false)
+      expect(result).toContain('Some body text')
+    })
+
+    it('should handle empty and invalid ranges', () => {
+      const parser = new DocParser(new ArrayBuffer(512))
+      const data = new Uint8Array([0x41, 0x42, 0x43])
+      expect((parser as any).extractTextFromRange(data, 0, 0)).toBe('')
+      expect((parser as any).extractTextFromRange(data, -1, 2)).toBe('')
+      expect((parser as any).extractTextFromRange(data, 0, 99)).toBe('')
+    })
   })
 
   describe('text cleaning helpers', () => {
