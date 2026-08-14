@@ -260,5 +260,95 @@ describe('wordArtParser', () => {
       const wordArts = extractWordArtFromDrawingData(data)
       expect(wordArts.length).toBe(0)
     })
+
+    it('should extract a WordArt from drawing data with text', () => {
+      // marker E0 00 00 00 + ASCII text + 8 zero terminator
+      const bytes: number[] = [0xE0, 0x00, 0x00, 0x00]
+      for (const ch of 'Hello WordArt') bytes.push(ch.charCodeAt(0) & 0xff)
+      for (let i = 0; i < 8; i++) bytes.push(0x00)
+      // pad to > 100 bytes so the scan loop runs
+      while (bytes.length < 130) bytes.push(0x00)
+
+      const wordArts = extractWordArtFromDrawingData(new Uint8Array(bytes))
+      expect(wordArts.length).toBe(1)
+      expect(wordArts[0].name).toBe('WordArt 1')
+      expect(wordArts[0].text).toBeDefined()
+      expect(wordArts[0].text).toContain('Hello')
+    })
+
+    it('should skip drawing data without text or effects', () => {
+      // marker followed by only zeros → no text, no effects, no colors
+      const bytes: number[] = [0xE0, 0x00, 0x00, 0x00]
+      while (bytes.length < 130) bytes.push(0x00)
+      const wordArts = extractWordArtFromDrawingData(new Uint8Array(bytes))
+      expect(wordArts.length).toBe(0)
+    })
+
+    it('should detect gradient effect from drawing data', () => {
+      // marker + gradient pattern bytes (10 00 00 00 00 00 00 00)
+      const bytes: number[] = [0xE0, 0x00, 0x00, 0x00]
+      bytes.push(0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
+      for (const ch of 'Grad') bytes.push(ch.charCodeAt(0) & 0xff)
+      for (let i = 0; i < 8; i++) bytes.push(0x00)
+      while (bytes.length < 130) bytes.push(0x00)
+
+      const wordArts = extractWordArtFromDrawingData(new Uint8Array(bytes))
+      expect(wordArts.length).toBe(1)
+      expect(wordArts[0].effects).toContain('gradient')
+    })
+
+    it('should detect effect keywords in WordArt object names', () => {
+      const directory: DirectoryEntry[] = [
+        {
+          name: 'WordArt Gradient Shadow 3D',
+          objectType: 1,
+          leftSibling: -1, rightSibling: -1, child: -1,
+          clsid: new Uint8Array(16),
+          stateBits: 0, creationTime: 0, modificationTime: 0,
+          startSector: 1, size: 10,
+        },
+      ]
+      const wordArts = extractWordArtFromDirectory(directory, () => null)
+      expect(wordArts.length).toBe(1)
+      expect(wordArts[0].effects).toContain('gradient')
+      expect(wordArts[0].effects).toContain('shadow')
+      expect(wordArts[0].effects).toContain('3d')
+    })
+
+    it('should detect emboss, bevel, outline, rotate, flip keywords', () => {
+      const directory: DirectoryEntry[] = [
+        {
+          name: 'WordArt Emboss Bevel Outline Rotate Flip',
+          objectType: 1,
+          leftSibling: -1, rightSibling: -1, child: -1,
+          clsid: new Uint8Array(16),
+          stateBits: 0, creationTime: 0, modificationTime: 0,
+          startSector: 1, size: 10,
+        },
+      ]
+      const wordArts = extractWordArtFromDirectory(directory, () => null)
+      const effects = wordArts[0].effects
+      expect(effects).toContain('emboss')
+      expect(effects).toContain('bevel')
+      expect(effects).toContain('outline')
+      expect(effects).toContain('rotate')
+      expect(effects).toContain('flip')
+      expect(effects).not.toContain('fill')
+    })
+
+    it('should default to fill effect when no keywords match', () => {
+      const directory: DirectoryEntry[] = [
+        {
+          name: 'WordArt.5',
+          objectType: 1,
+          leftSibling: -1, rightSibling: -1, child: -1,
+          clsid: new Uint8Array(16),
+          stateBits: 0, creationTime: 0, modificationTime: 0,
+          startSector: 1, size: 10,
+        },
+      ]
+      const wordArts = extractWordArtFromDirectory(directory, () => null)
+      expect(wordArts[0].effects).toEqual(['fill'])
+    })
   })
 })
