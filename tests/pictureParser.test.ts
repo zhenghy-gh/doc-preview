@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parsePicfAt, extractPicturesFromDataStream, picturesToDataUrls } from '../src/utils/pictureParser'
+import { parsePicfAt, extractPicturesFromDataStream, picturesToDataUrls, parseJpegDimensions } from '../src/utils/pictureParser'
 
 // Minimal GIF89a: 1x1, no global color table, one image + trailer
 function buildMinimalGif(): Uint8Array {
@@ -321,5 +321,76 @@ describe('pictureParser', () => {
       expect(urls).toHaveLength(1)
       expect(urls[0]).toContain('data:image/png;base64,')
     })
+  })
+})
+
+describe('parseJpegDimensions', () => {
+  /** SOI + SOF0 + payload + EOI with explicit width/height. */
+  function buildJpegWithSof(width: number, height: number): Uint8Array {
+    const bytes: number[] = [
+      0xFF, 0xD8,             // SOI
+      0xFF, 0xE0, 0x00, 0x10, // APP0
+      0x4A, 0x46, 0x49, 0x46, 0x00,
+      0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
+      0xFF, 0xC0, 0x00, 0x11, // SOF0, length 17
+      0x08,                   // precision
+      (height >> 8) & 0xFF, height & 0xFF,
+      (width >> 8) & 0xFF, width & 0xFF,
+      0x03,                   // components
+      0x01, 0x22, 0x00,       // comp 1
+      0x02, 0x11, 0x01,       // comp 2
+      0x03, 0x11, 0x01,       // comp 3
+      0xFF, 0xD9,             // EOI
+    ]
+    return new Uint8Array(bytes)
+  }
+
+  it('should parse width and height from SOF0', () => {
+    const jpeg = buildJpegWithSof(640, 480)
+    const dims = parseJpegDimensions(jpeg)
+    expect(dims).toEqual({ width: 640, height: 480 })
+  })
+
+  it('should handle SOF after APP segments', () => {
+    const jpeg = buildJpegWithSof(800, 600)
+    const dims = parseJpegDimensions(jpeg)
+    expect(dims).toEqual({ width: 800, height: 600 })
+  })
+
+  it('should return null for non-JPEG data', () => {
+    expect(parseJpegDimensions(new Uint8Array([1, 2, 3, 4]))).toBeNull()
+    expect(parseJpegDimensions(new Uint8Array(0))).toBeNull()
+  })
+
+  it('should return null when SOS appears before any SOF', () => {
+    const jpeg = new Uint8Array([
+      0xFF, 0xD8,
+      0xFF, 0xDA, 0x00, 0x08, // SOS
+      0x01, 0x01, 0x00, 0x00,
+      0xFF, 0xD9,
+    ])
+    expect(parseJpegDimensions(jpeg)).toBeNull()
+  })
+
+  it('should return null for truncated data', () => {
+    const jpeg = buildJpegWithSof(100, 100)
+    expect(parseJpegDimensions(jpeg.subarray(0, 10))).toBeNull()
+  })
+
+  it('should accept the maximum representable uint16 dimension', () => {
+    const jpeg = buildJpegWithSof(65535, 65535)
+    const dims = parseJpegDimensions(jpeg)
+    expect(dims).toEqual({ width: 65535, height: 65535 })
+  })
+
+  it('should recover dimensions for raw JPEG extraction', () => {
+    const jpeg = buildJpegWithSof(320, 240)
+    const data = new Uint8Array(Math.max(jpeg.length + 20, 80))
+    data.set(jpeg, 10)
+    const results = extractPicturesFromDataStream(data)
+    const jpegResult = results.find(r => r.format === 'jpeg')
+    expect(jpegResult).toBeDefined()
+    expect(jpegResult!.widthPx).toBe(320)
+    expect(jpegResult!.heightPx).toBe(240)
   })
 })

@@ -334,9 +334,69 @@ export function parsePicfAt(
   if (xExt > 0 && yExt > 0) {
     result.widthPx = xExt
     result.heightPx = yExt
+  } else if (type === 'jpeg') {
+    // PICF header exists but carries no usable xExt/yExt — recover the
+    // real pixel dimensions from the JPEG SOF marker.
+    const dims = parseJpegDimensions(imgData)
+    if (dims) {
+      result.widthPx = dims.width
+      result.heightPx = dims.height
+    }
   }
 
   return result
+}
+
+/**
+ * Parse the pixel dimensions of a JPEG from its SOF (Start of Frame) marker.
+ *
+ * JPEG stores width/height in the SOF0..SOF15 markers (0xC0-0xCF except
+ * 0xC4/0xC8/0xCC which are tables). The parser walks markers the same way
+ * findJpegEnd does, so it stops at the first real frame marker.
+ *
+ * Returns null when no SOF marker is found or the data is malformed.
+ */
+export function parseJpegDimensions(data: Uint8Array): { width: number; height: number } | null {
+  if (!data || data.length < 8 || data[0] !== 0xFF || data[1] !== 0xD8) return null
+
+  let offset = 2
+  while (offset + 4 <= data.length) {
+    if (data[offset] !== 0xFF) { offset++; continue }
+    let marker = data[offset + 1]
+    // Skip filler 0xFF bytes
+    while (marker === 0xFF && offset + 2 < data.length) {
+      offset++
+      marker = data[offset + 1]
+    }
+    if (marker === 0xD9 || marker === 0xDA) return null // EOI or SOS without SOF
+
+    // Standalone markers (RST0-7, TEM)
+    if ((marker >= 0xD0 && marker <= 0xD7) || marker === 0x01) {
+      offset += 2
+      continue
+    }
+
+    // SOF0-SOF15 (excluding DHT=0xC4, JPG=0xC8, DAC=0xCC)
+    if (marker >= 0xC0 && marker <= 0xCF &&
+        marker !== 0xC4 && marker !== 0xC8 && marker !== 0xCC) {
+      // Layout: marker(2) + length(2) + precision(1) + height(2) + width(2)
+      if (offset + 9 > data.length) return null
+      const height = (data[offset + 5] << 8) | data[offset + 6]
+      const width = (data[offset + 7] << 8) | data[offset + 8]
+      if (height > 0 && width > 0 && height < 100000 && width < 100000) {
+        return { width, height }
+      }
+      return null
+    }
+
+    // Other markers carry a 2-byte length
+    if (offset + 3 >= data.length) return null
+    const segLen = (data[offset + 2] << 8) | data[offset + 3]
+    if (segLen < 2) return null
+    offset += 2 + segLen
+  }
+
+  return null
 }
 
 /**
@@ -373,12 +433,22 @@ export function extractPicturesFromDataStream(dataStream: Uint8Array): ParsedPic
 
     if (!seenOffsets.has(idx)) {
       seenOffsets.add(idx)
-      results.push({
+      const pic: ParsedPicture = {
         format: img.format,
         data: img.data,
         type: img.format as PictureType,
         dataOffset: idx,
-      })
+      }
+      // Raw JPEG fallback has no PICF xExt/yExt — recover real pixel
+      // dimensions from the SOF marker so the UI can size the image.
+      if (img.format === 'jpeg') {
+        const dims = parseJpegDimensions(img.data)
+        if (dims) {
+          pic.widthPx = dims.width
+          pic.heightPx = dims.height
+        }
+      }
+      results.push(pic)
     }
   }
 
