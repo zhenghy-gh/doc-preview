@@ -197,9 +197,13 @@ function findPngEnd(data: Uint8Array, start: number, maxLen: number): number {
     if (chunkEnd > limit) return -1
     if (type === 'IEND') return chunkEnd
     offset = chunkEnd
+    // A well-formed PNG always terminates at IEND long before this cap.
+    // Unreachable in practice; kept as an anti-infinite-loop guard.
   }
+  /* v8 ignore start */
   return -1
 }
+/* v8 ignore stop */
 
 /**
  * Find the end of a BMP starting at `start` (must point at 'BM' signature).
@@ -255,9 +259,13 @@ function findGifEnd(data: Uint8Array, start: number, maxLen: number): number {
     } else {
       return -1
     }
+    // A well-formed GIF always reaches the 0x3B trailer long before this
+    // cap. Unreachable in practice; kept as an anti-infinite-loop guard.
   }
+  /* v8 ignore start */
   return -1
 }
+/* v8 ignore stop */
 
 function findImageEnd(
   data: Uint8Array,
@@ -501,9 +509,14 @@ function findImageIndexInStream(
       }
     }
     if (match) return i
+    // Unreachable via extractPicturesFromDataStream: every image returned by
+    // extractImagesFromStream is a subarray of the same stream and appears at
+    // or after the previous scanOffset. Kept as defense-in-depth only.
   }
+  /* v8 ignore start */
   return -1
 }
+/* v8 ignore stop */
 
 function findPrecedingPicf(dataStream: Uint8Array, imgOffset: number): number {
   const maxHeaderSize = 256

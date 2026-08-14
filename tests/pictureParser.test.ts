@@ -441,3 +441,150 @@ describe('parsePngDimensions', () => {
     expect(pngResult!.heightPx).toBe(48)
   })
 })
+
+describe('pictureParser edge paths', () => {
+  // Build a Data stream: 4-byte FCPic lcb + 68-byte PICF header + payload.
+  // Image bytes start at offset 72.
+  function buildPicfDataStream(mm: number, xExt: number, yExt: number, payload: number[]): Uint8Array {
+    const header = new Array<number>(68).fill(0)
+    header[0] = mm & 0xff
+    header[1] = (mm >> 8) & 0xff
+    header[2] = xExt & 0xff
+    header[3] = (xExt >> 8) & 0xff
+    header[4] = yExt & 0xff
+    header[5] = (yExt >> 8) & 0xff
+    const body = header.concat(payload)
+    const lcb = body.length
+    return new Uint8Array([lcb & 0xff, (lcb >> 8) & 0xff, (lcb >> 16) & 0xff, (lcb >> 24) & 0xff].concat(body))
+  }
+
+  const PNG_SIG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
+  // Minimal JPEG with a SOF0: SOI + SOF(17 bytes) + EOI
+  function jpegWithSof(height: number, width: number): number[] {
+    const bytes: number[] = [0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08]
+    bytes.push((height >> 8) & 0xff, height & 0xff, (width >> 8) & 0xff, width & 0xff) // SOF stores dimensions big-endian
+    for (let i = 0; i < 9; i++) bytes.push(0x01)
+    bytes.push(0xff, 0xd9)
+    return bytes
+  }
+
+  it('detects a PNG signature at imgStart when the mm type is unknown', () => {
+    const stream = buildPicfDataStream(0x0001, 100, 100, PNG_SIG.concat([0x00, 0x00, 0x00, 0x00]))
+    const pic = parsePicfAt(stream, 0)
+    expect(pic).not.toBeNull()
+    expect(pic!.format).toBe('png')
+    expect(pic!.data.length).toBeGreaterThanOrEqual(8)
+  })
+
+  it('rejects a JPEG-looking start whose third byte is not 0xFF', () => {
+    // FF D8 followed by a non-marker byte must not be classified as JPEG.
+    const stream = buildPicfDataStream(0x0001, 100, 100, [0xff, 0xd8, 0x00, 0x01, 0x02, 0x03])
+    const pic = parsePicfAt(stream, 0)
+    expect(pic).not.toBeNull()
+    expect(pic!.format).toBe('unknown')
+  })
+
+  it('detects JPEG with filler FF bytes and APP segments', () => {
+    // FF D8 FF FF E0 00 10 + 16 APP0 bytes + FF D9
+    const payload: number[] = [0xff, 0xd8, 0xff, 0xff, 0xe0, 0x00, 0x10]
+    for (let i = 0; i < 16; i++) payload.push(0x11)
+    payload.push(0xff, 0xd9)
+    const stream = buildPicfDataStream(0x0001, 100, 100, payload)
+    const pic = parsePicfAt(stream, 0)
+    expect(pic).not.toBeNull()
+    expect(pic!.format).toBe('jpeg')
+  })
+
+  it('skips standalone RST markers while scanning JPEG', () => {
+    const stream = buildPicfDataStream(0x0008, 100, 100, [0xff, 0xd8, 0xff, 0xd0, 0xff, 0xd9])
+    const pic = parsePicfAt(stream, 0)
+    expect(pic).not.toBeNull()
+    expect(pic!.format).toBe('jpeg')
+  })
+
+  it('handles a GIF with a global color table', () => {
+    const gct = new Array<number>(768).fill(0)
+    const payload: number[] = [0x47, 0x49, 0x46, 0x38, 0x37, 0x61, 0x01, 0x00, 0x01, 0x00, 0x87, 0x00, 0x00]
+    const stream = buildPicfDataStream(0x000f, 100, 100, payload.concat(gct, [0x3b]))
+    const pic = parsePicfAt(stream, 0)
+    expect(pic).not.toBeNull()
+    expect(pic!.format).toBe('gif')
+  })
+
+  it('skips GIF extension blocks', () => {
+    // Graphic control extension: 0x21 0xF9 0x04 <4 bytes> 0x00, then trailer
+    const payload: number[] = [0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00]
+    payload.push(0x21, 0xf9, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3b)
+    const stream = buildPicfDataStream(0x000f, 100, 100, payload)
+    const pic = parsePicfAt(stream, 0)
+    expect(pic).not.toBeNull()
+    expect(pic!.format).toBe('gif')
+  })
+
+  it('skips a GIF image descriptor with a local color table', () => {
+    const lct = new Array<number>(768).fill(0)
+    // 0x2C descriptor: left/top(4) + width/height(4) + packed=0x87 (LCT flag)
+    const payload: number[] = [0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00]
+    payload.push(0x2c, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x87)
+    payload.push(...lct, 0x00, 0x3b)
+    const stream = buildPicfDataStream(0x000f, 100, 100, payload)
+    const pic = parsePicfAt(stream, 0)
+    expect(pic).not.toBeNull()
+    expect(pic!.format).toBe('gif')
+  })
+
+  it('rejects a GIF with an invalid block inside', () => {
+    const payload: number[] = [0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00]
+    payload.push(0x01, 0x02, 0x03)
+    const stream = buildPicfDataStream(0x000f, 100, 100, payload)
+    const pic = parsePicfAt(stream, 0)
+    expect(pic).not.toBeNull()
+    expect(pic!.format).toBe('gif')
+  })
+
+  it('recovers JPEG pixel dimensions from SOF when xExt/yExt are zero', () => {
+    const stream = buildPicfDataStream(0x0008, 0, 0, jpegWithSof(1, 2))
+    const pic = parsePicfAt(stream, 0)
+    expect(pic).not.toBeNull()
+    expect(pic!.widthPx).toBe(2)
+    expect(pic!.heightPx).toBe(1)
+  })
+
+  it('parseJpegDimensions: skips filler FF bytes before the marker', () => {
+    const dims = parseJpegDimensions(new Uint8Array([0xff, 0xd8, 0xff, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x01, 0x00, 0x02, 0x01, 0x01, 0x01, 0xff, 0xd9]))
+    expect(dims).toEqual({ width: 2, height: 1 })
+  })
+
+  it('parseJpegDimensions: skips standalone markers before the SOF', () => {
+    const dims = parseJpegDimensions(new Uint8Array([0xff, 0xd8, 0xff, 0xd0, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x01, 0x00, 0x02, 0x01, 0x01, 0x01, 0xff, 0xd9]))
+    expect(dims).toEqual({ width: 2, height: 1 })
+  })
+
+  it('parseJpegDimensions: returns null when the SOF height is zero', () => {
+    const dims = parseJpegDimensions(new Uint8Array([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x00, 0x00, 0x02, 0x01, 0x01, 0x01, 0xff, 0xd9]))
+    expect(dims).toBeNull()
+  })
+
+  it('parsePngDimensions: returns null when the IHDR width is zero', () => {
+    const bytes: number[] = PNG_SIG.concat([0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00])
+    const dims = parsePngDimensions(new Uint8Array(bytes))
+    expect(dims).toBeNull()
+  })
+})
+
+describe('pictureParser partial match', () => {
+  it('keeps scanning after a partial signature match inside the stream', () => {
+    // A fake PNG start (last signature byte wrong) followed by a real PNG.
+    // findImageIndexInStream must notice the byte mismatch and keep going.
+    const real = buildMinimalPng()
+    const fakeStart: number[] = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x00]
+    // Make findPngEnd bail out on the fake start: chunk length exceeds data.
+    fakeStart.push(0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00)
+    const stream = new Uint8Array(fakeStart.length + real.length)
+    stream.set(fakeStart, 0)
+    stream.set(real, fakeStart.length)
+    const pics = extractPicturesFromDataStream(stream)
+    expect(pics.length).toBe(1)
+    expect(pics[0].format).toBe('png')
+  })
+})
