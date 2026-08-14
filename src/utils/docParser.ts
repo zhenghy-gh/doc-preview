@@ -3527,12 +3527,10 @@ export class DocParser {
       for (const pattern of fieldPatterns) cleaned = cleaned.replace(pattern, '')
       // Remove quoted URLs left over from HYPERLINK field codes, leaving display text
       cleaned = cleaned.replace(/"\s*https?:\/\/[^"]+\s*"/g, ' ')
-      // Remove HYPERLINK field codes that contain picture placeholders in the middle
-      // e.g., 'HYPERLINK "url"\u0001Mauris...' - placeholder between URL and display text
+      // Remove HYPERLINK field codes that contain picture placeholders,
+      // e.g. 'HYPERLINK "url"\u0001Mauris...' — the 0x13/0x14/0x15 field
+      // markers are stripped, so HYPERLINK + URL + placeholder concatenate.
       cleaned = cleaned.replace(/\bHYPERLINK\s+"[^"]*"\s*\u0001/g, '\u0001')
-      // Handle case where picture placeholder is at the very start, with HYPERLINK before it
-      // (The 0x13/0x14/0x15 field markers are stripped, so HYPERLINK + URL + placeholder are concatenated)
-      cleaned = cleaned.replace(/\bHYPERLINK\s+"[^"]*"\u0001/g, '\u0001')
       cleaned = cleaned.replace(/\bHYPERLINK\s+"[^"]*"\s*/g, '')
       // Also handle HYPERLINK without quotes (malformed)
       cleaned = cleaned.replace(/\bHYPERLINK\s+\S+\s+\u0001/g, '\u0001')
