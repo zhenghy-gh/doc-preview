@@ -165,6 +165,22 @@ describe('pictureParser', () => {
       expect(parsePicfAt(buf, 0)).toBeNull()
     })
 
+    it('handles EMF and WMF mm types (unknown format, magic fallback)', () => {
+      // EMF (mm=4): weak signature — format stays unknown but parse succeeds
+      const emfData = new Uint8Array([0x01, 0x00, 0x00, 0x00, 0x50, 0x00, 0x00, 0x00])
+      const emfPicf = buildPicfEnvelope(0x0004, 100, 80, emfData)
+      const emfResult = parsePicfAt(emfPicf, 0)
+      expect(emfResult).not.toBeNull()
+      expect(emfResult!.type).toBe('emf')
+
+      // WMF (mm=2): placeholder metafile (0xD7CDC69A)
+      const wmfData = new Uint8Array([0xD7, 0xCD, 0xC6, 0x9A, 0x00, 0x00, 0x00, 0x00])
+      const wmfPicf = buildPicfEnvelope(0x0002, 100, 80, wmfData)
+      const wmfResult = parsePicfAt(wmfPicf, 0)
+      expect(wmfResult).not.toBeNull()
+      expect(wmfResult!.type).toBe('wmf')
+    })
+
     it('handles JPEG mm type', () => {
       const jpegData = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0xff, 0xd9])
       const picf = buildPicfEnvelope(0x0008, 200, 150, jpegData)
@@ -183,6 +199,14 @@ describe('pictureParser', () => {
       const result = parsePicfAt(picf, 0)
       expect(result).not.toBeNull()
       expect(result!.dataOffset).toBe(4 + 68) // FCPic(4) + PICF header(68)
+    })
+
+    it('should not set dimensions when xExt or yExt is zero', () => {
+      const png = buildMinimalPng()
+      const picf = buildPicfEnvelope(0x000a, 0, 80, png)
+      const result = parsePicfAt(picf, 0)
+      expect(result).not.toBeNull()
+      expect(result!.widthPx).toBeUndefined()
     })
   })
 

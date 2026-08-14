@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parsePlcfFld, extractHyperlinks, extractDocumentFields, extractPageFields, extractCrossReferences, parseIndexResult, parseTocInstruction, parseTocResult } from '../src/utils/fieldParser'
+import { parsePlcfFld, extractHyperlinks, extractDocumentFields, extractPageFields, extractCrossReferences, parseIndexResult, parseTocInstruction, parseTocResult, extractAllFields } from '../src/utils/fieldParser'
 
 function writeUint32(buffer: Uint8Array, offset: number, value: number): void {
   buffer[offset] = value & 0xFF
@@ -778,6 +778,67 @@ Banana`
     it('should default level to 1 for non-heading text', () => {
       const entries = parseTocResult('Introduction.................1')
       expect(entries[0].level).toBe(1)
+    })
+  })
+
+  describe('extractAllFields', () => {
+    it('should return empty array for empty field list', () => {
+      expect(extractAllFields([], '')).toEqual([])
+    })
+
+    it('should extract an INDEX field (flt=14) with parsed entries', () => {
+      // Layout: 0x13@0, "INDEX"@1-5, 0x14@6, "Apple...1"@7-14, 0x15@15
+      const instr = 'INDEX'
+      const resultText = 'Apple.................1'
+      const text = '\x13' + instr + '\x14' + resultText + '\x15'
+      const fldEntries = [
+        { cp: 0, ch: 0x13, flt: 14 },
+        { cp: instr.length + 1, ch: 0x14, flt: 0 },
+        { cp: instr.length + 1 + resultText.length + 1, ch: 0x15, flt: 0 },
+      ]
+      const textBytes = new Uint8Array(60)
+      writeUtf16le(textBytes, 2, instr)
+      writeUtf16le(textBytes, (instr.length + 1) * 2, resultText)
+      const fields = extractAllFields(fldEntries, text, textBytes)
+      expect(fields).toHaveLength(1)
+      expect(fields[0].flt).toBe(14)
+      expect(fields[0].indexEntries).toBeDefined()
+      expect(fields[0].indexEntries![0].mainTerm).toBe('Apple')
+      expect(fields[0].indexEntries![0].pageNumber).toBe('1')
+    })
+
+    it('should extract a TOC field (flt=19) with options and entries', () => {
+      // Layout: 0x13@0, "TOC \\o \"1-3\" \\h"@1-16, 0x14@17, "Heading...1"@18, 0x15
+      const instr = 'TOC \\o "1-3" \\h'
+      const resultText = 'Heading 1.................5'
+      const text = '\x13' + instr + '\x14' + resultText + '\x15'
+      const fldEntries = [
+        { cp: 0, ch: 0x13, flt: 19 },
+        { cp: instr.length + 1, ch: 0x14, flt: 0 },
+        { cp: instr.length + 1 + resultText.length + 1, ch: 0x15, flt: 0 },
+      ]
+      const textBytes = new Uint8Array(80)
+      writeUtf16le(textBytes, 2, instr)
+      writeUtf16le(textBytes, (instr.length + 1) * 2, resultText)
+      const fields = extractAllFields(fldEntries, text, textBytes)
+      expect(fields).toHaveLength(1)
+      expect(fields[0].flt).toBe(19)
+      expect(fields[0].tocOptions).toBeDefined()
+      expect(fields[0].tocOptions!.outlineLevels).toEqual({ start: 1, end: 3 })
+      expect(fields[0].tocOptions!.hyperlinks).toBe(true)
+      expect(fields[0].tocEntries).toBeDefined()
+      expect(fields[0].tocEntries![0].text).toBe('Heading 1')
+      expect(fields[0].tocEntries![0].pageNumber).toBe('5')
+    })
+
+    it('should skip malformed field triples', () => {
+      const fldEntries = [
+        { cp: 0, ch: 0x13, flt: 37 },
+        { cp: 5, ch: 0x13, flt: 0 }, // not a separator → advance by 1
+        { cp: 10, ch: 0x15, flt: 0 },
+      ]
+      const fields = extractAllFields(fldEntries, 'x', new Uint8Array(20))
+      expect(fields).toHaveLength(0)
     })
   })
 
