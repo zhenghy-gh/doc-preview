@@ -179,4 +179,54 @@ describe('extractSections', () => {
 
     expect(sections[0].gutterPt).toBe(18)
   })
+
+  describe('Word 6/95 legacy section SPRMs', () => {
+    it('should parse legacy page size and margins (0xB01F-0xB022, 0x9023-0x9024)', () => {
+      // Letter: width 12240 twips (612pt), height 15840 twips (792pt)
+      // margins: L/R 1800 twips (90pt), T/B 1440 twips (72pt), gutter 0
+      const grpprl = [
+        ...wordSprm(0xB01F, 12240), // legacy XA_PAGE
+        ...wordSprm(0xB020, 15840), // legacy YA_PAGE
+        ...wordSprm(0xB021, 1800),  // legacy DXA_LEFT
+        ...wordSprm(0xB022, 1800),  // legacy DXA_RIGHT
+        ...wordSprm(0x9023, 1440),  // legacy DYA_TOP
+        ...wordSprm(0x9024, 1440),  // legacy DYA_BOTTOM
+        ...wordSprm(0xB025, 0),     // legacy DXA_GUTTER
+      ]
+      const { tableData, wordDocData, fcPlcfSed, lcbPlcfSed } = buildSectionData(30, 0x100, grpprl)
+      const sections = extractSections(tableData, wordDocData, fcPlcfSed, lcbPlcfSed)
+
+      expect(sections[0].pageWidthPt).toBe(612)
+      expect(sections[0].pageHeightPt).toBe(792)
+      expect(sections[0].marginLeftPt).toBe(90)
+      expect(sections[0].marginRightPt).toBe(90)
+      expect(sections[0].marginTopPt).toBe(72)
+      expect(sections[0].marginBottomPt).toBe(72)
+      expect(sections[0].gutterPt).toBe(0)
+    })
+
+    it('should parse legacy break type alongside modern ones', () => {
+      const grpprl = [
+        ...byteSprm(0x300A, 2), // sprmSBkc = oddPage
+        ...wordSprm(0xB01F, 12240),
+      ]
+      const { tableData, wordDocData, fcPlcfSed, lcbPlcfSed } = buildSectionData(30, 0x100, grpprl)
+      const sections = extractSections(tableData, wordDocData, fcPlcfSed, lcbPlcfSed)
+
+      expect(sections[0].breakType).toBe('oddPage')
+      expect(sections[0].pageWidthPt).toBe(612)
+    })
+
+    it('should mix modern and legacy SPRMs in one SEPX', () => {
+      const grpprl = [
+        ...wordSprm(0xB002, 11906), // modern XA_PAGE (A4 width)
+        ...wordSprm(0x9024, 1134),  // legacy DYA_BOTTOM
+      ]
+      const { tableData, wordDocData, fcPlcfSed, lcbPlcfSed } = buildSectionData(30, 0x100, grpprl)
+      const sections = extractSections(tableData, wordDocData, fcPlcfSed, lcbPlcfSed)
+
+      expect(sections[0].pageWidthPt).toBe(595.3)
+      expect(sections[0].marginBottomPt).toBe(56.7)
+    })
+  })
 })

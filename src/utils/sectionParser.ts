@@ -22,6 +22,25 @@ const SPRM_S_CCOLUMNS = 0x500B         // 分栏数 (word)
 const SPRM_S_DXA_COLUMNS = 0x500C      // 栏间距 (word, twips)
 const SPRM_S_F_EVENLY = 0x300F         // 均分栏 (toggle)
 
+// ---- Word 6.0/95 旧版 section SPRM（MS-DOC 附录 A 历史 sprm 表）----
+// Word 95 及更早版本使用不同的 sprm 值表达相同的节属性。这些文件
+// （常见于 textutil / 旧版 Word 导出）的 SEPX 中 sprm 高字节与 Word 97
+// 相同（0xB0/0x90/0x30），但低字节不同。实测映射（twips 单位一致）：
+//   0xB01F → 页宽（Word 97: 0xB002 XA_PAGE）
+//   0xB020 → 页高（0xB003 YA_PAGE）
+//   0xB021 → 左边距（0xB004 DXA_LEFT）
+//   0xB022 → 右边距（0xB005 DXA_RIGHT）
+//   0x9023 → 上边距（0xB006 DYA_TOP）
+//   0x9024 → 下边距（0xB007 DYA_BOTTOM）
+//   0xB025 → 装订线（0xB008 DXA_GUTTER）
+const SPRM95_S_XA_PAGE = 0xB01F
+const SPRM95_S_YA_PAGE = 0xB020
+const SPRM95_S_DXA_LEFT = 0xB021
+const SPRM95_S_DXA_RIGHT = 0xB022
+const SPRM95_S_DYA_TOP = 0x9023
+const SPRM95_S_DYA_BOTTOM = 0x9024
+const SPRM95_S_DXA_GUTTER = 0xB025
+
 /** twips → 磅：1 磅 = 20 twips */
 function twipsToPt(twips: number): number {
   return twips / 20
@@ -176,24 +195,31 @@ function parseSepx(
 
     switch (sprm) {
       case SPRM_S_XA_PAGE:
+      case SPRM95_S_XA_PAGE:
         result.pageWidthPt = twipsToPt(readWordAt(wordDocData, offset))
         break
       case SPRM_S_YA_PAGE:
+      case SPRM95_S_YA_PAGE:
         result.pageHeightPt = twipsToPt(readWordAt(wordDocData, offset))
         break
       case SPRM_S_DXA_LEFT:
+      case SPRM95_S_DXA_LEFT:
         result.marginLeftPt = twipsToPt(readWordAt(wordDocData, offset))
         break
       case SPRM_S_DXA_RIGHT:
+      case SPRM95_S_DXA_RIGHT:
         result.marginRightPt = twipsToPt(readWordAt(wordDocData, offset))
         break
       case SPRM_S_DYA_TOP:
+      case SPRM95_S_DYA_TOP:
         result.marginTopPt = twipsToPt(readWordAt(wordDocData, offset))
         break
       case SPRM_S_DYA_BOTTOM:
+      case SPRM95_S_DYA_BOTTOM:
         result.marginBottomPt = twipsToPt(readWordAt(wordDocData, offset))
         break
       case SPRM_S_DXA_GUTTER:
+      case SPRM95_S_DXA_GUTTER:
         result.gutterPt = twipsToPt(readWordAt(wordDocData, offset))
         break
       case SPRM_S_B_ORIENTATION: {
