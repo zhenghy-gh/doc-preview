@@ -1067,7 +1067,7 @@ describe('parseWithFormat field assembly', () => {
    */
   function buildOleWithFields(): ArrayBuffer {
     const SECTOR = 512
-    const buf = new ArrayBuffer(SECTOR * 7)
+    const buf = new ArrayBuffer(SECTOR * 8)
     const view = new Uint8Array(buf)
     const w16 = (off: number, v: number) => { view[off] = v & 0xff; view[off + 1] = (v >> 8) & 0xff }
     const w32 = (off: number, v: number) => {
@@ -1084,10 +1084,11 @@ describe('parseWithFormat field assembly', () => {
     for (let i = 1; i < 109; i++) w32(76 + i * 4, FREE)
     // FAT: 0=FAT, 1=dir, 2->3=WordDocument, 4=0Table
     const fatBase = SECTOR
-    w32(fatBase + 0 * 4, END); w32(fatBase + 1 * 4, 5)
-    w32(fatBase + 2 * 4, 3); w32(fatBase + 3 * 4, END); w32(fatBase + 4 * 4, END)
-    w32(fatBase + 5 * 4, END)
-    for (let i = 6; i < 128; i++) w32(fatBase + i * 4, FREE)
+    w32(fatBase + 0 * 4, END); w32(fatBase + 1 * 4, 6)
+    w32(fatBase + 2 * 4, 3); w32(fatBase + 3 * 4, 4)
+    w32(fatBase + 4 * 4, END); w32(fatBase + 5 * 4, END)
+    w32(fatBase + 6 * 4, END)
+    for (let i = 7; i < 128; i++) w32(fatBase + i * 4, FREE)
     // Directory
     const dirBase = SECTOR * 2
     const writeDir = (off: number, name: string, type: number, start: number, size: number) => {
@@ -1099,11 +1100,11 @@ describe('parseWithFormat field assembly', () => {
       w32(off + 120, size)
     }
     writeDir(dirBase + 0 * 128, 'Root Entry', 5, END, 0)
-    writeDir(dirBase + 1 * 128, 'WordDocument', 2, 2, 1024)
-    writeDir(dirBase + 2 * 128, '0Table', 2, 4, 512)
+    writeDir(dirBase + 1 * 128, 'WordDocument', 2, 2, 1536)
+    writeDir(dirBase + 2 * 128, '0Table', 2, 5, 512)
     writeDir(dirBase + 3 * 128, 'MSGraph.Chart.8', 1, END, 0)
-    // Directory chain continues at sector 5 (physical 3072)
-    const dirBase2 = SECTOR * 6
+    // Directory chain continues at sector 6 (physical 3584)
+    const dirBase2 = SECTOR * 7
     writeDir(dirBase2 + 0 * 128, 'WordArt.1', 1, END, 0)
 
     // WordDocument stream (sectors 2-3)
@@ -1182,9 +1183,14 @@ describe('parseWithFormat field assembly', () => {
     const eqn = '\\alpha'
     for (let i = 0; i < eqn.length; i++) w16(wdBase + eq + 6 + i * 2, eqn.charCodeAt(i))
     w16(wdBase + eq + 6 + eqn.length * 2, 0)
+    // Embedded-chart OLE magic at stream offset 900 with >500 non-zero bytes
+    // so extractChartsFromWordDocumentStream finds a chart
+    const chartMagic = [0xD0, 0xCF, 0x11, 0xE0]
+    chartMagic.forEach((b, i) => { view[wdBase + 900 + i] = b })
+    for (let i = 0; i < 596; i++) view[wdBase + 904 + i] = 0x42
 
-    // 0Table stream (sector 4 -> physical offset (4+1)*512)
-    const tblBase = SECTOR * 5
+    // 0Table stream (sector 5 -> physical offset (5+1)*512)
+    const tblBase = SECTOR * 6
     // CLX: bare Pcdt, single piece
     view[tblBase + 0] = 0x02
     w32(tblBase + 1, 16)
@@ -1271,7 +1277,6 @@ describe('parseWithFormat field assembly', () => {
     expect(doc.sections.length).toBe(1)
     expect(doc.bookmarks.length).toBe(1)
     expect(doc.bookmarks[0].name).toBe('MyBookmark')
-    expect(doc.charts.length).toBe(1)
     expect(doc.charts[0].type).toBe('msgraph')
     expect(doc.wordArts.length).toBe(1)
     expect(doc.shapes.length).toBe(1)
@@ -1280,6 +1285,7 @@ describe('parseWithFormat field assembly', () => {
     expect(doc.revisions[0].type).toBe('insert')
     expect(doc.revisions[0].timestamp).toBe(0x01020304)
     expect(doc.revisions[0].author).toBe('Alice')
+    expect(doc.charts.length).toBe(2) // MSGraph storage + embedded magic
     expect(doc.paragraphs.length).toBeGreaterThan(0)
   })
 })
