@@ -554,3 +554,19 @@ describe('listParser', () => {
     })
   })
 })
+
+describe('listParser minimal LVLF fallback', () => {
+  it('falls back to minimal level data when the LVLF body does not fit', () => {
+    // LST header (28 bytes, fSimpleList=1) + a 40-byte LVLF with no grpprls
+    // and no readable number-text length: lcb=69 makes levelPos+40 < endBound
+    // while numTextStart+2 > endBound, so parseLvlf's full branch is skipped.
+    const data = new Uint8Array(69)
+    data[26] = 1 // fSimpleList
+    const entries = parseListTable(data, 0, 69)
+    expect(entries.length).toBe(1)
+    expect(entries[0].levels.length).toBe(1)
+    expect(entries[0].levels[0].numberText).toBe('')
+    expect(entries[0].levels[0].dxaIndent).toBe(0)
+    expect(entries[0].levels[0].dxaFirstLine).toBe(0)
+  })
+})
