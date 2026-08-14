@@ -1437,7 +1437,7 @@ describe('CLX-unreachable fallback paths', () => {
     w16(34 + wdBase, 22)
     // Consecutive duplicate paragraph (consecutive-dedup branch) and a
     // 12-char tandem repeat (removeInternalDuplicates branch)
-    const text = customText ?? 'Hello libwv world\r\nHello libwv world\r\nhello abcdefghijkl hello abcdefghijkl\r\ntest abcdeabcdeabcde end\r\nA\u0007B\u0007\u0007C\u0007D\u0007\u0007E\u0007F\r\n'
+    const text = customText ?? 'Hello libwv world\r\nHello libwv world\r\nhello abcdefghijklhello abcdefghijkl\r\ntest abcdeabcdeabcde end\r\nA\u0007B\u0007\u0007C\u0007D\u0007\u0007E\u0007F\r\n'
     w32(24 + wdBase, fcMinBase)
     w32(28 + wdBase, fcMacBase)
     w32(36 + 12 + wdBase, text.length) // ccpText
@@ -1459,7 +1459,7 @@ describe('CLX-unreachable fallback paths', () => {
 
   it('falls back to the FibBase fcMin/fcMac range when CLX is unreachable', () => {
     // span == ccpText (8-bit): fcMinBase=2048, text is 118 chars
-    const parser = new DocParser(buildNoClxOle(2048, 2048 + 118))
+    const parser = new DocParser(buildNoClxOle(2048, 2048 + 117))
 
     const result = parser.parseWithFormat()
     expect(result.success).toBe(true)
