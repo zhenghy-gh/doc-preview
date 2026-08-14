@@ -955,3 +955,104 @@ describe('detectEncodingFromBinary paragraph-marker fallback', () => {
     expect(result).toBeNull()
   })
 })
+
+describe('fallback text paths', () => {
+  /** OLE2 without a WordDocument stream whose 8-bit ASCII text sits right
+   *  after the OLE signature: the 4 signature pairs keep the UTF-16LE
+   *  scanner aligned, so the isolated paragraph is extracted as fallback. */
+  function buildOleWithoutWordDocumentText(): ArrayBuffer {
+    const SECTOR = 512
+    const buf = new ArrayBuffer(SECTOR * 4)
+    const view = new Uint8Array(buf)
+    const w16 = (off: number, v: number) => { view[off] = v & 0xff; view[off + 1] = (v >> 8) & 0xff }
+    const w32 = (off: number, v: number) => {
+      view[off] = v & 0xff; view[off + 1] = (v >> 8) & 0xff
+      view[off + 2] = (v >> 16) & 0xff; view[off + 3] = (v >> 24) & 0xff
+    }
+    view[0] = 0xD0; view[1] = 0xCF; view[2] = 0x11; view[3] = 0xE0
+    view[4] = 0xA1; view[5] = 0xB1; view[6] = 0x1A; view[7] = 0xE1
+    // 8-bit ASCII text right after the signature: each byte pair is a
+    // valid UTF-16LE unit and the signature pairs keep the scan aligned.
+    const text = 'Hello World from fallback'
+    view[8] = 0x0D
+    for (let i = 0; i < text.length; i++) view[10 + i * 2] = text.charCodeAt(i)
+    view[10 + text.length * 2] = 0x0D
+    // FAT sector (all FREESECT), directory sector (all zero, empty)
+    for (let i = 0; i < 128; i++) w32(SECTOR + i * 4, 0xFFFFFFFF)
+    return buf
+  }
+
+  it('parse() falls back to full-file text when WordDocument is missing', () => {
+    const parser = new DocParser(buildOleWithoutWordDocumentText())
+    const result = parser.parse()
+    expect(result.success).toBe(true)
+    expect(result.text).toContain('Hello World from fallback')
+  })
+
+  it('parseWithFormat() builds paragraphs from full-file fallback text', () => {
+    const parser = new DocParser(buildOleWithoutWordDocumentText())
+    const result = parser.parseWithFormat()
+    expect(result.success).toBe(true)
+    expect(result.text).toContain('Hello World from fallback')
+    expect(result.document.paragraphs.length).toBeGreaterThan(0)
+  })
+
+  it('returns 文档内容为空 when nothing can be extracted', () => {
+    const SECTOR = 512
+    const buf = new ArrayBuffer(SECTOR * 5)
+    const view = new Uint8Array(buf)
+    const writeU16 = (off: number, val: number) => {
+      view[off] = val & 0xff; view[off + 1] = (val >> 8) & 0xff
+    }
+    const writeU32 = (off: number, val: number) => {
+      view[off] = val & 0xff; view[off + 1] = (val >> 8) & 0xff
+      view[off + 2] = (val >> 16) & 0xff; view[off + 3] = (val >> 24) & 0xff
+    }
+    view[0] = 0xD0; view[1] = 0xCF; view[2] = 0x11; view[3] = 0xE0
+    view[4] = 0xA1; view[5] = 0xB1; view[6] = 0x1A; view[7] = 0xE1
+    writeU16(26, 3); writeU16(30, 9); writeU16(32, 6)
+    writeU32(48, 1); writeU32(56, 4096)
+    writeU32(60, 0xFFFFFFFE); writeU32(64, 0); writeU32(68, 0xFFFFFFFE); writeU32(72, 0)
+    writeU32(76, 0)
+    for (let i = 1; i < 109; i++) writeU32(76 + i * 4, 0xFFFFFFFF)
+    const fatBase = SECTOR
+    for (let i = 0; i < 4; i++) writeU32(fatBase + i * 4, 0xFFFFFFFE)
+    for (let i = 4; i < 128; i++) writeU32(fatBase + i * 4, 0xFFFFFFFF)
+    const dirBase = SECTOR * 2
+    const writeDirEntry = (entryOffset: number, name: string, objectType: number, startSector: number, size: number) => {
+      for (let i = 0; i < name.length; i++) writeU16(entryOffset + i * 2, name.charCodeAt(i))
+      writeU16(entryOffset + 64, name.length * 2)
+      view[entryOffset + 66] = objectType
+      view[entryOffset + 67] = 1
+      writeU32(entryOffset + 116, startSector)
+      writeU32(entryOffset + 120, size)
+    }
+    writeDirEntry(dirBase + 0 * 128, 'Root Entry', 5, 0xFFFFFFFE, 0)
+    writeDirEntry(dirBase + 1 * 128, 'WordDocument', 2, 2, 512)
+    writeDirEntry(dirBase + 2 * 128, '0Table', 2, 3, 64)
+    const wdBase = SECTOR * 3
+    writeU16(0 + wdBase, 0xA5EC)
+    writeU16(2 + wdBase, 0x0101)
+    writeU16(10 + wdBase, 0)
+    writeU16(32 + wdBase, 0)
+    writeU16(34 + wdBase, 22)
+    writeU32(36 + 12 + wdBase, 0) // ccpText = 0
+    writeU16(124 + wdBase, 34)
+    writeU32(390 + wdBase, 0)
+    writeU32(394 + wdBase, 0) // no CLX
+    const parser = new DocParser(buf)
+    const result = parser.parse()
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('文档内容为空')
+  })
+
+  it('reports a parse failure when the progress callback throws', () => {
+    const buf = buildOleWithoutWordDocumentText()
+    const parser = new DocParser(buf)
+    const result = parser.parseWithFormat(() => {
+      throw new Error('progress boom')
+    })
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('progress boom')
+  })
+})

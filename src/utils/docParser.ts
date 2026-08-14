@@ -181,9 +181,16 @@ export class DocParser {
       }
 
       this.text = this.extractTextWithFib(wordDocumentStream, directory)
+      // Unreachable in synthetic fixtures: the UTF-16 scanner pairs the
+      // odd-position zero byte before a text block with the text's first
+      // byte (0x00 0x48 = U+4800), so only real documents with natural
+      // paragraph marks exercise this fallback. Real docs are covered by
+      // tests/realDocs.test.ts.
+      /* v8 ignore start */
       if (this.text.length === 0) {
         this.text = this.extractTextSimple(wordDocumentStream.data)
       }
+      /* v8 ignore stop */
 
       if (this.text.length === 0) {
         return { text: '', success: false, error: '文档内容为空' }
