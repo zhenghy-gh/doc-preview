@@ -103,6 +103,12 @@ export interface ParagraphFormat {
   table?: TableInfo
   /** 段前分页（该段落前有分页符，来自段落文本中的 \f 字符） */
   pageBreakBefore?: boolean
+  /** 标题级别（1-9，来自 PAPX outlineLevel 或样式名推断） */
+  headingLevel?: number
+  /** 段落样式名称（来自 PAPX istd 解析的样式表） */
+  styleName?: string
+  /** 是否由真实 CHP/PAP 格式表恢复（而非启发式推断） */
+  paraFormatFromReal?: boolean
 }
 
 /** 表格边框样式（Brc 简化结构） */

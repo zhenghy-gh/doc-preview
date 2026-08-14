@@ -878,7 +878,7 @@ function buildOutline(paragraphs: FormattedParagraphOutput[]) {
     if (!text || text.length < 2) continue
 
     // Skip list items and short fragments
-    if ((para.paraFormat as any).listType) continue
+    if (para.paraFormat?.listType) continue
     if (text.length > 80) continue
 
     const charFormat = para.charFormat || {} as CharacterFormat
@@ -888,7 +888,7 @@ function buildOutline(paragraphs: FormattedParagraphOutput[]) {
 
     // Determine heading level from format heuristics
     let level = 0
-    const realHeadingLevel = (para.paraFormat as any)?.headingLevel
+    const realHeadingLevel = para.paraFormat?.headingLevel
     if (realHeadingLevel && realHeadingLevel >= 1 && realHeadingLevel <= 9) {
       level = realHeadingLevel
     } else {
@@ -1005,9 +1005,8 @@ function resolveFontSize(size: number | undefined, fallback: string): string {
   return FONT_SIZE_MAP[size] || `${size / 16}rem`
 }
 
-function getTextAlignment(paraFormat: ParagraphFormat, charFormat: CharacterFormat): string {
+function getTextAlignment(paraFormat: ParagraphFormat, _charFormat: CharacterFormat): string {
   if (paraFormat.alignment) return paraFormat.alignment
-  if ((charFormat as any).alignment) return (charFormat as any).alignment
   return 'justify'
 }
 
@@ -1873,7 +1872,7 @@ const formatFormattedTextToHtml = (paragraphs: ParaWithList[], hyperlinks?: Hype
     }
 
     const visibleLen = text.replace(/\u0001/g, '').length
-    const isList = !!(para.paraFormat as any)?.listType
+    const isList = !!para.paraFormat?.listType
 
     // When the previous block was a list and the current paragraph is a
     // long body paragraph (>= 100 chars), render any unconsumed charts
@@ -1907,7 +1906,7 @@ const formatFormattedTextToHtml = (paragraphs: ParaWithList[], hyperlinks?: Hype
     }
 
     const paraFormat = para.paraFormat
-    const listType = (paraFormat as any).listType
+    const listType = paraFormat?.listType
     const tableBlock = collectTableBlock(paragraphs, i)
 
     if (tableBlock) {
@@ -1919,9 +1918,9 @@ const formatFormattedTextToHtml = (paragraphs: ParaWithList[], hyperlinks?: Hype
     }
 
     if (listType === 'ordered' || listType === 'unordered') {
-      const listStyle = (paraFormat as any).listStyle || (listType === 'ordered' ? 'decimal' : 'disc')
-      const startLevel = (paraFormat as any).listLevel ?? 0
-      const listId = (paraFormat as any).listId
+      const listStyle = paraFormat?.listStyle || (listType === 'ordered' ? 'decimal' : 'disc')
+      const startLevel = paraFormat?.listLevel ?? 0
+      const listId = paraFormat?.listId
 
       const items: Array<{ text: string; level: number; charFormat: CharacterFormat; paraFormat: ParagraphFormat }> = []
       let totalEstimatedHeight = 0
@@ -1933,7 +1932,7 @@ const formatFormattedTextToHtml = (paragraphs: ParaWithList[], hyperlinks?: Hype
         if (!itemText.trim()) { i++; continue }
         items.push({
           text: itemText,
-          level: (itemFormat as any).listLevel ?? 0,
+          level: itemFormat.listLevel ?? 0,
           charFormat: item.charFormat || ({} as CharacterFormat),
           paraFormat: itemFormat,
         })
@@ -2140,7 +2139,7 @@ const formatTextWithCharacterStyles = (
     pCss.push('padding: 4px')
   }
 
-  const headingLevel = (paraFormat as any)?.headingLevel
+  const headingLevel = paraFormat?.headingLevel
   const hasTabs = text.includes('\t')
   const finalContent = hasTabs && (!paraFormat.tabs || paraFormat.tabs.length === 0)
     ? `<span style="white-space: pre; tab-size: 3;">${htmlContent}</span>`
@@ -2212,7 +2211,7 @@ const formatTextWithDefaultStyles = (
 
   const hasPageBreak = paraFormat.pageBreakBefore
 
-  const headingLevel = (paraFormat as any)?.headingLevel
+  const headingLevel = paraFormat?.headingLevel
   const hasTabs = text.includes('\t')
   const finalText = hasTabs
     ? applyTabStops(text, paraFormat.tabs, charFormat.fontSize || 12, charFormat.fontName || '宋体', hasHtml)
