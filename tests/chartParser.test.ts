@@ -18,6 +18,7 @@ describe('chartParser', () => {
     it('should detect Excel.Chart', () => {
       expect(detectChartType('Excel.Chart')).toEqual({ type: 'excel', subtype: 'chart' })
       expect(detectChartType('Excel.Chart.8')).toEqual({ type: 'excel', subtype: 'chart' })
+      expect(detectChartType('Excel.Chart.12')).toEqual({ type: 'excel', subtype: 'chart' })
     })
 
     it('should detect SmartArt', () => {

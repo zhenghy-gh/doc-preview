@@ -33,6 +33,7 @@ const CHART_NAME_PATTERNS: Record<string, { type: ChartType; subtype: ChartSubty
   'Excel.Sheet.12': { type: 'excel', subtype: 'chart' },
   'Excel.Chart': { type: 'excel', subtype: 'chart' },
   'Excel.Chart.8': { type: 'excel', subtype: 'chart' },
+  'Excel.Chart.12': { type: 'excel', subtype: 'chart' },
   'SmartArt': { type: 'smartart', subtype: 'process' },
   'Microsoft.Office.SmartArt': { type: 'smartart', subtype: 'process' },
   'OrgChart': { type: 'smartart', subtype: 'orgchart' },
