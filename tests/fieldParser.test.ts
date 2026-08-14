@@ -861,3 +861,60 @@ Banana`
     })
   })
 })
+describe('fieldParser uncovered branches', () => {
+  it('should extract SUBJECT, KEYWORDS, COMMENTS, LASTSAVEDBY and PRINTEDATE fields', () => {
+    const text = '\x13SUBJECT\x14Subj\x15\x13KEYWORDS\x14Key\x15\x13COMMENTS\x14Com\x15\x13LASTSAVEDBY\x14LSB\x15\x13PRINTEDATE\x14PD\x15'
+    const fldEntries = [
+      { cp: 0, ch: 0x13, flt: 7 },
+      { cp: 8, ch: 0x14, flt: 0 },
+      { cp: 13, ch: 0x15, flt: 0 },
+      { cp: 14, ch: 0x13, flt: 8 },
+      { cp: 23, ch: 0x14, flt: 0 },
+      { cp: 27, ch: 0x15, flt: 0 },
+      { cp: 28, ch: 0x13, flt: 9 },
+      { cp: 37, ch: 0x14, flt: 0 },
+      { cp: 41, ch: 0x15, flt: 0 },
+      { cp: 42, ch: 0x13, flt: 11 },
+      { cp: 54, ch: 0x14, flt: 0 },
+      { cp: 58, ch: 0x15, flt: 0 },
+      { cp: 59, ch: 0x13, flt: 16 },
+      { cp: 70, ch: 0x14, flt: 0 },
+      { cp: 73, ch: 0x15, flt: 0 },
+    ]
+    const textBytes = new Uint8Array(160)
+    writeUtf16le(textBytes, 2, 'SUBJECT')
+    writeUtf16le(textBytes, 30, 'KEYWORDS')
+    writeUtf16le(textBytes, 58, 'COMMENTS')
+    writeUtf16le(textBytes, 86, 'LASTSAVEDBY')
+    writeUtf16le(textBytes, 120, 'PRINTEDATE')
+    const result = extractDocumentFields(fldEntries, text, textBytes)
+    expect(result.subject).toBe('Subj')
+    expect(result.keywords).toBe('Key')
+    expect(result.comments).toBe('Com')
+    expect(result.lastSavedBy).toBe('LSB')
+    expect(result.printDate).toBe('PD')
+  })
+
+  it('should parse a tab-separated sub-term in INDEX results', () => {
+    const entries = parseIndexResult('Main\t5\n  Sub\t6')
+    expect(entries).toEqual([
+      { mainTerm: 'Main', pageNumber: '5' },
+      { mainTerm: 'Main', subTerm: 'Sub', pageNumber: '6' },
+    ])
+  })
+
+  it('should append trailing tokens to the REF bookmark name', () => {
+    const text = '\x13REF Book1 Book2 \\h\x14RES\x15'
+    const fldEntries = [
+      { cp: 0, ch: 0x13, flt: 0 },
+      { cp: 19, ch: 0x14, flt: 0 },
+      { cp: 23, ch: 0x15, flt: 0 },
+    ]
+    const textBytes = new Uint8Array(60)
+    writeUtf16le(textBytes, 2, 'REF Book1 Book2 \\h')
+    const refs = extractCrossReferences(fldEntries, text, textBytes)
+    expect(refs.length).toBe(1)
+    expect(refs[0].targetBookmarkName).toBe('Book1 Book2')
+    expect(refs[0].switches).toContain('\\h')
+  })
+})

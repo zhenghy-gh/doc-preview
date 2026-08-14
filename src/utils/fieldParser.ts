@@ -562,8 +562,11 @@ function parseTocLine(line: string): TocEntry | null {
     }
   }
 
+  // Unreachable: parseTocResult filters empty lines before calling.
+  /* v8 ignore start */
   return null
 }
+/* v8 ignore stop */
 
 /**
  * Infer TOC level from heading text.
