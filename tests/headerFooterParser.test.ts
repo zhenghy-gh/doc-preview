@@ -76,6 +76,18 @@ describe('headerFooterParser', () => {
       expect(parsePlcfHdd(data, false, false)).toBeNull()
     })
 
+    it('should return null when the sub-range count is invalid (n=0)', () => {
+      // 8 bytes → n = floor((8-4)/12) = 0 → invalid
+      const data = new Uint8Array(8)
+      expect(parsePlcfHdd(data, false, false)).toBeNull()
+    })
+
+    it('should return null for 12-byte data (still n=0)', () => {
+      // 12 bytes → n = floor((12-4)/12) = 0
+      const data = new Uint8Array(12)
+      expect(parsePlcfHdd(data, false, false)).toBeNull()
+    })
+
     it('should parse PlcfHdd with 2 sub-ranges (no titlePage, no facingPages)', () => {
       // n=1, cps = [0, 10]
       // data = 4 bytes CP[0] + 4 bytes CP[1] + 8 bytes SED[0] = 16 bytes
