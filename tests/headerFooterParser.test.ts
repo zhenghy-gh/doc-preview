@@ -3,10 +3,25 @@ import {
   parsePlcfHdd,
   splitHeaderText,
   splitHeaderTextHeuristic,
+  splitHeaderTextWithImages,
   getActivePartTypes,
   getPartLabel,
 } from '../src/utils/headerFooterParser'
 import type { HeaderFooterPartType } from '../src/utils/docFormat'
+import type { ParsedPicture } from '../src/utils/pictureParser'
+
+function makePic(overrides: Partial<ParsedPicture> = {}): ParsedPicture {
+  return {
+    format: 'png',
+    data: new Uint8Array([0x89, 0x50, 0x4E, 0x47]),
+    type: 'inline',
+    widthPx: 10,
+    heightPx: 20,
+    floating: false,
+    dataOffset: 0,
+    ...overrides,
+  }
+}
 
 describe('headerFooterParser', () => {
   describe('getPartLabel', () => {
@@ -105,6 +120,80 @@ describe('headerFooterParser', () => {
       const result = parsePlcfHdd(data, false, false)
       expect(result).not.toBeNull()
       expect(result!.parts.length).toBe(0) // empty range skipped
+    })
+  })
+
+  describe('splitHeaderTextWithImages', () => {
+    const split = {
+      parts: [
+        { type: 'oddHeader' as HeaderFooterPartType, startCp: 0, endCp: 5 },
+        { type: 'oddFooter' as HeaderFooterPartType, startCp: 5, endCp: 10 },
+      ],
+    }
+
+    it('should return null for empty text', () => {
+      expect(splitHeaderTextWithImages('', split)).toBeNull()
+    })
+
+    it('should return null for empty parts', () => {
+      expect(splitHeaderTextWithImages('HelloWorld', { parts: [] })).toBeNull()
+    })
+
+    it('should split text and attach pictures by dataOffset within range', () => {
+      const pics = [
+        makePic({ dataOffset: 2, format: 'png' }),
+        makePic({ dataOffset: 20 }), // outside both ranges
+      ]
+      const result = splitHeaderTextWithImages('HelloWorld', split, pics)
+      expect(result).not.toBeNull()
+      expect(result!.oddHeader!.text).toBe('Hello')
+      expect(result!.oddHeader!.images).toHaveLength(1)
+      expect(result!.oddHeader!.images![0].format).toBe('png')
+      expect(result!.oddHeader!.images![0].dataUrl).toContain('data:image/png;base64,')
+      expect(result!.oddFooter!.text).toBe('World')
+      expect(result!.oddFooter!.images).toBeUndefined()
+    })
+
+    it('should produce correct data URL mime types per format', () => {
+      const pics = [
+        makePic({ dataOffset: 1, format: 'jpeg' }),
+        makePic({ dataOffset: 2, format: 'gif' }),
+        makePic({ dataOffset: 3, format: 'bmp' }),
+        makePic({ dataOffset: 4, format: 'emf' }),
+      ]
+      const result = splitHeaderTextWithImages('HelloWorld', split, pics)
+      const images = result!.oddHeader!.images!
+      expect(images[0].dataUrl).toContain('data:image/jpeg;base64,')
+      expect(images[1].dataUrl).toContain('data:image/gif;base64,')
+      expect(images[2].dataUrl).toContain('data:image/bmp;base64,')
+      expect(images[3].dataUrl).toContain('data:application/octet-stream;base64,')
+    })
+
+    it('should skip pictures with unknown format', () => {
+      const pics = [makePic({ dataOffset: 1, format: 'unknown' })]
+      const result = splitHeaderTextWithImages('HelloWorld', split, pics)
+      expect(result!.oddHeader!.images).toBeUndefined()
+    })
+
+    it('should skip empty text ranges', () => {
+      const emptySplit = {
+        parts: [
+          { type: 'oddHeader' as HeaderFooterPartType, startCp: 5, endCp: 5 },
+        ],
+      }
+      expect(splitHeaderTextWithImages('HelloWorld', emptySplit)).toBeNull()
+    })
+
+    it('should return part with only images when text is blank', () => {
+      const blankSplit = {
+        parts: [
+          { type: 'oddHeader' as HeaderFooterPartType, startCp: 0, endCp: 5 },
+        ],
+      }
+      const result = splitHeaderTextWithImages('     ', blankSplit, [makePic({ dataOffset: 2 })])
+      expect(result).not.toBeNull()
+      expect(result!.oddHeader!.text).toBe('')
+      expect(result!.oddHeader!.images).toHaveLength(1)
     })
   })
 
