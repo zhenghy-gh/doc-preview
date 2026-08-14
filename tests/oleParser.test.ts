@@ -1083,3 +1083,28 @@ describe('OleParser', () => {
     })
   })
 })
+
+describe('OleParser header bounds', () => {
+  it('should tolerate a truncated header buffer during DIFAT reads', () => {
+    // OLE signature in a 300-byte buffer: the 109-entry DIFAT walk at
+    // offset 76 overruns the buffer and must stop gracefully.
+    const buf = new ArrayBuffer(300)
+    const view = new Uint8Array(buf)
+    view[0] = 0xD0; view[1] = 0xCF; view[2] = 0x11; view[3] = 0xE0
+    view[4] = 0xA1; view[5] = 0xB1; view[6] = 0x1A; view[7] = 0xE1
+    const parser = new OleParser(buf)
+    const header = parser.parseHeader()
+    expect(header).not.toBeNull()
+    // The truncated DIFAT read simply stops early — no crash
+    expect(Array.isArray(header.difat)).toBe(true)
+  })
+
+  it('should tolerate a truncated header buffer during string reads', () => {
+    // _getString with an offset past the buffer end must not throw
+    const buf = new ArrayBuffer(64)
+    const parser = new OleParser(buf)
+    const parserAny = parser as any
+    expect(() => parserAny._getString(60, 20)).not.toThrow()
+    expect(parserAny._getString(60, 20)).toBe('')
+  })
+})
