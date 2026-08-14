@@ -493,3 +493,11 @@ describe('isTextutilFib', () => {
     expect(isTextutilFib(data)).toBe(true)
   })
 })
+
+
+describe('detectWordVersion word2007+', () => {
+  it('should map nFib >= 0x0108 to word2007+', () => {
+    expect(detectWordVersion(0x0108)).toBe('word2007+')
+    expect(detectWordVersion(0xFFFF)).toBe('word2007+')
+  })
+})

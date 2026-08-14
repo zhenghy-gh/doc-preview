@@ -34,8 +34,11 @@ export function detectWordVersion(nFib: number): WordVersion {
   if (nFib <= 0x00E1) return 'word2002'
   if (nFib <= 0x0107) return 'word2003'
   if (nFib >= 0x0108) return 'word2007+'
+  // Unreachable: every integer in [0x005D, 0xFFFF] is handled above.
+  /* v8 ignore start */
   return 'unknown'
 }
+/* v8 ignore stop */
 
 /** Word 版本显示名称映射。 */
 export const WORD_VERSION_LABELS: Record<WordVersion, string> = {
@@ -417,11 +420,15 @@ export function parseFib(data: Uint8Array): FibData | null {
       fcPlcfSed, lcbPlcfSed,
       fcPlcfHdd, lcbPlcfHdd,
     }
+    // Unreachable: out-of-range array reads yield undefined (0), never
+    // throw. Kept as defense-in-depth only.
+    /* v8 ignore start */
   } catch (error) {
     logger.error(`FIB解析错误: ${error}`)
     return null
   }
 }
+/* v8 ignore stop */
 
 function readDwordAt(data: Uint8Array, offset: number): number {
   return (data[offset] | (data[offset + 1] << 8) |
