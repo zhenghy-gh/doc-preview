@@ -281,6 +281,9 @@ export class DocParser {
       if (extracted.charts && extracted.charts.length > 0) {
         document.charts = extracted.charts
       }
+      if (extracted.wordArts && extracted.wordArts.length > 0) {
+        document.wordArts = extracted.wordArts
+      }
       if (extracted.indexEntries && extracted.indexEntries.length > 0) {
         document.index = extracted.indexEntries
       }

@@ -1066,7 +1066,7 @@ describe('parseWithFormat field assembly', () => {
    */
   function buildOleWithFields(): ArrayBuffer {
     const SECTOR = 512
-    const buf = new ArrayBuffer(SECTOR * 6)
+    const buf = new ArrayBuffer(SECTOR * 7)
     const view = new Uint8Array(buf)
     const w16 = (off: number, v: number) => { view[off] = v & 0xff; view[off + 1] = (v >> 8) & 0xff }
     const w32 = (off: number, v: number) => {
@@ -1083,9 +1083,10 @@ describe('parseWithFormat field assembly', () => {
     for (let i = 1; i < 109; i++) w32(76 + i * 4, FREE)
     // FAT: 0=FAT, 1=dir, 2->3=WordDocument, 4=0Table
     const fatBase = SECTOR
-    w32(fatBase + 0 * 4, END); w32(fatBase + 1 * 4, END)
+    w32(fatBase + 0 * 4, END); w32(fatBase + 1 * 4, 5)
     w32(fatBase + 2 * 4, 3); w32(fatBase + 3 * 4, END); w32(fatBase + 4 * 4, END)
-    for (let i = 5; i < 128; i++) w32(fatBase + i * 4, FREE)
+    w32(fatBase + 5 * 4, END)
+    for (let i = 6; i < 128; i++) w32(fatBase + i * 4, FREE)
     // Directory
     const dirBase = SECTOR * 2
     const writeDir = (off: number, name: string, type: number, start: number, size: number) => {
@@ -1099,6 +1100,10 @@ describe('parseWithFormat field assembly', () => {
     writeDir(dirBase + 0 * 128, 'Root Entry', 5, END, 0)
     writeDir(dirBase + 1 * 128, 'WordDocument', 2, 2, 1024)
     writeDir(dirBase + 2 * 128, '0Table', 2, 4, 512)
+    writeDir(dirBase + 3 * 128, 'MSGraph.Chart.8', 1, END, 0)
+    // Directory chain continues at sector 5 (physical 3072)
+    const dirBase2 = SECTOR * 6
+    writeDir(dirBase2 + 0 * 128, 'WordArt.1', 1, END, 0)
 
     // WordDocument stream (sectors 2-3)
     const wdBase = SECTOR * 3
@@ -1119,6 +1124,14 @@ describe('parseWithFormat field assembly', () => {
     // pair 16: fcPlcfFldMom/lcbPlcfFldMom -> 0Table offset 32, 112 bytes
     w32(126 + 16 * 8 + wdBase, 32)
     w32(126 + 16 * 8 + 4 + wdBase, 112)
+    // pairs 21-23: bookmarks (PlcfBkf/PlcfBkl/SttbfBkmk at 0Table 200/216/232)
+    // pair 21 = fcSttbfBkmk, 22 = fcPlcfBkf, 23 = fcPlcfBkl
+    w32(126 + 21 * 8 + wdBase, 232)
+    w32(126 + 21 * 8 + 4 + wdBase, 26)
+    w32(126 + 22 * 8 + wdBase, 200)
+    w32(126 + 22 * 8 + 4 + wdBase, 12)
+    w32(126 + 23 * 8 + wdBase, 216)
+    w32(126 + 23 * 8 + 4 + wdBase, 12)
     // pair 33: fcClx/lcbClx -> 0Table offset 0
     const clxSize = 1 + 4 + 4 * 2 + 8
     w32(126 + 33 * 8 + wdBase, 0)
@@ -1159,6 +1172,21 @@ describe('parseWithFormat field assembly', () => {
     w16(sedBase + 8, 0)
     w32(sedBase + 10, END)
     w16(sedBase + 14, 0)
+    // Bookmark tables: one bookmark over cp [0, 10]
+    const bkfBase = tblBase + 200
+    w32(bkfBase + 0, 0)
+    w32(bkfBase + 4, 10)
+    w16(bkfBase + 8, 1) // ibkl = 1 -> bkl CP[1] = 10
+    const bklBase = tblBase + 216
+    w32(bklBase + 0, 0)
+    w32(bklBase + 4, 10)
+    const bkmkBase = tblBase + 232
+    w16(bkmkBase + 0, 0xFFFF) // fExtend: UTF-16 names
+    w16(bkmkBase + 2, 1)      // count
+    w16(bkmkBase + 4, 11)     // cch (incl. terminator)
+    const bname = 'MyBookmark'
+    for (let i = 0; i < bname.length; i++) w16(bkmkBase + 6 + i * 2, bname.charCodeAt(i))
+    w16(bkmkBase + 6 + bname.length * 2, 0)
     return buf
   }
 
@@ -1175,6 +1203,11 @@ describe('parseWithFormat field assembly', () => {
     expect(doc.pageFields.length).toBeGreaterThan(0)
     expect(doc.crossReferences.length).toBe(1)
     expect(doc.sections.length).toBe(1)
+    expect(doc.bookmarks.length).toBe(1)
+    expect(doc.bookmarks[0].name).toBe('MyBookmark')
+    expect(doc.charts.length).toBe(1)
+    expect(doc.charts[0].type).toBe('msgraph')
+    expect(doc.wordArts.length).toBe(1)
     expect(doc.paragraphs.length).toBeGreaterThan(0)
   })
 })
