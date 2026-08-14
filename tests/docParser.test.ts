@@ -1308,6 +1308,7 @@ describe('libwv fallback mode', () => {
     writeDir(dirBase + 0 * 128, 'Root Entry', 5, END, 0)
     writeDir(dirBase + 1 * 128, 'WordDocument', 2, 2, 2560)
     writeDir(dirBase + 2 * 128, '0Table', 2, 7, 512)
+    writeDir(dirBase + 3 * 128, 'MSGraph.Chart.8', 1, END, 0)
     const wdBase = SECTOR * 3
     w16(0 + wdBase, 0xA5EC)
     w16(2 + wdBase, 0x0101)
@@ -1339,6 +1340,7 @@ describe('libwv fallback mode', () => {
     const texts = (result.document.paragraphs as Array<{ text: string }>).map(p => p.text).join(' ')
     expect(texts).toContain('Hello libwv world')
     expect(result.document.pictures.length).toBeGreaterThan(0)
+    expect(result.document.charts.length).toBe(1)
   })
 })
 
@@ -1379,6 +1381,7 @@ describe('CLX-unreachable fallback paths', () => {
     writeDir(dirBase + 0 * 128, 'Root Entry', 5, END, 0)
     writeDir(dirBase + 1 * 128, 'WordDocument', 2, 2, 2560)
     writeDir(dirBase + 2 * 128, '0Table', 2, 7, 512)
+    writeDir(dirBase + 3 * 128, 'MSGraph.Chart.8', 1, END, 0)
     const wdBase = SECTOR * 3
     w16(0 + wdBase, 0xA5EC)
     w16(2 + wdBase, 0x0101)
