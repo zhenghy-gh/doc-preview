@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parsePicfAt, extractPicturesFromDataStream, picturesToDataUrls, parseJpegDimensions } from '../src/utils/pictureParser'
+import { parsePicfAt, extractPicturesFromDataStream, picturesToDataUrls, parseJpegDimensions, parsePngDimensions } from '../src/utils/pictureParser'
 
 // Minimal GIF89a: 1x1, no global color table, one image + trailer
 function buildMinimalGif(): Uint8Array {
@@ -392,5 +392,52 @@ describe('parseJpegDimensions', () => {
     expect(jpegResult).toBeDefined()
     expect(jpegResult!.widthPx).toBe(320)
     expect(jpegResult!.heightPx).toBe(240)
+  })
+})
+
+describe('parsePngDimensions', () => {
+  /** Build a PNG signature + IHDR + IEND with explicit width/height. */
+  function buildPngWithIhdr(width: number, height: number): Uint8Array {
+    const bytes: number[] = [
+      0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+      0x00, 0x00, 0x00, 0x0D, // IHDR length
+      0x49, 0x48, 0x44, 0x52, // "IHDR"
+      (width >>> 24) & 0xFF, (width >>> 16) & 0xFF, (width >>> 8) & 0xFF, width & 0xFF,
+      (height >>> 24) & 0xFF, (height >>> 16) & 0xFF, (height >>> 8) & 0xFF, height & 0xFF,
+      0x08, 0x02, 0x00, 0x00, 0x00, // bit depth, color type, etc.
+      0x00, 0x00, 0x00, 0x00, // IHDR CRC (any value)
+      0x00, 0x00, 0x00, 0x00, // IEND length
+      0x49, 0x45, 0x4E, 0x44, // "IEND"
+      0x00, 0x00, 0x00, 0x00, // IEND CRC
+    ]
+    return new Uint8Array(bytes)
+  }
+
+  it('should parse width and height from IHDR', () => {
+    const png = buildPngWithIhdr(1024, 768)
+    const dims = parsePngDimensions(png)
+    expect(dims).toEqual({ width: 1024, height: 768 })
+  })
+
+  it('should return null for non-PNG data', () => {
+    expect(parsePngDimensions(new Uint8Array([1, 2, 3, 4]))).toBeNull()
+    expect(parsePngDimensions(new Uint8Array(10))).toBeNull()
+  })
+
+  it('should return null when IHDR is missing', () => {
+    const png = buildPngWithIhdr(100, 100)
+    png[12] = 0x00 // corrupt chunk type
+    expect(parsePngDimensions(png)).toBeNull()
+  })
+
+  it('should recover dimensions for raw PNG extraction', () => {
+    const png = buildPngWithIhdr(64, 48)
+    const data = new Uint8Array(Math.max(png.length + 20, 80))
+    data.set(png, 10)
+    const results = extractPicturesFromDataStream(data)
+    const pngResult = results.find(r => r.format === 'png')
+    expect(pngResult).toBeDefined()
+    expect(pngResult!.widthPx).toBe(64)
+    expect(pngResult!.heightPx).toBe(48)
   })
 })

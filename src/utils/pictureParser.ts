@@ -400,6 +400,29 @@ export function parseJpegDimensions(data: Uint8Array): { width: number; height: 
 }
 
 /**
+ * Parse the pixel dimensions of a PNG from its IHDR chunk.
+ *
+ * PNG layout: 8-byte signature, then IHDR chunk: length(4 BE) + "IHDR"(4)
+ * + width(4 BE) + height(4 BE) + rest.
+ *
+ * Returns null when the data is not a PNG or the IHDR is malformed.
+ */
+export function parsePngDimensions(data: Uint8Array): { width: number; height: number } | null {
+  if (!data || data.length < 24) return null
+  for (let i = 0; i < PNG_SIGNATURE.length; i++) {
+    if (data[i] !== PNG_SIGNATURE[i]) return null
+  }
+  // Check the chunk type at offset 12..15 is "IHDR"
+  if (data[12] !== 0x49 || data[13] !== 0x48 || data[14] !== 0x44 || data[15] !== 0x52) return null
+  const width = (data[16] << 24) | (data[17] << 16) | (data[18] << 8) | data[19]
+  const height = (data[20] << 24) | (data[21] << 16) | (data[22] << 8) | data[23]
+  if (width > 0 && height > 0 && width < 100000 && height < 100000) {
+    return { width, height }
+  }
+  return null
+}
+
+/**
  * Scan the Data stream for embedded pictures, trying PICF envelope detection
  * first and falling back to magic-number scanning.
  *
@@ -439,10 +462,16 @@ export function extractPicturesFromDataStream(dataStream: Uint8Array): ParsedPic
         type: img.format as PictureType,
         dataOffset: idx,
       }
-      // Raw JPEG fallback has no PICF xExt/yExt — recover real pixel
-      // dimensions from the SOF marker so the UI can size the image.
+      // Raw fallback has no PICF xExt/yExt — recover real pixel dimensions
+      // from the image's own headers so the UI can size the image.
       if (img.format === 'jpeg') {
         const dims = parseJpegDimensions(img.data)
+        if (dims) {
+          pic.widthPx = dims.width
+          pic.heightPx = dims.height
+        }
+      } else if (img.format === 'png') {
+        const dims = parsePngDimensions(img.data)
         if (dims) {
           pic.widthPx = dims.width
           pic.heightPx = dims.height
