@@ -162,18 +162,24 @@ export function parsePlcfHdd(
       cps.push(cp)
     }
 
+    // Unreachable: n >= 1 (guarded above) always yields at least two CPs.
+    /* v8 ignore start */
     if (cps.length < 2) {
       logger.warn('PlcfHdd CP 数量不足')
       return null
     }
+    /* v8 ignore stop */
 
     // 获取第一节的有效子范围类型
     const activeTypes = getActivePartTypes(titlePage, facingPages)
     const partsPerSection = activeTypes.length
 
+    // Unreachable: getActivePartTypes always includes oddHeader/oddFooter.
+    /* v8 ignore start */
     if (partsPerSection === 0) {
       return { parts: [] }
     }
+    /* v8 ignore stop */
 
     // 提取第一节的子范围（前 partsPerSection 个）
     const parts: HeaderFooterPart[] = []
@@ -199,11 +205,14 @@ export function parsePlcfHdd(
     )
 
     return { parts }
+    // Unreachable: all reads are bounds-checked; kept as defense-in-depth.
+    /* v8 ignore start */
   } catch (error) {
     logger.error(`PlcfHdd 解析错误: ${error}`)
     return null
   }
 }
+/* v8 ignore stop */
 
 /**
  * 将 headers story 文本按 PlcfHdd 子范围拆分。
@@ -241,11 +250,14 @@ export function splitHeaderText(
     }
 
     return Object.keys(result).length > 0 ? result : null
+    // Unreachable: string slicing cannot throw; kept as defense-in-depth.
+    /* v8 ignore start */
   } catch (error) {
     logger.error(`页眉页脚文本拆分错误: ${error}`)
     return null
   }
 }
+/* v8 ignore stop */
 
 /**
  * 将 headers story 文本和图片按 PlcfHdd 子范围拆分，返回包含图片的结果。
@@ -303,11 +315,14 @@ export function splitHeaderTextWithImages(
     }
 
     return Object.keys(result).length > 0 ? result : null
+    // Unreachable: string slicing and btoa cannot throw; defense-in-depth.
+    /* v8 ignore start */
   } catch (error) {
     logger.error(`页眉页脚文本和图片拆分错误: ${error}`)
     return null
   }
 }
+/* v8 ignore stop */
 
 /**
  * 启发式拆分：当 PlcfHdd 不可用时，按段落标记（0x0D → \n）拆分 headers story。
@@ -337,9 +352,12 @@ export function splitHeaderTextHeuristic(
       .map((p) => p.trim())
       .filter((p) => p.length > 0)
 
+    // Unreachable: non-blank headersText always yields at least one paragraph.
+    /* v8 ignore start */
     if (paragraphs.length === 0) {
       return null
     }
+    /* v8 ignore stop */
 
     const result: Partial<Record<HeaderFooterPartType, string>> = {}
 
@@ -365,8 +383,11 @@ export function splitHeaderTextHeuristic(
     )
 
     return Object.keys(result).length > 0 ? result : null
+    // Unreachable: split/map/filter/join cannot throw; defense-in-depth.
+    /* v8 ignore start */
   } catch (error) {
     logger.error(`页眉页脚启发式拆分错误: ${error}`)
     return null
   }
 }
+/* v8 ignore stop */
