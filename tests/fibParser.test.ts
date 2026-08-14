@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { detectWordVersion, parseFib } from '../src/utils/fibParser'
+import { detectWordVersion, isTextutilFib, parseFib } from '../src/utils/fibParser'
 
 // FibRgFcLcb97 pair indices (MS-DOC §2.5.5). Each pair is 8 bytes
 // (4-byte fc + 4-byte lcb). cbRgFcLcb is the count of pairs.
@@ -129,6 +129,26 @@ describe('parseFib', () => {
   it('should return null for invalid magic', () => {
     const data = createFibData({ magic: 0x1234 })
     expect(parseFib(data)).toBeNull()
+  })
+
+  it('should fall back to default cslw when the value is illegal', () => {
+    // cslw = 0 (below minimum 1) → fall back to 22 DWORDs
+    const data = createFibData({ cslw: 0 })
+    const result = parseFib(data)
+    expect(result).not.toBeNull()
+    // With the default cslw, ccpText sits at the standard offset.
+    expect(result!.rgCcp).toBeDefined()
+  })
+
+  it('should return a minimal FIB when FibRgLw is out of range', () => {
+    // Small buffer (cbRgFcLcb=0 keeps it short): cslw falls back to 22 but
+    // the buffer still cannot fit FibRgLw → early minimal return.
+    const data = createFibData({ cslw: 0, cbRgFcLcb: 0 })
+    const result = parseFib(data)
+    expect(result).not.toBeNull()
+    expect(result!.fcClx).toBe(0)
+    expect(result!.lcbClx).toBe(0)
+    expect(result!.fcDop).toBe(0)
   })
 
   it('should parse valid FIB with fComplex=0 (UTF-16LE)', () => {
@@ -427,5 +447,49 @@ describe('detectWordVersion', () => {
   it('should reject non-integer and out-of-range nFib values', () => {
     expect(detectWordVersion(193.5)).toBe('unknown')
     expect(detectWordVersion(0x10000)).toBe('unknown')
+  })
+
+  it('should classify all Word version ranges', () => {
+    expect(detectWordVersion(0x005E)).toBe('word95')
+    expect(detectWordVersion(0x005F)).toBe('word95')
+    expect(detectWordVersion(0x0060)).toBe('word97')
+    expect(detectWordVersion(0x00C1)).toBe('word97')
+    expect(detectWordVersion(0x00C2)).toBe('word2000')
+    expect(detectWordVersion(0x00D9)).toBe('word2000')
+    expect(detectWordVersion(0x00DA)).toBe('word2002')
+    expect(detectWordVersion(0x00E1)).toBe('word2002')
+    expect(detectWordVersion(0x00E2)).toBe('word2003')
+    expect(detectWordVersion(0x0107)).toBe('word2003')
+    expect(detectWordVersion(0x0108)).toBe('word2007+')
+    expect(detectWordVersion(0x0110)).toBe('word2007+')
+    expect(detectWordVersion(0xFFFF)).toBe('word2007+')
+  })
+})
+
+describe('isTextutilFib', () => {
+  it('should return false for data shorter than 32 bytes', () => {
+    expect(isTextutilFib(new Uint8Array(20))).toBe(false)
+  })
+
+  it('should return false when byte 10 is not 0xBF', () => {
+    const data = new Uint8Array(64)
+    data[10] = 0x00
+    expect(isTextutilFib(data)).toBe(false)
+  })
+
+  it('should return false when csw exceeds 100 (not a minimal FIB)', () => {
+    const data = new Uint8Array(64)
+    data[10] = 0xBF
+    data[32] = 0xFF
+    data[33] = 0x00 // csw = 255 > 100
+    expect(isTextutilFib(data)).toBe(false)
+  })
+
+  it('should return true for a typical textutil FIB signature', () => {
+    const data = new Uint8Array(64)
+    data[10] = 0xBF
+    data[32] = 0x0A
+    data[33] = 0x00 // csw = 10 ≤ 100
+    expect(isTextutilFib(data)).toBe(true)
   })
 })
