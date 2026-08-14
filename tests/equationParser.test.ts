@@ -273,3 +273,16 @@ describe('extractEquationsFromDirectory', () => {
     expect(result[1].id).toBe(2)
   })
 })
+
+describe('extractEquationsFromDirectory read failure', () => {
+  it('catches a throwing stream reader', () => {
+    const directory: any[] = [
+      { name: 'Equation.1', objectType: 1 },
+      { name: 'Equation.1\x00EquationText', objectType: 2 },
+    ]
+    const result = extractEquationsFromDirectory(directory, () => {
+      throw new Error('stream boom')
+    })
+    expect(result).toEqual([])
+  })
+})

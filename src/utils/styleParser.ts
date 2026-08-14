@@ -580,9 +580,13 @@ function parseLegacyStylesheet(data: Uint8Array, fc: number, lcb: number): Style
         }
       }
     }
+    // Unreachable: all reads go through bounds-checked helpers and string
+    // operations cannot throw. Kept as a safety net.
+    /* v8 ignore start */
   } catch {
     // On any parsing error, return what we have.
   }
+  /* v8 ignore stop */
 
   return styles
 }

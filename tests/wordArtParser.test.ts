@@ -352,3 +352,36 @@ describe('wordArtParser', () => {
     })
   })
 })
+
+describe('extractWordArtFromDirectory read failure', () => {
+  it('catches a throwing stream reader', () => {
+    const directory: any[] = [
+      { name: 'WordArt.9', objectType: 1 },
+      { name: 'WordArt.9\x00Data', objectType: 2 },
+    ]
+    const result = extractWordArtFromDirectory(directory, () => {
+      throw new Error('stream boom')
+    })
+    expect(result).toEqual([])
+  })
+})
+
+describe('extractWordArtFromDirectory filter', () => {
+  it('rejects non-WordArt storages', () => {
+    const directory: any[] = [
+      { name: 'Other.1', objectType: 1 },
+      { name: 'PlainStream', objectType: 2 },
+    ]
+    const result = extractWordArtFromDirectory(directory, () => null)
+    expect(result).toEqual([])
+  })
+})
+
+describe('extractWordArtFromDrawingData marker scan', () => {
+  it('walks past non-matching bytes after the word-art marker', () => {
+    const bytes: number[] = [0xE0, 0x00, 0x00, 0x00]
+    for (let i = 0; i < 146; i++) bytes.push((i * 7 + 1) & 0xFF) // non-zero, never 8 zero bytes
+    const result = extractWordArtFromDrawingData(new Uint8Array(bytes))
+    expect(result.length).toBe(1)
+  })
+})
