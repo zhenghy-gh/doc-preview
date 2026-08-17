@@ -1546,6 +1546,9 @@ describe('form feed page breaks', () => {
     // pair 12: PlcfBteChpx with one empty-CHPX run over cp [0, 11]
     w32(126 + 12 * 8 + wdBase, 120)
     w32(126 + 12 * 8 + 4 + wdBase, 12)
+    // pair 13: PlcfBtePapx with one PAPX run over cp [0, 3]
+    w32(126 + 13 * 8 + wdBase, 140)
+    w32(126 + 13 * 8 + 4 + wdBase, 14)
     const clxSize = 1 + 4 + 4 * 2 + 8
     w32(126 + 33 * 8 + wdBase, 0)
     w32(126 + 33 * 8 + 4 + wdBase, clxSize)
@@ -1562,6 +1565,11 @@ describe('form feed page breaks', () => {
     w32(tblBase + 120, 0)
     w32(tblBase + 124, 11)
     w16(tblBase + 128, 2)
+    // PlcfBtePapx at 140: aCP [0,3], aPcb [4], PAPX cb=4 (istd=0, no grpprl)
+    w32(tblBase + 140, 0)
+    w32(tblBase + 144, 3)
+    w16(tblBase + 148, 4)
+    w16(tblBase + 150, 0) // istd = 0
     const parser = new DocParser(buf)
     const result = parser.parseWithFormat()
     expect(result.success).toBe(true)
