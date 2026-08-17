@@ -1540,7 +1540,7 @@ describe('form feed page breaks', () => {
     w16(10 + wdBase, 0)
     w16(32 + wdBase, 0)
     w16(34 + wdBase, 22)
-    const text = 'Hello\fWorld'
+    const text = '\f\fWorld'
     w32(36 + 12 + wdBase, text.length) // ccpText
     w16(124 + wdBase, 34)
     // pair 12: PlcfBteChpx with one empty-CHPX run over cp [0, 11]
@@ -1561,9 +1561,9 @@ describe('form feed page breaks', () => {
     w32(tblBase + 5, 0)
     w32(tblBase + 9, text.length)
     w32(tblBase + 13 + 2, textOffset)
-    // PlcfBteChpx at 120: aCP [0,11], aPcb [2], CHPX cb=2 (empty grpprl)
+    // PlcfBteChpx at 120: aCP [0,8], aPcb [2], CHPX cb=2 (empty grpprl)
     w32(tblBase + 120, 0)
-    w32(tblBase + 124, 11)
+    w32(tblBase + 124, 8)
     w16(tblBase + 128, 2)
     // PlcfBtePapx at 140: aCP [0,3], aPcb [4], PAPX cb=4 (istd=0, no grpprl)
     w32(tblBase + 140, 0)
@@ -1573,8 +1573,10 @@ describe('form feed page breaks', () => {
     const parser = new DocParser(buf)
     const result = parser.parseWithFormat()
     expect(result.success).toBe(true)
-    const texts = (result.document.paragraphs as Array<{ text: string; paraFormat?: { pageBreakBefore?: boolean } }>).map(p => p.text)
-    expect(texts.join(' ')).toContain('Hello')
+    const paras = result.document.paragraphs as Array<{ text: string; paraFormat?: { pageBreakBefore?: boolean } }>
+    const texts = paras.map(p => p.text)
+    expect(texts.join(' ')).toContain('World')
+    expect(paras[0].paraFormat?.pageBreakBefore).toBe(true)
   })
 })
 
