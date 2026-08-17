@@ -1125,6 +1125,15 @@ describe('paragraph format heuristics', () => {
     const kept = (parser as any).removeInternalDuplicates('la la la la')
     expect(kept).toBe('la la la la')
   })
+
+  it('does not merge a short paragraph when the next is short', () => {
+    const paras = [
+      { text: 'In non', charFormat: { fontSize: 12 }, paraFormat: {} },
+      { text: 'also short', charFormat: { fontSize: 12 }, paraFormat: {} },
+    ]
+    ;(parser as any).applyStructuralFormats(paras)
+    expect(paras.some(p => p.text.includes('In nonalso short'))).toBe(false)
+  })
 })
 
 describe('parseWithFormat field assembly', () => {

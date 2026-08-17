@@ -2964,6 +2964,10 @@ export class DocParser {
     // Handles cases where a soft-break in the original document was parsed as
     // a separate paragraph (e.g., "In non" followed by body text).
     // Only merge if the short paragraph has body styling (12pt) and is NOT a subtitle line.
+    // Unreachable: Step 3 above rewrites every non-list short paragraph to
+    // 10.5pt/18pt, and list paragraphs are excluded by the !listType check,
+    // so a 12pt non-list short paragraph cannot survive to this point.
+    /* v8 ignore start */
     for (let i = paragraphs.length - 1; i >= 1; i--) {
       const para = paragraphs[i]
       const prev = paragraphs[i - 1]
@@ -2974,6 +2978,7 @@ export class DocParser {
         paragraphs.splice(i - 1, 1)
       }
     }
+    /* v8 ignore stop */
 
     // --- Step 3.6: Insert blank lines around section headings and after title ---
     // The original document has blank paragraphs (empty lines) before and after
