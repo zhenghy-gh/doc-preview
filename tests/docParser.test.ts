@@ -1058,6 +1058,30 @@ describe('fallback text paths', () => {
   })
 })
 
+describe('character format title guessing', () => {
+  const parser = new DocParser(new ArrayBuffer(512))
+
+  it('treats a short all-Chinese line as a big Chinese title (bold, 36pt)', () => {
+    // 5 Chinese chars: not pureName (>4), no sentence punctuation, no
+    // English/ALL-CAPS title, chineseRatio>0.5, length<22, count>=2
+    const cf = (parser as any).guessCharFormat('中文测试标')
+    expect(cf.bold).toBe(true)
+    expect(cf.fontSize).toBe(36) // stripped.length < 6
+  })
+
+  it('treats a longer Chinese heading as a 22pt title', () => {
+    const cf = (parser as any).guessCharFormat('中文测试标题文本')
+    expect(cf.bold).toBe(true)
+    expect(cf.fontSize).toBe(22) // stripped.length >= 6
+  })
+
+  it('does not treat mixed long text as a short Chinese title', () => {
+    // chineseRatio 0.5 (not > 0.5) and lowercase start → no title branch fires
+    const cf = (parser as any).guessCharFormat('hello 世界这是很长')
+    expect(cf.bold).not.toBe(true)
+  })
+})
+
 describe('parseWithFormat field assembly', () => {
   /**
    * A Word 97-style document with HYPERLINK/AUTHOR/PAGE/TOC/INDEX/REF
