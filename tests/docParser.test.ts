@@ -1504,7 +1504,10 @@ describe('CLX-unreachable fallback paths', () => {
 })
 
 describe('form feed page breaks', () => {
-  it('splits paragraphs on embedded form feeds with real CHPX runs', () => {
+  // Builds a minimal 5-sector OLE with a single UTF-16 paragraph whose text
+  // may contain \f form feeds, plus one CHPX run and one PAPX run so the
+  // real-formats path (createParagraphsWithRealFormats) parses it.
+  const buildFormFeedOle = (text: string) => {
     const SECTOR = 512
     const buf = new ArrayBuffer(SECTOR * 5)
     const view = new Uint8Array(buf)
@@ -1542,10 +1545,9 @@ describe('form feed page breaks', () => {
     w16(10 + wdBase, 0)
     w16(32 + wdBase, 0)
     w16(34 + wdBase, 22)
-    const text = '\f\fWorld'
     w32(36 + 12 + wdBase, text.length) // ccpText
     w16(124 + wdBase, 34)
-    // pair 12: PlcfBteChpx with one empty-CHPX run over cp [0, 11]
+    // pair 12: PlcfBteChpx with one empty-CHPX run covering the text
     w32(126 + 12 * 8 + wdBase, 120)
     w32(126 + 12 * 8 + 4 + wdBase, 12)
     // pair 13: PlcfBtePapx with one PAPX run over cp [0, 3]
@@ -1563,22 +1565,40 @@ describe('form feed page breaks', () => {
     w32(tblBase + 5, 0)
     w32(tblBase + 9, text.length)
     w32(tblBase + 13 + 2, textOffset)
-    // PlcfBteChpx at 120: aCP [0,8], aPcb [2], CHPX cb=2 (empty grpprl)
+    // PlcfBteChpx at 120: aCP [0, n], aPcb [2], CHPX cb=2 (empty grpprl)
     w32(tblBase + 120, 0)
-    w32(tblBase + 124, 8)
+    w32(tblBase + 124, Math.min(text.length, 8))
     w16(tblBase + 128, 2)
     // PlcfBtePapx at 140: aCP [0,3], aPcb [4], PAPX cb=4 (istd=0, no grpprl)
     w32(tblBase + 140, 0)
     w32(tblBase + 144, 3)
     w16(tblBase + 148, 4)
     w16(tblBase + 150, 0) // istd = 0
-    const parser = new DocParser(buf)
+    return buf
+  }
+
+  const parseFormFeed = (text: string) => {
+    const parser = new DocParser(buildFormFeedOle(text))
     const result = parser.parseWithFormat()
     expect(result.success).toBe(true)
-    const paras = result.document.paragraphs as Array<{ text: string; paraFormat?: { pageBreakBefore?: boolean } }>
+    return result.document.paragraphs as Array<{ text: string; paraFormat?: { pageBreakBefore?: boolean } }>
+  }
+
+  it('splits paragraphs on embedded form feeds with real CHPX runs', () => {
+    const paras = parseFormFeed('\f\fWorld')
     const texts = paras.map(p => p.text)
     expect(texts.join(' ')).toContain('World')
     expect(paras[0].paraFormat?.pageBreakBefore).toBe(true)
+  })
+
+  it('keeps the leading segment when a form feed follows real text', () => {
+    // \f in the middle of a paragraph: the non-empty leading segment is kept
+    // as-is (no page break), the trailing segment is dropped.
+    const paras = parseFormFeed('Hello\fWorld')
+    const texts = paras.map(p => p.text)
+    expect(texts).toContain('Hello')
+    expect(texts.join(' ')).not.toContain('World')
+    expect(paras[0].paraFormat?.pageBreakBefore).not.toBe(true)
   })
 })
 
