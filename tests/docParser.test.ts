@@ -1153,7 +1153,13 @@ describe('parseWithFormat field assembly', () => {
     w32(126 + 16 * 8 + 4 + wdBase, 112)
     // pair 12: PlcfBteChpx -> 0Table offset 270 (CHPX with a revision mark)
     w32(126 + 12 * 8 + wdBase, 270)
-    w32(126 + 12 * 8 + 4 + wdBase, 25)
+    w32(126 + 12 * 8 + 4 + wdBase, 33)
+    // pair 1: Stshf -> 0Table offset 400 (one 'Strong' character style)
+    w32(126 + 1 * 8 + wdBase, 400)
+    w32(126 + 1 * 8 + 4 + wdBase, 41)
+    // pair 15: SttbfFfn -> 0Table offset 441 (one 'Times New Roman' entry)
+    w32(126 + 15 * 8 + wdBase, 441)
+    w32(126 + 15 * 8 + 4 + wdBase, 51)
     // pairs 21-23: bookmarks (PlcfBkf/PlcfBkl/SttbfBkmk at 0Table 200/216/232)
     // pair 21 = fcSttbfBkmk, 22 = fcPlcfBkf, 23 = fcPlcfBkl
     w32(126 + 21 * 8 + wdBase, 232)
@@ -1162,8 +1168,8 @@ describe('parseWithFormat field assembly', () => {
     w32(126 + 22 * 8 + 4 + wdBase, 12)
     w32(126 + 23 * 8 + wdBase, 216)
     w32(126 + 23 * 8 + 4 + wdBase, 12)
-    // pair 51: SttbfRMark (revision authors) -> 0Table offset 300
-    w32(126 + 51 * 8 + wdBase, 300)
+    // pair 51: SttbfRMark (revision authors) -> 0Table offset 320
+    w32(126 + 51 * 8 + wdBase, 320)
     w32(126 + 51 * 8 + 4 + wdBase, 18)
     // pair 33: fcClx/lcbClx -> 0Table offset 0
     const clxSize = 1 + 4 + 4 * 2 + 8
@@ -1247,14 +1253,23 @@ describe('parseWithFormat field assembly', () => {
     w16(sedBase + 8, 0)
     w32(sedBase + 10, END)
     w16(sedBase + 14, 0)
-    // SttbfRMark at 300: one author 'Alice'
-    const rmarkBase = tblBase + 300
+    // SttbfRMark at 320: one author 'Alice'
+    const rmarkBase = tblBase + 320
     w16(rmarkBase + 0, 0xFFFF) // fExtend: unicode
     w16(rmarkBase + 2, 1)      // cbSttb
     w16(rmarkBase + 4, 6)      // cbString incl. terminator
     const alice = 'Alice'
     for (let i = 0; i < alice.length; i++) w16(rmarkBase + 6 + i * 2, alice.charCodeAt(i))
     w16(rmarkBase + 6 + alice.length * 2, 0)
+    // SttbfFfn at 441: cFfn=1, one FFN entry 'Times New Roman' (cbFfn=49)
+    const ffnBase = tblBase + 441
+    w16(ffnBase + 0, 1) // cFfn
+    view[ffnBase + 2] = 49 // entry cbFfn
+    view[ffnBase + 3] = 0
+    view[ffnBase + 4] = 49
+    const tname = 'Times New Roman'
+    for (let i = 0; i < tname.length; i++) w16(ffnBase + 4 + 18 + i * 2, tname.charCodeAt(i))
+    w16(ffnBase + 4 + 18 + tname.length * 2, 0)
     // Data stream (sector 7, physical 4096): a second FDG for
     // extractShapesFromDataStream
     const dataBase = SECTOR * 8
@@ -1282,8 +1297,10 @@ describe('parseWithFormat field assembly', () => {
     const chpxBase = tblBase + 270
     w32(chpxBase + 0, 0)
     w32(chpxBase + 4, 10)
-    // grpprl: CFRMark on, then IBST_RMARK (author 0) and DTTM_RMARK
-    w16(chpxBase + 8, 15) // aPcb cb = 15; grpprl (13 bytes) follows at +10
+    // grpprl: CFRMark on, then IBST_RMARK (author 0), DTTM_RMARK,
+    // sprmCIstd pointing at the 'Strong' character style (istd 0), and
+    // sprmCRgFtc0 pointing at font index 0 in the SttbfFfn table.
+    w16(chpxBase + 8, 23) // aPcb cb = 23; grpprl (21 bytes) follows at +10
     view[chpxBase + 10] = 0x01 // sprmCFRMark (0x0801)
     view[chpxBase + 11] = 0x08
     view[chpxBase + 12] = 0x01 // toggle on -> insert revision
@@ -1294,6 +1311,34 @@ describe('parseWithFormat field assembly', () => {
     view[chpxBase + 17] = 0x05 // sprmCDttmRMark (0x6805)
     view[chpxBase + 18] = 0x68
     w32(chpxBase + 19, 0x01020304) // dttm timestamp
+    view[chpxBase + 23] = 0x30 // sprmCIstd (0x4A30)
+    view[chpxBase + 24] = 0x4A
+    w16(chpxBase + 25, 0) // istd 0 = Strong
+    view[chpxBase + 27] = 0x4F // sprmCRgFtc0 (0x4A4F)
+    view[chpxBase + 28] = 0x4A
+    w16(chpxBase + 29, 0) // font index 0 = Times New Roman
+    // STSH at 400: LPStshi (cbStshi=6) + STSHI(cstd=1, cbSTDBaseInFile=10)
+    // + one LPStd: 'Strong' character style with a bold CHPX grpprl
+    const stshBase = tblBase + 400
+    w16(stshBase + 0, 6)     // cbStshi
+    w16(stshBase + 2, 1)     // cstd
+    w16(stshBase + 4, 10)    // cbSTDBaseInFile
+    w16(stshBase + 6, 0)     // stshiExtraData flags
+    w16(stshBase + 8, 31)    // cbStd of the first LPStd
+    w16(stshBase + 10, 0)    // sti = 0
+    w16(stshBase + 12, 0xFFF2) // stk=2 (character) + istdBase=0x0FFF
+    w16(stshBase + 14, 0x0001) // cupx=1 + istdNext=0
+    w16(stshBase + 16, 0)    // bchUpe
+    w16(stshBase + 18, 0)    // grfstd
+    const sname = 'Strong'
+    w16(stshBase + 20, sname.length)
+    for (let i = 0; i < sname.length; i++) w16(stshBase + 22 + i * 2, sname.charCodeAt(i))
+    w16(stshBase + 22 + sname.length * 2, 0)
+    // UpxChpx: cbUpx=3 (sprmCBold toggle on) at offset 22+12+2=36
+    w16(stshBase + 36, 3)
+    view[stshBase + 38] = 0x35 // sprmCBold (0x0835)
+    view[stshBase + 39] = 0x08
+    view[stshBase + 40] = 0x01 // toggle on
     // Bookmark tables: one bookmark over cp [0, 10]
     const bkfBase = tblBase + 200
     w32(bkfBase + 0, 0)
