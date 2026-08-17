@@ -1387,7 +1387,7 @@ describe('parseWithFormat field assembly', () => {
 
 describe('libwv fallback mode', () => {
   /** WordDocument with no CLX: lcbClx=0, ccpText>0, text at stream offset 2048. */
-  function buildLibwvOle(): ArrayBuffer {
+  function buildLibwvOle(withTableAndChart = true): ArrayBuffer {
     const SECTOR = 512
     const buf = new ArrayBuffer(SECTOR * 9)
     const view = new Uint8Array(buf)
@@ -1421,8 +1421,8 @@ describe('libwv fallback mode', () => {
     }
     writeDir(dirBase + 0 * 128, 'Root Entry', 5, END, 0)
     writeDir(dirBase + 1 * 128, 'WordDocument', 2, 2, 2560)
-    writeDir(dirBase + 2 * 128, '0Table', 2, 7, 512)
-    writeDir(dirBase + 3 * 128, 'MSGraph.Chart.8', 1, END, 0)
+    writeDir(dirBase + 2 * 128, '0Table', 2, 7, withTableAndChart ? 512 : 2)
+    if (withTableAndChart) writeDir(dirBase + 3 * 128, 'MSGraph.Chart.8', 1, END, 0)
     const wdBase = SECTOR * 3
     w16(0 + wdBase, 0xA5EC)
     w16(2 + wdBase, 0x0101)
@@ -1483,6 +1483,17 @@ describe('libwv fallback mode', () => {
     // Default font from the parsed font table applied to paragraphs
     const para0 = (result.document.paragraphs as Array<{ charFormat?: { fontName?: string } }>)[0]
     expect(para0.charFormat?.fontName).toBe('Times New Roman')
+  })
+
+  it('returns structural paragraphs when the libwv table stream is empty', () => {
+    // No 0Table content and no MSGraph storage: tryParseFormatsFromTableStream
+    // yields nothing, so the fallback returns fixed paragraphs only.
+    const parser = new DocParser(buildLibwvOle(false))
+    const result = parser.parseWithFormat()
+    expect(result.success).toBe(true)
+    const texts = (result.document.paragraphs as Array<{ text: string }>).map(p => p.text).join(' ')
+    expect(texts).toContain('Hello libwv world')
+    expect(result.document.charts?.length ?? 0).toBe(0)
   })
 })
 
