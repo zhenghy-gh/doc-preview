@@ -1082,6 +1082,35 @@ describe('character format title guessing', () => {
   })
 })
 
+describe('paragraph format heuristics', () => {
+  const parser = new DocParser(new ArrayBuffer(512))
+
+  it('detects square CJK bullets as unordered list items', () => {
+    // ▪ is in the disc set checked earlier, so only ▫◦‣⁃ reach the square rule
+    for (const marker of ['▫', '◦', '‣', '⁃']) {
+      const info = (parser as any).detectListInfo(`${marker} item`)
+      expect(info).toEqual({ listType: 'unordered', listStyle: 'square', listLevel: 0 })
+    }
+  })
+
+  it('detects disc bullets with a plain-space separator', () => {
+    const info = (parser as any).detectListInfo('▪ item')
+    expect(info).toEqual({ listType: 'unordered', listStyle: 'disc', listLevel: 0 })
+  })
+
+  it('centers paragraphs with a modest leading-space ratio', () => {
+    // 2 leading spaces + 5 chars: ratio 2/7 ≈ 0.29 ∈ (0.15, 0.5)
+    const alignment = (parser as any).detectAlignment('  Hello', 0, 10)
+    expect(alignment).toBe('center')
+  })
+
+  it('does not center when leading space is too small or too large', () => {
+    expect((parser as any).detectAlignment('Hello', 0, 10)).not.toBe('center')
+    // 9 leading spaces + 1 char: ratio 0.9 — outside the window
+    expect((parser as any).detectAlignment('         X', 0, 10)).not.toBe('center')
+  })
+})
+
 describe('parseWithFormat field assembly', () => {
   /**
    * A Word 97-style document with HYPERLINK/AUTHOR/PAGE/TOC/INDEX/REF
