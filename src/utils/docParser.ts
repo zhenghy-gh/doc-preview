@@ -3924,11 +3924,16 @@ export function parseDocFileFromBuffer(
   try {
     const parser = new DocParser(buffer)
     return parser.parseWithFormat()
+    // Unreachable: parseWithFormat wraps its whole body in its own try/catch
+    // and DocParser's constructor performs no throwing work. Kept as a
+    // last-resort safety net for exotic callers.
+    /* v8 ignore start */
   } catch (error) {
     const message = error instanceof Error ? error.message : '未知错误'
     const fileHint = fileName ? `（文件: ${fileName}）` : ''
     return { success: false, error: `解析失败${fileHint}: ${message}` }
   }
+  /* v8 ignore stop */
 }
 
 /**
