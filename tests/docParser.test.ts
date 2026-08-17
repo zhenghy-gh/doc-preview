@@ -1109,6 +1109,22 @@ describe('paragraph format heuristics', () => {
     // 9 leading spaces + 1 char: ratio 0.9 — outside the window
     expect((parser as any).detectAlignment('         X', 0, 10)).not.toBe('center')
   })
+
+  it('collapses a triple tandem repeat to a single copy', () => {
+    // Three consecutive 12-char copies: the inner while loop counts to 3
+    // before slicing the repeated span away.
+    const collapsed = (parser as any).removeInternalDuplicates(
+      'hello abcdefghijklabcdefghijklabcdefghijkl world',
+    )
+    expect(collapsed).toContain('hello abcdefghijkl world')
+    expect(collapsed).not.toContain('abcdefghijklabcdefghijkl')
+  })
+
+  it('leaves short tandem repeats untouched', () => {
+    // Period 3 < the 12-char threshold: "la la la" stays intact
+    const kept = (parser as any).removeInternalDuplicates('la la la la')
+    expect(kept).toBe('la la la la')
+  })
 })
 
 describe('parseWithFormat field assembly', () => {
