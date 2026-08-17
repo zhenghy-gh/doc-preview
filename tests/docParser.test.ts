@@ -1432,7 +1432,7 @@ describe('parseWithFormat field assembly', () => {
 
 describe('libwv fallback mode', () => {
   /** WordDocument with no CLX: lcbClx=0, ccpText>0, text at stream offset 2048. */
-  function buildLibwvOle(withTableAndChart = true): ArrayBuffer {
+  function buildLibwvOle(withTableAndChart = true, customText?: string): ArrayBuffer {
     const SECTOR = 512
     const buf = new ArrayBuffer(SECTOR * 9)
     const view = new Uint8Array(buf)
@@ -1474,7 +1474,7 @@ describe('libwv fallback mode', () => {
     w16(10 + wdBase, 0)
     w16(32 + wdBase, 0)
     w16(34 + wdBase, 22)
-    const text = 'Hello libwv world\r\nA\u0007B\u0007\u0007C\u0007D\u0007\u0007E\u0007F\r\n'
+    const text = customText ?? 'Hello libwv world\r\nA\u0007B\u0007\u0007C\u0007D\u0007\u0007E\u0007F\r\n'
     w32(36 + 12 + wdBase, text.length) // ccpText
     w16(124 + wdBase, 34) // cbRgFcLcb: all pairs zero (no CLX, no tables)
     // Text at stream offset 2048 (libwv convention), 5-sector WordDocument
@@ -1539,6 +1539,18 @@ describe('libwv fallback mode', () => {
     const texts = (result.document.paragraphs as Array<{ text: string }>).map(p => p.text).join(' ')
     expect(texts).toContain('Hello libwv world')
     expect(result.document.charts?.length ?? 0).toBe(0)
+  })
+
+  it('keeps a single table row as one paragraph and strips trailing cell marks', () => {
+    // 'RowEnd\u0007\u0007' has a single row (the cell-mark run is only
+    // trailing), so splitMultiRowTables falls back to keeping the paragraph
+    // with trailing \u0007 removed.
+    const parser = new DocParser(buildLibwvOle(true, 'RowEnd\u0007\u0007'))
+    const result = parser.parseWithFormat()
+    expect(result.success).toBe(true)
+    const texts = (result.document.paragraphs as Array<{ text: string }>).map(p => p.text)
+    expect(texts.some(t => t.includes('Row') && t.includes('End'))).toBe(true)
+    expect(texts.some(t => t.includes('\u0007'))).toBe(false)
   })
 })
 
