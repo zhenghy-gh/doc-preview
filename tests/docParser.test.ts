@@ -1625,3 +1625,98 @@ describe('readClxData WordDocument fallback', () => {
     expect(clx![0]).toBe(0xAB)
   })
 })
+
+describe('real list format from LFO', () => {
+  it('applies list format via PAPX ilfo, LST and LFO tables', () => {
+    const SECTOR = 512
+    const buf = new ArrayBuffer(SECTOR * 8)
+    const view = new Uint8Array(buf)
+    const w16 = (off: number, v: number) => { view[off] = v & 0xff; view[off + 1] = (v >> 8) & 0xff }
+    const w32 = (off: number, v: number) => {
+      view[off] = v & 0xff; view[off + 1] = (v >> 8) & 0xff
+      view[off + 2] = (v >> 16) & 0xff; view[off + 3] = (v >> 24) & 0xff
+    }
+    const END = 0xFFFFFFFE, FREE = 0xFFFFFFFF
+    view[0] = 0xD0; view[1] = 0xCF; view[2] = 0x11; view[3] = 0xE0
+    view[4] = 0xA1; view[5] = 0xB1; view[6] = 0x1A; view[7] = 0xE1
+    w16(26, 3); w16(30, 9); w16(32, 6)
+    w32(48, 1); w32(56, 4096)
+    w32(60, END); w32(64, 0); w32(68, END); w32(72, 0)
+    w32(76, 0)
+    for (let i = 1; i < 109; i++) w32(76 + i * 4, FREE)
+    const fatBase = SECTOR
+    for (let i = 0; i < 5; i++) w32(fatBase + i * 4, i < 4 ? (i === 2 ? 3 : i === 3 ? 4 : i === 4 ? 5 : END) : END)
+    w32(fatBase + 2 * 4, 3); w32(fatBase + 3 * 4, 4); w32(fatBase + 4 * 4, 5); w32(fatBase + 5 * 4, END); w32(fatBase + 6 * 4, END)
+    for (let i = 7; i < 128; i++) w32(fatBase + i * 4, FREE)
+    const dirBase = SECTOR * 2
+    const writeDir = (off: number, name: string, type: number, start: number, size: number) => {
+      for (let i = 0; i < name.length; i++) w16(off + i * 2, name.charCodeAt(i))
+      w16(off + 64, name.length * 2)
+      view[off + 66] = type
+      view[off + 67] = 1
+      w32(off + 116, start)
+      w32(off + 120, size)
+    }
+    writeDir(dirBase + 0 * 128, 'Root Entry', 5, END, 0)
+    writeDir(dirBase + 1 * 128, 'WordDocument', 2, 2, 2048)
+    writeDir(dirBase + 2 * 128, '0Table', 2, 6, 512)
+    const wdBase = SECTOR * 3
+    w16(0 + wdBase, 0xA5EC)
+    w16(2 + wdBase, 0x0101)
+    w16(10 + wdBase, 0)
+    w16(32 + wdBase, 0)
+    w16(34 + wdBase, 22)
+    const text = 'List item'
+    w32(36 + 12 + wdBase, text.length) // ccpText
+    w16(124 + wdBase, 75) // cbRgFcLcb: 75 pairs covers fcLst(73)/fcPlcfLfo(74)
+    // pair 13: PlcfBtePapx -> 0Table 140, lcb 18
+    w32(126 + 13 * 8 + wdBase, 140)
+    w32(126 + 13 * 8 + 4 + wdBase, 18)
+    // pair 73: fcLst -> 0Table 200, lcb 70
+    w32(126 + 73 * 8 + wdBase, 200)
+    w32(126 + 73 * 8 + 4 + wdBase, 70)
+    // pair 74: fcPlcfLfo -> 0Table 280, lcb 16
+    w32(126 + 74 * 8 + wdBase, 280)
+    w32(126 + 74 * 8 + 4 + wdBase, 16)
+    const clxSize = 1 + 4 + 4 * 2 + 8
+    w32(126 + 33 * 8 + wdBase, 0)
+    w32(126 + 33 * 8 + 4 + wdBase, clxSize)
+    const textOffset = 900
+    for (let i = 0; i < text.length; i++) w16(textOffset + i * 2 + wdBase, text.charCodeAt(i))
+    w16(textOffset + text.length * 2 + wdBase, 0x0D)
+    const tblBase = SECTOR * 7
+    view[tblBase + 0] = 0x02
+    w32(tblBase + 1, 16)
+    w32(tblBase + 5, 0)
+    w32(tblBase + 9, text.length)
+    w32(tblBase + 13 + 2, textOffset)
+    // PlcfBtePapx at 140: aCP [0,3], aPcb [8], PAPX istd=1 + grpprl ilfo=1
+    w32(tblBase + 140, 0)
+    w32(tblBase + 144, 3)
+    w16(tblBase + 148, 8)
+    w16(tblBase + 150, 1) // istd
+    view[tblBase + 152] = 0x0B // sprmPIlfo (0x460B)
+    view[tblBase + 153] = 0x46
+    w16(tblBase + 154, 1) // ilfo = 1
+    // LST at 200: lsid=0x12345678, fSimpleList=1, one LVLF (decimal)
+    w32(tblBase + 200, 0x12345678) // lsid
+    w32(tblBase + 204, 0)          // tplc
+    view[tblBase + 226] = 1        // fSimpleList
+    const lvlf = tblBase + 228
+    w16(lvlf + 0, 1)   // iStartAt
+    view[lvlf + 2] = 0 // nfc = decimal
+    w16(lvlf + 40, 0)  // number text length
+    // PlcfLfo at 280: 1 LFO with matching lsid
+    w32(tblBase + 280, 0)
+    w32(tblBase + 284, 1)
+    w32(tblBase + 288, 0x12345678) // lsid
+    view[tblBase + 292] = 1        // clfoLvl
+    const parser = new DocParser(buf)
+    const result = parser.parseWithFormat()
+    expect(result.success).toBe(true)
+    const para = (result.document.paragraphs as Array<{ text: string; paraFormat?: { listType?: string; listStyle?: string; listId?: number } }>)[0]
+    expect(para.paraFormat?.listType).toBe('ordered')
+    expect(para.paraFormat?.listStyle).toBe('decimal')
+    expect(para.paraFormat?.listId).toBe(1)
+  })
+})
