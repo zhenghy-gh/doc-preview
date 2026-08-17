@@ -1197,7 +1197,9 @@ describe('parseWithFormat field assembly', () => {
     w32(tblBase + 1, 16)
     w32(tblBase + 5, 0)
     w32(tblBase + 9, text.length)
-    w32(tblBase + 13 + 2, textOffset) // PCD fc (UTF-16LE)
+    // PCD fc with the fChp bit set (bit 31) and prm chpxIndex = 0
+    w32(tblBase + 13 + 2, textOffset | 0x80000000)
+    w16(tblBase + 13 + 6, 0)
     // PlcfFld at offset 32: 6 fields, 19 CPs + 18 (ch, flt) pairs
     const fldBase = tblBase + 32
     const cps = [0, 19, 25, 25, 32, 37, 37, 42, 44, 44, 55, 66, 66, 72, 76, 76, 87, 89, 89]
