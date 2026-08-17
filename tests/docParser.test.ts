@@ -1499,7 +1499,7 @@ describe('libwv fallback mode', () => {
 
 describe('CLX-unreachable fallback paths', () => {
   /** WordDocument with an out-of-range CLX pointer and text at offset 2048. */
-  function buildNoClxOle(fcMinBase: number, fcMacBase: number, utf16Text = false, customText?: string): ArrayBuffer {
+  function buildNoClxOle(fcMinBase: number, fcMacBase: number, utf16Text = false, customText?: string, withCcpText = true): ArrayBuffer {
     const SECTOR = 512
     const buf = new ArrayBuffer(SECTOR * 9)
     const view = new Uint8Array(buf)
@@ -1546,7 +1546,7 @@ describe('CLX-unreachable fallback paths', () => {
     const text = customText ?? 'Hello libwv world\r\nHello libwv world\r\nhello abcdefghijklhello abcdefghijkl\r\ntest abcdeabcdeabcde end\r\nA\u0007B\u0007\u0007C\u0007D\u0007\u0007E\u0007F\r\n'
     w32(24 + wdBase, fcMinBase)
     w32(28 + wdBase, fcMacBase)
-    w32(36 + 12 + wdBase, text.length) // ccpText
+    if (withCcpText) w32(36 + 12 + wdBase, text.length) // ccpText
     w16(124 + wdBase, 34)
     // fcClx=500/lcbClx=10 -> subarray lands inside 0Table zeros (invalid Pcdt)
     w32(126 + 33 * 8 + wdBase, 500)
@@ -1575,6 +1575,16 @@ describe('CLX-unreachable fallback paths', () => {
 
   it('falls back to binary encoding detection when CLX is unreachable', () => {
     const parser = new DocParser(buildNoClxOle(0, 0, true))
+    const result = parser.parseWithFormat()
+    expect(result.success).toBe(true)
+    const texts = (result.document.paragraphs as Array<{ text: string }>).map(p => p.text).join(' ')
+    expect(texts).toContain('Hello libwv world')
+  })
+
+  it('falls back with no text-end limit when ccpText is absent', () => {
+    // withCcpText=false leaves FibRgLw ccpText at 0, so the auto-detect
+    // branch scans to the end of the stream (textEnd stays undefined).
+    const parser = new DocParser(buildNoClxOle(0, 0, true, undefined, false))
     const result = parser.parseWithFormat()
     expect(result.success).toBe(true)
     const texts = (result.document.paragraphs as Array<{ text: string }>).map(p => p.text).join(' ')
