@@ -49,6 +49,7 @@ src/
     revisionRender.ts     # 修订渲染：applyRevisionsToText 纯函数，支持 marks/accepted/rejected 三种模式
     markdownExport.ts     # Markdown 导出：HTML→Markdown 纯函数转换（convertInlineToMd/convertTableToMd/convertListToMd/convertBlockToMd/htmlToMarkdown），无 .page-content 时回退根容器子节点
     searchUtils.ts        # 搜索工具：findTextMatches 纯函数匹配（子串/全词+大小写）、highlightTextMatches 倒序 Range 包装高亮、clearSearchHighlights 还原
+    textRender.ts         # 文本渲染辅助：escapeHtml、applyTabStops 制表位 Canvas 测量渲染、formatTextWithInferredFormat 纯文本启发式降级渲染（Web 字体前缀可注入）
     dopParser.ts          # DOP 解析：文档属性容器、奇偶页/首页/修订模式标志
     bookmarkParser.ts     # 书签解析：PlcfBkf/PlcfBkl + SttbfBkmk、文档内跳转
     sectionParser.ts      # 分节解析：PlcfSed + SEPX、纸张/边距/方向/分栏/起始页码
