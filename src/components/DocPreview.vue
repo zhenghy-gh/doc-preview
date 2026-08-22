@@ -9,6 +9,7 @@ import type { DocumentFields } from '../utils/fieldParser'
 import { applyRevisionsToText } from '../utils/revisionRender'
 import type { RevisionMode } from '../utils/revisionRender'
 import { htmlToMarkdown } from '../utils/markdownExport'
+import { highlightTextMatches, clearSearchHighlights } from '../utils/searchUtils'
 import { WORD_VERSION_LABELS, type WordVersion } from '../utils/fibParser'
 import { t } from '../utils/locale'
 // import DocStatsPanel from './DocStatsPanel.vue'
@@ -139,7 +140,7 @@ interface CharStyleOptions {
 interface SearchMatch {
   index: number
   text: string
-  element: HTMLElement | null
+  element: HTMLElement
 }
 
 // ---- Props & Emits ----
@@ -2449,6 +2450,9 @@ function setRevisionMode(mode: RevisionMode) {
   }
 }
 
+// 匹配枚举与高亮包装提取至 utils/searchUtils.ts。
+// 旧实现按正序对同一文本节点边替换边用旧偏移继续匹配，单个节点内
+// 出现多次关键词时会错位高亮并抛 IndexSizeError；新实现倒序应用替换。
 function performSearch() {
   const rawQuery = searchQuery.value.trim()
   if (!rawQuery) {
@@ -2465,65 +2469,10 @@ function performSearch() {
   const container = previewRef.value?.querySelector('.document-content')
   if (!container) return
 
-  // Build query: apply case sensitivity and whole-word matching
-  const caseSensitive = searchCaseSensitive.value
-  const wholeWord = searchWholeWord.value
-  const query = caseSensitive ? rawQuery : rawQuery.toLowerCase()
-  // Escape regex special chars for whole-word matching
-  const escapedQuery = rawQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const wordRegex = wholeWord
-    ? new RegExp(`(^|[^\\w])(${escapedQuery})($|[^\\w])`, caseSensitive ? 'g' : 'gi')
-    : null
-
-  const treeWalker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null)
-  const matches: SearchMatch[] = []
-  let index = 0
-
-  while (treeWalker.nextNode()) {
-    const node = treeWalker.currentNode as Text
-    const text = node.textContent || ''
-    const lower = caseSensitive ? text : text.toLowerCase()
-
-    if (wordRegex) {
-      // Whole-word matching using regex
-      wordRegex.lastIndex = 0
-      let m: RegExpExecArray | null
-      while ((m = wordRegex.exec(text)) !== null) {
-        const matchStart = m.index + m[1].length
-        const matchEnd = matchStart + m[2].length
-        const span = document.createElement('span')
-        span.className = 'search-highlight'
-        span.textContent = text.substring(matchStart, matchEnd)
-        span.dataset.searchIndex = String(index)
-        const range = document.createRange()
-        range.setStart(node, matchStart)
-        range.setEnd(node, matchEnd)
-        range.deleteContents()
-        range.insertNode(span)
-        matches.push({ index, text: m[2], element: span })
-        index++
-        // Advance past the match to avoid infinite loop on zero-length matches
-        if (m[0].length === 0) wordRegex.lastIndex++
-      }
-    } else {
-      // Substring matching (case-insensitive by default)
-      let pos = 0
-      while ((pos = lower.indexOf(query, pos)) !== -1) {
-        const span = document.createElement('span')
-        span.className = 'search-highlight'
-        span.textContent = text.substring(pos, pos + query.length)
-        span.dataset.searchIndex = String(index)
-        const range = document.createRange()
-        range.setStart(node, pos)
-        range.setEnd(node, pos + query.length)
-        range.deleteContents()
-        range.insertNode(span)
-        matches.push({ index, text: query, element: span })
-        index++
-        pos += query.length
-      }
-    }
-  }
+  const matches = highlightTextMatches(container, rawQuery, {
+    caseSensitive: searchCaseSensitive.value,
+    wholeWord: searchWholeWord.value,
+  })
 
   searchResults.value = matches
   if (matches.length > 0) {
@@ -2533,14 +2482,7 @@ function performSearch() {
 }
 
 function clearHighlights() {
-  previewRef.value?.querySelectorAll('.search-highlight').forEach(el => {
-    const parent = el.parentNode
-    if (parent) {
-      const text = document.createTextNode(el.textContent || '')
-      parent.replaceChild(text, el)
-      parent.normalize()
-    }
-  })
+  if (previewRef.value) clearSearchHighlights(previewRef.value)
 }
 
 function scrollToMatch(idx: number) {

@@ -48,6 +48,7 @@ src/
     revisionParser.ts     # 修订痕迹解析：SttbfRMark 作者表、RMRK 结构、DTTM 时间戳
     revisionRender.ts     # 修订渲染：applyRevisionsToText 纯函数，支持 marks/accepted/rejected 三种模式
     markdownExport.ts     # Markdown 导出：HTML→Markdown 纯函数转换（convertInlineToMd/convertTableToMd/convertListToMd/convertBlockToMd/htmlToMarkdown），无 .page-content 时回退根容器子节点
+    searchUtils.ts        # 搜索工具：findTextMatches 纯函数匹配（子串/全词+大小写）、highlightTextMatches 倒序 Range 包装高亮、clearSearchHighlights 还原
     dopParser.ts          # DOP 解析：文档属性容器、奇偶页/首页/修订模式标志
     bookmarkParser.ts     # 书签解析：PlcfBkf/PlcfBkl + SttbfBkmk、文档内跳转
     sectionParser.ts      # 分节解析：PlcfSed + SEPX、纸张/边距/方向/分栏/起始页码
@@ -109,7 +110,7 @@ src/
 36. **分栏渲染** — 在 `formatFormattedTextToHtml` 中通过 `findSectionForCp` 查找段落所属 section，跟踪 `currentColumnCount`/`currentColumnSpacingPt`；`finalizePage` 时根据栏数给 `.page-content` 添加 CSS `column-count`/`column-gap`/`column-fill: auto` 样式实现实际分栏渲染；section 切换（栏数变化）时自动 `finalizePage` 确保不同分栏配置的内容分属不同页面
 37. **Word 版本检测** — `detectWordVersion` 函数基于 FIB 偏移 2-3 的 nFib 值检测 Word 版本（Word 6.0/95/97/2000/2002/2003/2007+），`WORD_VERSION_LABELS` 提供显示名称映射；FibData 新增 `nFib`/`wordVersion` 字段，ParsedDocument 新增 `wordVersion` 字段，文档属性面板展示版本信息（`fibParser.ts` + `docParser.ts` + `DocPreview.vue`）
 38. **分页键盘快捷键** — `handleKeydown` 中新增 PageUp/PageDown（上一页/下一页）、Home/End（首页/末页）键盘快捷键；输入框聚焦时跳过导航快捷键避免干扰文本编辑（`DocPreview.vue`）
-39. **搜索选项增强** — 搜索栏新增大小写敏感（`Aa`）和全词匹配（`W`）复选框；`performSearch` 函数根据选项构建正则表达式（`(^|[^\w])(query)($|[^\w])`）或子串匹配，全词匹配时转义 regex 特殊字符；切换选项自动重新搜索，`:has(input:checked)` CSS 选择器实现选中态高亮（`DocPreview.vue`）
+39. **搜索选项增强** — 搜索栏新增大小写敏感（`Aa`）和全词匹配（`W`）复选框；匹配逻辑在 `searchUtils.ts`（`findTextMatches` 纯函数，从 DocPreview.vue 提取）：全词模式构建 `(^|[^\w])(query)($|[^\w])` 正则（转义 regex 特殊字符，命中后 lastIndex 回拨到词尾使边界字符可复用，能匹配 "a a" 中相邻的多个全词），子串模式用 indexOf 顺序扫描；`highlightTextMatches` 递归收集文本节点（跳过已有高亮 span）后**倒序**应用 Range 替换（正序替换会使同节点后续偏移失效，曾导致单节点多匹配时高亮错位并抛 IndexSizeError）；切换选项自动重新搜索，`:has(input:checked)` CSS 选择器实现选中态高亮（`searchUtils.ts` + `DocPreview.vue`）
 40. **虚拟滚动（性能优化）** — `formatFormattedTextToHtml` 返回页面数组 `string[]`，新增 `pages` ref 与 `virtualScrollEnabled`/`visibleStart`/`visibleEnd`/`pageHeights` 状态；模板用 `v-for` 渲染页面，`isPageVisible`/`getPagePlaceholderHeight` 控制可视页面渲染真实内容、非可视页面用占位 div（高度缓存）；`updateVisibleRange` 基于 `getBoundingClientRect` 计算可视索引范围（含 ±1 页缓冲），`measureVisiblePageHeights` 缓存真实高度；window scroll/resize 监听 + requestAnimationFrame throttle；搜索/大纲导航时临时禁用虚拟滚动确保全部页面可查询；小文档（≤3 页）自动跳过虚拟滚动（`DocPreview.vue`）
 41. **导出为 Markdown** — `htmlToMarkdown` 函数（`markdownExport.ts`，从 DocPreview.vue 提取的纯函数）使用 DOM 解析器将预览 HTML 转换为标准 Markdown 格式；`convertBlockToMd` 处理块级元素（h1-h6→# 标题、p→正文、ul/ol→列表、table→Markdown 表格语法、pre→代码块、blockquote→引用），`convertInlineToMd` 处理内联格式（strong→**粗体**、em→*斜体*、s→~~删除线~~、a→[链接]、img→![图片]），`convertTableToMd` 支持表头识别和 colspan 适配，`convertListToMd` 支持嵌套列表和缩进；优先遍历 `.page-content` 分页容器，无分页容器（纯文本回退路径）时回退到根容器子节点避免导出空文件；工具栏 📝 按钮调用 `downloadMarkdown` 一键下载 `.md` 文件（`markdownExport.ts` + `DocPreview.vue`）
 42. **快捷键面板** — `showShortcuts` ref + `shortcutList` 常量数组定义 13 条快捷键说明；工具栏 ⌨️ 按钮、`?` 键、`Ctrl+/` 三种触发方式，Escape/点击遮罩关闭；`v-if` 渲染模态遮罩 + 圆角面板，`kbd` 标签显示组合键，多键名下 `v-for` 拆分为多个 `<kbd>`（`DocPreview.vue`）
