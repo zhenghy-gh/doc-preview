@@ -264,4 +264,105 @@ describe('shapeParser', () => {
       expect(shapes).toEqual([])
     })
   })
+
+  describe('malformed Office Art structures', () => {
+    /**
+     * 构造 FDG→DG→SPContainer→[filler record][tail record] 链，
+     * 各容器 recLen 精确收在 buffer 末端，tail record 是最后一个 8 字节。
+     */
+    function buildTailRecordBuffer(n: number, tail: { type: number; len: number }) {
+      const buffer = new Uint8Array(n)
+      writeRecHeader(buffer, 0, 3, 0x00C0, 0xF000, n - 8) // FDG, containerEnd = n
+      writeRecHeader(buffer, 8, 3, 0, 0xF002, n - 16)     // DG, containerEnd = n
+      writeRecHeader(buffer, 16, 3, 0, 0xF003, n - 24)    // SP container, containerEnd = n
+      // filler 记录把 pos 推到 n-8，使 tail 记录头恰好落在缓冲区末尾
+      writeRecHeader(buffer, 24, 3, 0, 0x00FF, n - 40)
+      writeRecHeader(buffer, n - 8, 3, 0, tail.type, tail.len)
+      return buffer
+    }
+
+    it('reads guarded zeros when an SP record header sits at the very end of the buffer', () => {
+      // SP 记录头位于最后 8 字节：recDataStart = length，spid/grfSp 读取越界
+      // 触发 readUint32/readUint16 守卫返回 0，xfrm 越界返回 null，
+      // spid=0 使 parseSpContainer 返回 null → 无形状。
+      const buffer = buildTailRecordBuffer(128, { type: 0x0004, len: 100 })
+      const shapes = extractShapesFromDataStream(buffer)
+      expect(shapes).toEqual([])
+    })
+
+    it('returns no shapes when the DG container claims a length past the buffer end', () => {
+      const n = 128
+      const buffer = new Uint8Array(n)
+      writeRecHeader(buffer, 0, 3, 0x00C0, 0xF000, n - 8)  // FDG fits
+      writeRecHeader(buffer, 8, 3, 0, 0xF002, 500)          // DG overrun
+      expect(extractShapesFromDataStream(buffer)).toEqual([])
+    })
+
+    it('returns no shapes when the FDG itself claims a length past the buffer end', () => {
+      const buffer = new Uint8Array(128)
+      writeRecHeader(buffer, 0, 3, 0x00C0, 0xF000, 500)
+      expect(extractShapesFromDataStream(buffer)).toEqual([])
+    })
+
+    it('breaks the DG walk when a child header would read past the buffer end', () => {
+      // SP container 收在 n-4：DG 循环下一个 pos = n-4，记录头解析失败 → break。
+      // SP container 内含完整 SP 记录，形状仍被提取。
+      const n = 108
+      const buffer = new Uint8Array(n)
+      writeRecHeader(buffer, 0, 3, 0x00C0, 0xF000, n - 8)  // FDG containerEnd = n
+      writeRecHeader(buffer, 8, 3, 0, 0xF002, n - 16)       // DG containerEnd = n
+      writeRecHeader(buffer, 16, 3, 0, 0xF003, n - 28)      // SP container 收在 n-4
+      writeRecHeader(buffer, 24, 3, 0, 0x0004, 72)
+      writeU32(buffer, 32, 0x40000002) // textbox spid
+      writeU16(buffer, 36, 0x0001)     // floating
+
+      const shapes = extractShapesFromDataStream(buffer)
+      expect(shapes).toHaveLength(1)
+      expect(shapes[0].spid).toBe(0x40000002)
+    })
+
+    it('breaks the FDG walk when a child header would read past the buffer end', () => {
+      // DG 收在 n-4：FDG 循环下一个 pos = n-4 → break。DG 内的形状已收集。
+      const n = 108
+      const buffer = new Uint8Array(n)
+      writeRecHeader(buffer, 0, 3, 0x00C0, 0xF000, n - 8)  // FDG containerEnd = n
+      writeRecHeader(buffer, 8, 3, 0, 0xF002, n - 20)       // DG 收在 n-4
+      writeRecHeader(buffer, 16, 3, 0, 0xF003, n - 28)      // SP container 收在 n-4
+      writeRecHeader(buffer, 24, 3, 0, 0x0004, 72)
+      writeU32(buffer, 32, 0x50000003)
+      writeU16(buffer, 36, 0x0001)
+
+      const shapes = extractShapesFromDataStream(buffer)
+      expect(shapes).toHaveLength(1)
+      expect(shapes[0].spid).toBe(0x50000003)
+    })
+
+    it('returns no shapes when the SP container claims a length past the buffer end', () => {
+      const n = 128
+      const buffer = new Uint8Array(n)
+      writeRecHeader(buffer, 0, 3, 0x00C0, 0xF000, n - 8)  // FDG containerEnd = n
+      writeRecHeader(buffer, 8, 3, 0, 0xF002, n - 16)       // DG containerEnd = n
+      writeRecHeader(buffer, 16, 3, 0, 0xF003, n)            // SP container 越界
+      expect(extractShapesFromDataStream(buffer)).toEqual([])
+    })
+
+    it('breaks the SP container walk when a child header would read past the buffer end', () => {
+      const n = 128
+      const buffer = new Uint8Array(n)
+      writeRecHeader(buffer, 0, 3, 0x00C0, 0xF000, n - 8)  // FDG containerEnd = n
+      writeRecHeader(buffer, 8, 3, 0, 0xF002, n - 16)       // DG containerEnd = n
+      writeRecHeader(buffer, 16, 3, 0, 0xF003, n - 24)      // SP container containerEnd = n
+      writeRecHeader(buffer, 24, 3, 0, 0x00FF, n - 36)      // filler 把 pos 推到 n-4
+      expect(extractShapesFromDataStream(buffer)).toEqual([])
+    })
+
+    it('skips a magic signature with no room for a record header', () => {
+      // 最后 2 字节构成 magic（0xC000）但放不下 8 字节记录头 → header null → continue
+      const buffer = new Uint8Array(128)
+      buffer[126] = 0x00
+      buffer[127] = 0xC0
+      expect(extractShapesFromDataStream(buffer)).toEqual([])
+      expect(extractShapesFromWordDocumentStream(buffer)).toEqual([])
+    })
+  })
 })

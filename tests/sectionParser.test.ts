@@ -302,3 +302,83 @@ describe('extractSections unknown SPRM', () => {
     expect(sections.length).toBe(1)
   })
 })
+
+describe('extractSections defensive branches', () => {
+  it('reads a 3-byte operand for spra=7 SPRMs', () => {
+    // sprm 0xE001: spra = (0xE001 >> 13) & 7 = 7 → 3 字节操作数
+    const grpprl = [
+      ...wordSprm(0xB002, 11906), // A4 width 先解析
+      0x01, 0xE0, 0xAA, 0xBB, 0xCC, // spra=7 条目占 5 字节，应被完整跳过
+      ...wordSprm(0xB003, 16838), // A4 height 仍能解析
+    ]
+    const { tableData, wordDocData, fcPlcfSed, lcbPlcfSed } = buildSectionData(100, 0x100, grpprl)
+    const sections = extractSections(tableData, wordDocData, fcPlcfSed, lcbPlcfSed)
+    expect(sections[0].pageWidthPt).toBeCloseTo(595.3, 0)
+    expect(sections[0].pageHeightPt).toBeCloseTo(841.9, 0)
+  })
+
+  it('returns empty when the PlcfSed range exceeds the table stream', () => {
+    const tableData = new Uint8Array(20) // fc=16 + lcb=16 > 20
+    const sections = extractSections(tableData, new Uint8Array(256), 16, 16)
+    expect(sections).toEqual([])
+  })
+
+  it('returns empty when lcbPlcfSed is too small for one SED entry', () => {
+    // lcb=4 → n = floor(0/12) = 0
+    const sections = extractSections(new Uint8Array(64), new Uint8Array(256), 16, 4)
+    expect(sections).toEqual([])
+  })
+
+  it('returns empty for empty WordDocument stream', () => {
+    const { tableData, fcPlcfSed, lcbPlcfSed } = buildSectionData(100, 0x100, [0x00, 0x01, 0x05])
+    const sections = extractSections(tableData, new Uint8Array(0), fcPlcfSed, lcbPlcfSed)
+    expect(sections).toEqual([])
+  })
+
+  it('returns empty section props when the SEPX cb is zero', () => {
+    const { tableData, wordDocData, fcPlcfSed, lcbPlcfSed } = buildSectionData(100, 0x100, [])
+    const sections = extractSections(tableData, wordDocData, fcPlcfSed, lcbPlcfSed)
+    expect(sections).toHaveLength(1)
+    expect(sections[0].pageWidthPt).toBeUndefined()
+  })
+
+  it('returns empty section props when the SEPX grpprl runs past the WordDocument stream', () => {
+    // 自定义小 buffer：fcSepx=100, cb=10 → 100+2+10 = 112 > 105
+    const fcPlcfSed = 16
+    const tableBuf = new Array(fcPlcfSed + 16).fill(0)
+    writeDword(tableBuf, fcPlcfSed + 0, 0)
+    writeDword(tableBuf, fcPlcfSed + 4, 50)
+    writeWord(tableBuf, fcPlcfSed + 8, 0)
+    writeDword(tableBuf, fcPlcfSed + 10, 100)
+    writeWord(tableBuf, fcPlcfSed + 14, 0)
+
+    const wordBuf = new Array(105).fill(0)
+    writeWord(wordBuf, 100, 10) // cb = 10 但流只剩 5 字节
+
+    const sections = extractSections(new Uint8Array(tableBuf), new Uint8Array(wordBuf), fcPlcfSed, 16)
+    expect(sections).toHaveLength(1)
+    expect(sections[0].pageWidthPt).toBeUndefined()
+  })
+
+  it('falls back to nextPage for an out-of-range bkc value', () => {
+    const grpprl = [...byteSprm(0x300A, 9)] // 超出 0-3 映射表
+    const { tableData, wordDocData, fcPlcfSed, lcbPlcfSed } = buildSectionData(30, 0x100, grpprl)
+    const sections = extractSections(tableData, wordDocData, fcPlcfSed, lcbPlcfSed)
+    expect(sections[0].breakType).toBe('nextPage')
+  })
+
+  it('skips header-distance / page-number-format / even-columns SPRMs without side effects', () => {
+    const grpprl = [
+      ...wordSprm(0xB000, 720),  // sprmSDyaHdrTop（暂不提取）
+      ...wordSprm(0xB001, 720),  // sprmSDyaHdrBottom
+      ...byteSprm(0x300B, 1),    // sprmSNfcPgn
+      ...byteSprm(0x300F, 1),    // sprmSFEvenly
+      ...wordSprm(0xB002, 11906), // 后续条目仍正常解析
+    ]
+    const { tableData, wordDocData, fcPlcfSed, lcbPlcfSed } = buildSectionData(30, 0x100, grpprl)
+    const sections = extractSections(tableData, wordDocData, fcPlcfSed, lcbPlcfSed)
+    expect(sections[0].pageWidthPt).toBeCloseTo(595.3, 0)
+    expect(sections[0].marginTopPt).toBeUndefined()
+    expect(sections[0].pageStart).toBeUndefined()
+  })
+})

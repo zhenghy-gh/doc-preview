@@ -80,6 +80,7 @@ function getSectionSprmOperandSize(sprm: number, data: Uint8Array, operandOffset
       if (operandOffset >= data.length) return 0
       return 1 + data[operandOffset]
     }
+    // 防御：spra 为 3 位（0-7），所有取值均有 case，default 正常不可达
     default: return 0
   }
 }
@@ -122,6 +123,7 @@ function parsePlcfSed(
   fc: number,
   lcb: number,
 ): SedEntry[] {
+  // fc<0 / lcb<=0 已由 extractSections 预检（此处再查为防御）；fc+lcb 越界是唯一可达条件
   if (fc === undefined || fc < 0 || lcb === undefined || lcb <= 0 || fc + lcb > data.length) return []
 
   const n = Math.floor((lcb - 4) / 12)
@@ -188,6 +190,7 @@ function parseSepx(
   while (offset + 2 <= grpprlEnd) {
     const sprm = readWordAt(wordDocData, offset)
     offset += 2
+    // 防御：循环条件保证 offset+2 <= grpprlEnd，故 offset 不会超过 grpprlEnd
     if (offset > grpprlEnd) break
 
     const operandSize = getSectionSprmOperandSize(sprm, wordDocData, offset)

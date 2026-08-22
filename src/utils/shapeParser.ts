@@ -109,6 +109,7 @@ function readUint32(data: Uint8Array, offset: number): number {
 }
 
 function readInt32(data: Uint8Array, offset: number): number {
+  // 防御：调用方 parseXfrm 已保证 offset+60 在界内，此守卫正常不可达
   if (offset < 0 || offset + 4 > data.length) return 0
   const raw =
     data[offset] |
@@ -166,6 +167,7 @@ function parseXfrm(data: Uint8Array, offset: number): { x: number; y: number; wi
 }
 
 function parseSpContainer(data: Uint8Array, offset: number, _parentOffset: number): ShapeInfo | null {
+  // 防御：recType 已由调用方 parseDgContainer 验证为 SP_CONTAINER，此处再查仅为直调保护
   const header = parseOfficeArtRecordHeader(data, offset)
   if (!header || header.recType !== OFFICE_ART_SP_CONTAINER) return null
 
@@ -233,6 +235,7 @@ function parseSpContainer(data: Uint8Array, offset: number, _parentOffset: numbe
 }
 
 function parseDgContainer(data: Uint8Array, offset: number): ShapeInfo[] {
+  // 防御：recType 已由调用方 parseFdg 验证为 DG_CONTAINER，此处再查仅为直调保护
   const header = parseOfficeArtRecordHeader(data, offset)
   if (!header || header.recType !== OFFICE_ART_DG_CONTAINER) return []
 
@@ -258,6 +261,7 @@ function parseDgContainer(data: Uint8Array, offset: number): ShapeInfo[] {
 }
 
 function parseFdg(data: Uint8Array, offset: number): ShapeInfo[] {
+  // 防御：recType 已由调用方 extractShapesFrom* 扫描循环验证为 FDG，此处再查仅为直调保护
   const header = parseOfficeArtRecordHeader(data, offset)
   if (!header || header.recType !== OFFICE_ART_FDG) return []
 
@@ -292,6 +296,7 @@ export function extractShapesFromDataStream(dataStream: Uint8Array): ShapeInfo[]
     const magic = readUint16(dataStream, offset)
     if ((magic & 0xC000) !== 0xC000) continue
 
+    // 防御：循环上界 offset < length-8 已保证记录头完整，解析失败正常不可达
     const header = parseOfficeArtRecordHeader(dataStream, offset)
     if (!header) continue
 
@@ -319,6 +324,7 @@ export function extractShapesFromWordDocumentStream(wordDocData: Uint8Array): Sh
     const magic = readUint16(wordDocData, offset)
     if ((magic & 0xC000) !== 0xC000) continue
 
+    // 防御：循环上界 offset < length-8 已保证记录头完整，解析失败正常不可达
     const header = parseOfficeArtRecordHeader(wordDocData, offset)
     if (!header) continue
 
