@@ -8,7 +8,7 @@ import { parseChpxRuns, parsePapxRuns, mergeCharFormatForParagraph, parseChpxGrp
  *   aCP: (n+1) * 4 bytes
  *   aPcb: n * CHPX entries (each: cbOffset(2) + grpprl)
  */
-function buildPlcfBteChpx(entries: Array<{ cpStart: number; bold?: boolean; italic?: boolean; fontSize?: number; underline?: boolean; istd?: number }>): Uint8Array {
+function buildPlcfBteChpx(entries: Array<{ cpStart: number; bold?: boolean; italic?: boolean; fontSize?: number; underline?: boolean; istd?: number; isSpecial?: boolean; fcPic?: number }>): Uint8Array {
   const n = entries.length
   // Build the aPcb bytes first so we know offsets.
   const aPcbParts: Uint8Array[] = []
@@ -34,6 +34,14 @@ function buildPlcfBteChpx(entries: Array<{ cpStart: number; bold?: boolean; ital
       // sprmCHps = 0x4A43, 2-byte operand (half-points)
       const hps = entry.fontSize * 2
       prls.push(0x43, 0x4A, hps & 0xFF, (hps >> 8) & 0xFF)
+    }
+    if (entry.isSpecial) {
+      // sprmCFSpec = 0x0855, toggle
+      prls.push(0x55, 0x08, 0x01)
+    }
+    if (entry.fcPic !== undefined) {
+      // sprmCPicLocation = 0x6A03, 4-byte
+      prls.push(0x03, 0x6A, entry.fcPic & 0xFF, (entry.fcPic >> 8) & 0xFF, (entry.fcPic >> 16) & 0xFF, (entry.fcPic >> 24) & 0xFF)
     }
     const grpprlSize = prls.length
     const cbOffset = 2 + grpprlSize
@@ -81,12 +89,16 @@ function buildPlcfBteChpx(entries: Array<{ cpStart: number; bold?: boolean; ital
  * Build a PlcfBtePapx test fixture.
  * Each entry: { cpStart, alignment, indent, istd, tabs }
  */
-function buildPlcfBtePapx(entries: Array<{ cpStart: number; alignment?: 'left' | 'center' | 'right' | 'justify'; indent?: number; istd?: number; tabs?: number[] }>): Uint8Array {
+function buildPlcfBtePapx(entries: Array<{ cpStart: number; alignment?: 'left' | 'center' | 'right' | 'justify'; indent?: number; istd?: number; tabs?: number[]; ilvl?: number }>): Uint8Array {
   const n = entries.length
   const aPcbParts: Uint8Array[] = []
 
   for (const entry of entries) {
     const prls: number[] = []
+    if (entry.ilvl !== undefined) {
+      // sprmPIlvl = 0x260A, 1-byte list level
+      prls.push(0x0A, 0x26, entry.ilvl)
+    }
     if (entry.alignment !== undefined) {
       // sprmPJc80 = 0x2403, 1-byte operand
       const jc = entry.alignment === 'left' ? 0
@@ -645,5 +657,281 @@ describe('formatParser revision and table branches', () => {
   it('should map table justification value 2 to right', () => {
     const r = parsePapxGrpprl(new Uint8Array([0x00, 0x54, 0x02, 0x00]), 0, 4)
     expect(r.table).toEqual({ inTable: true, justification: 'right' })
+  })
+})
+
+describe('formatParser highlight palette and toggle-off branches', () => {
+  function parseGrpprl(prls: number[]): ReturnType<typeof parseChpxGrpprlWithFont> {
+    return parseChpxGrpprlWithFont(new Uint8Array(prls), 0, prls.length)
+  }
+
+  it('should map every highlight code 1-15 to its palette color', () => {
+    const palette: Record<number, string> = {
+      1: '#FFFF00', 2: '#00FF00', 3: '#00FFFF', 4: '#FF00FF', 5: '#0000FF',
+      6: '#FF0000', 7: '#000080', 8: '#008080', 9: '#008000', 10: '#800080',
+      11: '#800000', 12: '#808000', 13: '#808080', 14: '#C0C0C0', 15: '#000000',
+    }
+    for (const [code, color] of Object.entries(palette)) {
+      const r = parseGrpprl([0x0C, 0x2A, Number(code)])
+      expect(r.format.highlight).toBe(color)
+    }
+  })
+
+  it('should fall back to yellow for out-of-range highlight codes', () => {
+    const r = parseGrpprl([0x0C, 0x2A, 0x63]) // 99
+    expect(r.format.highlight).toBe('#FFFF00')
+  })
+
+  it('should parse strikethrough and hidden toggle-off operands', () => {
+    const r = parseGrpprl([
+      0x37, 0x08, 0x00, // sprmCFStrike off
+      0x3C, 0x08, 0x00, // sprmCFVanish off
+    ])
+    expect(r.format.strikethrough).toBe(false)
+    expect(r.format.hidden).toBe(false)
+  })
+})
+
+describe('formatParser revision sprms without a leading mark toggle', () => {
+  function parseGrpprl(prls: number[]): ReturnType<typeof parseChpxGrpprlWithFont> {
+    return parseChpxGrpprlWithFont(new Uint8Array(prls), 0, prls.length)
+  }
+
+  it('should create an insert revision from a bare sprmCIbstRMark', () => {
+    const r = parseGrpprl([0x04, 0x48, 0x07, 0x00])
+    expect(r.revision).toEqual({ type: 'insert', authorIndex: 7 })
+  })
+
+  it('should create an insert revision from a bare sprmCDttmRMark', () => {
+    const dttm = 0xAABBCCDD
+    const r = parseGrpprl([0x05, 0x68, dttm & 0xFF, (dttm >> 8) & 0xFF, (dttm >> 16) & 0xFF, (dttm >> 24) & 0xFF])
+    expect(r.revision).toEqual({ type: 'insert', timestamp: dttm })
+  })
+
+  it('should ignore a zero sprmCDttmRMark when no revision exists', () => {
+    const r = parseGrpprl([0x05, 0x68, 0, 0, 0, 0])
+    expect(r.revision).toBeUndefined()
+  })
+
+  it('should create a delete revision from a bare sprmCIbstRMarkDel', () => {
+    const r = parseGrpprl([0x63, 0x48, 0x04, 0x00])
+    expect(r.revision).toEqual({ type: 'delete', authorIndex: 4 })
+  })
+
+  it('should create a delete revision from a bare sprmCDttmRMarkDel', () => {
+    const dttm = 0x11223344
+    const r = parseGrpprl([0x64, 0x68, dttm & 0xFF, (dttm >> 8) & 0xFF, (dttm >> 16) & 0xFF, (dttm >> 24) & 0xFF])
+    expect(r.revision).toEqual({ type: 'delete', timestamp: dttm })
+  })
+
+  it('should ignore a zero sprmCDttmRMarkDel when no revision exists', () => {
+    const r = parseGrpprl([0x64, 0x68, 0, 0, 0, 0])
+    expect(r.revision).toBeUndefined()
+  })
+})
+
+describe('formatParser plcf walk sanity branches', () => {
+  it('should reject a PlcfBteChpx whose first CP exceeds the sanity limit', () => {
+    const data = new Uint8Array(32)
+    new DataView(data.buffer).setUint32(0, 0x01000000, true) // > 0x00FFFFFF
+    expect(parseChpxRuns(data, 0, 32)).toEqual([])
+  })
+
+  it('should reject a PlcfBteChpx when CPs are not strictly increasing', () => {
+    const data = new Uint8Array(32)
+    const dv = new DataView(data.buffer)
+    dv.setUint32(0, 10, true)
+    dv.setUint32(4, 10, true) // not > previous
+    expect(parseChpxRuns(data, 0, 32)).toEqual([])
+  })
+
+  it('should reject a PlcfBteChpx with a malformed aPcb chain (cb < 2)', () => {
+    const data = new Uint8Array(32)
+    const dv = new DataView(data.buffer)
+    dv.setUint32(0, 0, true)
+    dv.setUint32(4, 50, true)
+    dv.setUint16(8, 1, true) // cbOffset = 1 → invalid
+    expect(parseChpxRuns(data, 0, 32)).toEqual([])
+  })
+
+  it('should reject a PlcfBtePapx whose first CP exceeds the sanity limit', () => {
+    const data = new Uint8Array(32)
+    new DataView(data.buffer).setUint32(0, 0x01000000, true)
+    expect(parsePapxRuns(data, 0, 32)).toEqual([])
+  })
+
+  it('should reject a PlcfBtePapx when CPs are not strictly increasing', () => {
+    const data = new Uint8Array(32)
+    const dv = new DataView(data.buffer)
+    dv.setUint32(0, 10, true)
+    dv.setUint32(4, 5, true) // decreasing
+    expect(parsePapxRuns(data, 0, 32)).toEqual([])
+  })
+
+  it('should reject a PlcfBtePapx with a malformed aPcb chain (cb < 4)', () => {
+    const data = new Uint8Array(32)
+    const dv = new DataView(data.buffer)
+    dv.setUint32(0, 0, true)
+    dv.setUint32(4, 50, true)
+    dv.setUint16(8, 3, true) // below PAPX minimum
+    expect(parsePapxRuns(data, 0, 32)).toEqual([])
+  })
+
+  it('should propagate isSpecial and fcPic from CHPX grpprls into runs', () => {
+    const data = buildPlcfBteChpx([
+      { cpStart: 0, isSpecial: true, fcPic: 0x0A0B0C0D },
+    ])
+    const runs = parseChpxRuns(data, 0, data.length)
+    expect(runs).toHaveLength(1)
+    expect(runs[0].isSpecial).toBe(true)
+    expect(runs[0].fcPic).toBe(0x0A0B0C0D)
+  })
+
+  it('should propagate ilvl from PAPX grpprls into runs', () => {
+    const data = buildPlcfBtePapx([
+      { cpStart: 0, alignment: 'left', ilvl: 2 },
+    ])
+    const runs = parsePapxRuns(data, 0, data.length)
+    expect(runs).toHaveLength(1)
+    expect(runs[0].ilvl).toBe(2)
+  })
+})
+
+describe('formatParser PAPX SPRM edge cases', () => {
+  function parsePapx(prls: number[]): ReturnType<typeof parsePapxGrpprl> {
+    return parsePapxGrpprl(new Uint8Array(prls), 0, prls.length)
+  }
+
+  it('should map alignment value 4 (distribute) to justify', () => {
+    const r = parsePapx([0x03, 0x24, 0x04])
+    expect(r.format.alignment).toBe('justify')
+  })
+
+  it('should parse paragraph shading via SHD80 icoBack', () => {
+    // sprmPShd80 = 0x442D (2-byte). SHD80: icoBack = bits 5-9.
+    // icoBack=6 (red) → shd = 6 << 5 = 0xC0
+    const r = parsePapx([0x2D, 0x44, 0xC0, 0x00])
+    expect(r.format.backgroundColor).toBe('#FF0000')
+  })
+
+  it('should skip paragraph shading when icoBack is out of range', () => {
+    // icoBack=17 → shd = 17 << 5 = 0x220 (bit 9 spills into ipat, still decodes to 17)
+    const r = parsePapx([0x2D, 0x44, 0x20, 0x02])
+    expect(r.format.backgroundColor).toBeUndefined()
+  })
+
+  it('should break on a sprmPChgTabsPapx operand shorter than 3 bytes', () => {
+    // spra=6: operandSize = 1 + cb. cb=0 → operandSize=1 < 3
+    const r = parsePapx([0x0D, 0xC6, 0x00])
+    expect(r.format.tabs).toBeUndefined()
+  })
+
+  it('should break when sprmPChgTabsPapx cAdd lands past the operand end', () => {
+    // cb=2 (operandSize=3), cTabsDel=5 → cAddOffset = +2+10 = past opEnd
+    const r = parsePapx([0x0D, 0xC6, 0x02, 0x05])
+    expect(r.format.tabs).toBeUndefined()
+  })
+
+  it('should stop adding tabs when the add array is truncated', () => {
+    // cb=5（operandSize=6）: [cb=5, cTabsDel=0, cTabsAdd=2, tab1lo, tab1hi, pad]
+    // 声称 2 个 tab 但只放得下 1 个 → 第 2 次循环 tabOffset+2 > opEnd 中断
+    const r = parsePapx([0x0D, 0xC6, 0x05, 0x00, 0x02, 0x10, 0x0E, 0x00])
+    expect(r.format.tabs).toEqual([180]) // 0x0E10 = 3600 twips = 180pt
+  })
+
+  it('should break on sprmPChgTabs with the complex cb=255 form', () => {
+    const r = parsePapx([0x15, 0xC6, 0xFF])
+    expect(r.format.tabs).toBeUndefined()
+  })
+
+  it('should break on a sprmPChgTabs operand shorter than 3 bytes', () => {
+    const r = parsePapx([0x15, 0xC6, 0x00])
+    expect(r.format.tabs).toBeUndefined()
+  })
+
+  it('should create a table from sprmPItap depth without sprmPFInTable', () => {
+    // sprmPItap = 0x6649, 4-byte depth = 2
+    const r = parsePapx([0x49, 0x66, 0x02, 0x00, 0x00, 0x00])
+    expect(r.table).toEqual({ inTable: true, depth: 2 })
+  })
+
+  it('should map sprmTJc90 value 0 to left justification', () => {
+    const r = parsePapx([0x00, 0x54, 0x00, 0x00])
+    expect(r.table).toEqual({ inTable: true, justification: 'left' })
+  })
+
+  it('should return no cells when the TDefTable itcMac overflows the payload', () => {
+    // sprmTDefTable = 0xD608, spra=6: operandSize = 1+cb.
+    // cb=3（operandSize=4）完整给出: [cb=3, skip, itcMac=10] → rgdxa 需 22 字节，rgtcStart 越过 payloadEnd
+    const r = parsePapx([0x08, 0xD6, 0x03, 0x00, 0x0A, 0x00])
+    expect(r.table).toBeUndefined()
+  })
+
+  it('should mark fFirstMerged cells as horizontal merge restart', () => {
+    // 1 列表格，operand 布局 [len, skip, itcMac, rgdxa×2, TC×20]：
+    // cb=26 → operandSize=27，grpprl 总长 2+27=29
+    const prls: number[] = [0x08, 0xD6, 26, 0, 1, 0, 0, 0xE8, 3]
+    const tc = new Uint8Array(20)
+    tc[0] = 0x01 // fFirstMerged
+    prls.push(...Array.from(tc))
+    const r = parsePapx(prls)
+    expect(r.table?.cells).toHaveLength(1)
+    expect(r.table?.cells[0].horizontalMerge).toBe('restart')
+  })
+})
+
+describe('formatParser mergeCharFormatForParagraph counting thresholds', () => {
+  it('should set smallCaps/allCaps above the 50% threshold', () => {
+    const runs = [
+      { cpStart: 0, cpEnd: 6, format: { smallCaps: true, allCaps: true } },
+      { cpStart: 6, cpEnd: 10, format: {} },
+    ] as ReturnType<typeof parseChpxRuns>
+    const merged = mergeCharFormatForParagraph(runs, 0, 10)
+    expect(merged.smallCaps).toBe(true)
+    expect(merged.allCaps).toBe(true)
+  })
+
+  it('should not set smallCaps below the 50% threshold', () => {
+    const runs = [
+      { cpStart: 0, cpEnd: 4, format: { smallCaps: true } },
+      { cpStart: 4, cpEnd: 10, format: {} },
+    ] as ReturnType<typeof parseChpxRuns>
+    const merged = mergeCharFormatForParagraph(runs, 0, 10)
+    expect(merged.smallCaps).toBeUndefined()
+  })
+
+  it('should set strikethrough above the 30% threshold', () => {
+    const runs = [
+      { cpStart: 0, cpEnd: 4, format: { strikethrough: true } },
+      { cpStart: 4, cpEnd: 10, format: {} },
+    ] as ReturnType<typeof parseChpxRuns>
+    const merged = mergeCharFormatForParagraph(runs, 0, 10)
+    expect(merged.strikethrough).toBe(true)
+  })
+
+  it('should resolve the font name from the font index table first', () => {
+    const runs = [
+      { cpStart: 0, cpEnd: 10, format: {}, fontIndex: 1 },
+    ] as ReturnType<typeof parseChpxRuns>
+    const merged = mergeCharFormatForParagraph(runs, 0, 10, ['宋体', '黑体'])
+    expect(merged.fontName).toBe('黑体')
+  })
+
+  it('should fall back to a run-level fontName when the index table misses', () => {
+    const runs = [
+      { cpStart: 0, cpEnd: 10, format: { fontName: '楷体' }, fontIndex: 9 },
+    ] as ReturnType<typeof parseChpxRuns>
+    const merged = mergeCharFormatForParagraph(runs, 0, 10, ['宋体'])
+    expect(merged.fontName).toBe('楷体')
+  })
+
+  it('should apply a resolved character style beneath direct CHPX overrides', () => {
+    const runs = [
+      { cpStart: 0, cpEnd: 10, format: { bold: true }, istd: 3 },
+    ] as ReturnType<typeof parseChpxRuns>
+    const styles = new Map([[3, { italic: true }]])
+    const merged = mergeCharFormatForParagraph(runs, 0, 10, undefined, styles)
+    expect(merged.bold).toBe(true)
+    expect(merged.italic).toBe(true)
   })
 })
