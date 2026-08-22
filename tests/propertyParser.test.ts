@@ -485,3 +485,74 @@ describe('propertyParser', () => {
     })
   })
 })
+describe('propertyParser header and section bounds', () => {
+  const FMTID_SUMMARY = [
+    0xF0, 0x4F, 0x87, 0xE0, 0xD0, 0x11, 0xCF, 0x11,
+    0x00, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x46,
+  ]
+
+  /** 构造一个仅含头部（48 字节）的流，字段可按需覆写 */
+  function buildHeader(overrides: Record<string, number> = {}): Uint8Array {
+    const data = new Uint8Array(64)
+    const view = new DataView(data.buffer)
+    view.setUint16(0, 0xFFFE, true)
+    view.setUint32(24, 1, true) // sectionCount
+    data.set(FMTID_SUMMARY, 28)
+    view.setUint32(44, 48, true) // sectionOffset
+    for (const [offset, value] of Object.entries(overrides)) {
+      view.setUint32(Number(offset), value, true)
+    }
+    return data
+  }
+
+  it('rejects a zero section count', () => {
+    expect(parseSummaryInformation(buildHeader({ 24: 0 }))).toBeNull()
+    expect(parseDocumentSummaryInformation(buildHeader({ 24: 0 }))).toBeNull()
+  })
+
+  it('rejects an oversized section count', () => {
+    expect(parseSummaryInformation(buildHeader({ 24: 11 }))).toBeNull()
+    expect(parseDocumentSummaryInformation(buildHeader({ 24: 11 }))).toBeNull()
+  })
+
+  it('rejects a zero section offset', () => {
+    expect(parseSummaryInformation(buildHeader({ 44: 0 }))).toBeNull()
+    expect(parseDocumentSummaryInformation(buildHeader({ 44: 0 }))).toBeNull()
+  })
+
+  it('rejects a section offset at or past the end of data', () => {
+    expect(parseSummaryInformation(buildHeader({ 44: 64 }))).toBeNull()
+    expect(parseDocumentSummaryInformation(buildHeader({ 44: 100 }))).toBeNull()
+  })
+
+  it('rejects a section without room for its 8-byte header', () => {
+    // sectionOffset = 60 < 64 有效，但 60+8 > 64
+    expect(parseSummaryInformation(buildHeader({ 44: 60 }))).toBeNull()
+  })
+
+  it('stops the entry walk when an entry would read past the data end', () => {
+    // 1 个属性的空间，但声称 2 个 → 第二个 entryOffset 越界 → break
+    const base = buildSummaryStream([{ id: 0x02, type: 0x001E, value: 'T' }])
+    const view = new DataView(base.buffer)
+    view.setUint32(48 + 4, 2, true) // propertyCount = 2
+    const result = parseSummaryInformation(base)
+    expect(result?.title).toBe('T')
+  })
+
+  it('skips a property whose value offset points past the data end', () => {
+    const base = buildSummaryStream([{ id: 0x02, type: 0x001E, value: 'T' }])
+    const view = new DataView(base.buffer)
+    view.setUint32(48 + 8 + 4, 1000, true) // 第一个 entry 的 propertyOffset 越界
+    const result = parseSummaryInformation(base)
+    expect(result?.title).toBeUndefined()
+  })
+
+  it('reads an empty LPWSTR when the byte length prefix is zero', () => {
+    const base = buildSummaryStream([{ id: 0x02, type: 0x001F, value: '' }])
+    const view = new DataView(base.buffer)
+    // 属性值区：type(4) 位于 48+8+8=64，长度前缀位于 68
+    view.setUint32(68, 0, true)
+    const result = parseSummaryInformation(base)
+    expect(result?.title).toBe('')
+  })
+})

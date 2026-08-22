@@ -371,6 +371,7 @@ function mapSummaryProperty(properties: DocumentProperties, propertyId: number, 
       if (typeof value === 'string') properties.revisionNumber = value
       break
     case PID_EDITTIME:
+      // 防御：FILETIME/I8/UI8 解码恒为 bigint，number 分支正常不可达
       if (typeof value === 'bigint' || typeof value === 'number') {
         properties.editTime = Number(value) / 600000000
       }
