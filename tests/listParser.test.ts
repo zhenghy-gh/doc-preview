@@ -570,3 +570,62 @@ describe('listParser minimal LVLF fallback', () => {
     expect(entries[0].levels[0].dxaFirstLine).toBe(0)
   })
 })
+
+describe('listParser nfc mapping and continuity edges', () => {
+  it('maps the remaining nfc codes through a 9-level list', () => {
+    const nfcs = [1, 3, 5, 6, 7, 11, 12, 16, 18]
+    const expected = [
+      'upper-roman', 'upper-alpha', 'ordinal', 'cardinal-text', 'ordinal-text',
+      'cjk-thousand', 'cjk-legal', 'cjk-period', 'circlenumber',
+    ]
+    const entry = buildMultiLevelLstEntry(0x000000AA, nfcs)
+    const data = new Uint8Array(entry.length)
+    data.set(entry, 0)
+    const result = parseListTable(data, 0, entry.length)
+    expect(result).toHaveLength(1)
+    expect(result[0].levels).toHaveLength(9)
+    result[0].levels.forEach((lv, i) => {
+      expect(lv.nfc).toBe(expected[i])
+      expect(lv.isBullet).toBe(false)
+    })
+  })
+
+  it('maps nfc=255 to the none format', () => {
+    const entry = buildSimpleLstEntry(0x000000AB, 255, 1)
+    const data = new Uint8Array(entry.length)
+    data.set(entry, 0)
+    const result = parseListTable(data, 0, entry.length)
+    expect(result[0].levels[0].nfc).toBe('none')
+  })
+
+  it('returns null from getListFormat when the entry has no levels', () => {
+    const lists: ListEntry[] = [
+      { lsid: 1, tplc: 0, fSimpleList: true, levels: [] },
+    ]
+    expect(getListFormat(lists, 0, 0)).toBeNull()
+  })
+
+  it('counts only level-0 items toward numbering continuity', () => {
+    const items = [
+      { listId: 7, listType: 'ordered' as const, listLevel: 0 },
+      { listId: 7, listType: 'ordered' as const, listLevel: 1 },
+      { listId: 7, listType: 'ordered' as const, listLevel: 0 },
+      { listType: 'plain' as any, listLevel: 0 }, // 非列表段落中断
+      { listId: 7, listType: 'ordered' as const, listLevel: 0 },
+    ]
+    const result = computeListContinuity(items)
+    // 第一块 2 个 level-0 → 第二块从 3 开始
+    expect(result[0].startAt).toBe(1)
+    expect(result[4].startAt).toBe(3)
+  })
+
+  it('keeps undefined-listId blocks independent', () => {
+    const items = [
+      { listId: undefined, listType: 'ordered' as const, listLevel: 0 },
+      { listType: 'ordered' as const, listLevel: 0 },
+    ]
+    const result = computeListContinuity(items)
+    expect(result[0].startAt).toBe(1)
+    expect(result[1].startAt).toBe(1)
+  })
+})

@@ -342,3 +342,115 @@ describe('tableText uncovered branches', () => {
     expect(html).toContain('B')
   })
 })
+
+describe('tableText border rendering branches', () => {
+  const border = (type: number, width: number | undefined, color: number) =>
+    ({ colorIndex: color, lineWidth: width, borderType: type })
+
+  it('renders an empty table for empty rows', () => {
+    expect(renderTableHtml([])).toBe('')
+  })
+
+  it('rejects isWordTableRow for empty text', () => {
+    expect(isWordTableRow('')).toBe(false)
+  })
+
+  it('emits a thead section when headerRowCount splits the rows', () => {
+    const html = renderTableHtml([['H1', 'H2'], ['a', 'b']], undefined, 1)
+    expect(html).toContain('<thead>')
+    expect(html).toContain('<th')
+    expect(html).toContain('<tbody>')
+  })
+
+  it('spans a single non-empty header cell across all columns', () => {
+    const html = renderTableHtml([['', 'Title', ''], ['a', 'b', 'c']], undefined, 1)
+    expect(html).toContain('<th colspan="3"')
+  })
+
+  it('renders all four cell border sides in order', () => {
+    const info = {
+      inTable: true,
+      cells: [{
+        column: 0, verticalMerge: 'none' as const,
+        borders: {
+          top: border(1, 8, 1), left: border(2, 8, 2),
+          bottom: border(3, 8, 3), right: border(4, 8, 4),
+        },
+      }],
+    }
+    const html = renderTableHtml([['x']], [info])
+    expect(html).toContain('border-top:1px solid #000000')
+    expect(html).toContain('border-left:1px dotted #0000FF')
+    expect(html).toContain('border-bottom:1px dashed #00FFFF')
+    expect(html).toContain('border-right:1px double #00FF00')
+  })
+
+  it('skips borderType 0 sides and defaults lineWidth to 4 twips (1px)', () => {
+    const info = {
+      inTable: true,
+      cells: [{
+        column: 0, verticalMerge: 'none' as const,
+        borders: {
+          top: border(0, 8, 1),
+          bottom: { colorIndex: 1, lineWidth: undefined, borderType: 1 },
+        },
+      }],
+    }
+    const html = renderTableHtml([['x']], [info])
+    expect(html).not.toContain('border-top')
+    expect(html).toContain('border-bottom:1px solid #000000')
+  })
+
+  it('maps borderType 5/6/7 and unknown to double/solid/dash-dot/solid', () => {
+    const mk = (t: number) => [{
+      column: 0, verticalMerge: 'none' as const,
+      borders: { top: border(t, 8, 1) },
+    }]
+    const single = (cells: any) => renderTableHtml([['x']], [{ inTable: true, cells }])
+    expect(single(mk(5))).toContain('border-top:1px double')
+    expect(single(mk(6))).toContain('border-top:1px solid')
+    expect(single(mk(7))).toContain('border-top:1px dash-dot')
+    expect(single(mk(99))).toContain('border-top:1px solid')
+  })
+
+  it('maps the full ico color palette and defaults to black', () => {
+    const palette: Record<number, string> = {
+      1: '#000000', 2: '#0000FF', 3: '#00FFFF', 4: '#00FF00', 5: '#FF00FF',
+      6: '#FF0000', 7: '#FFFF00', 8: '#FFFFFF', 9: '#000080', 10: '#008080',
+      11: '#008000', 12: '#800080', 13: '#800000', 14: '#808000', 15: '#808080',
+      16: '#C0C0C0',
+    }
+    for (const [ico, css] of Object.entries(palette)) {
+      const cells = [{ column: 0, verticalMerge: 'none' as const, borders: { top: border(1, 8, Number(ico)) } }]
+      const html = renderTableHtml([['x']], [{ inTable: true, cells }])
+      expect(html).toContain(`border-top:1px solid ${css}`)
+    }
+    const cells = [{ column: 0, verticalMerge: 'none' as const, borders: { top: border(1, 8, 99) } }]
+    expect(renderTableHtml([['x']], [{ inTable: true, cells }])).toContain('border-top:1px solid #000000')
+  })
+
+  it('adds border-collapse when inside borders are defined', () => {
+    const info = {
+      inTable: true,
+      borders: { insideH: border(1, 8, 1), insideV: border(1, 8, 1) },
+    }
+    const html = renderTableHtml([['a', 'b'], ['c', 'd']], [info, info])
+    expect(html).toContain('border-collapse:collapse')
+    expect(html).toMatch(/<table style="/)
+  })
+
+  it('falls back to a default TableInfo for rows missing one in nested rendering', () => {
+    const html = renderNestedTableHtml(
+      [['outer'], ['inner']],
+      undefined,
+      [1, 2],
+    )
+    expect(html).toContain('<table')
+    expect(html).toContain('outer')
+    expect(html).toContain('inner')
+  })
+
+  it('returns empty when every nested row is deeper than the top depth', () => {
+    expect(renderNestedTableHtml([['a'], ['b']], undefined, [2, 3])).toBe('')
+  })
+})

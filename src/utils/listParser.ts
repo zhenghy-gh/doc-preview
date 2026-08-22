@@ -61,11 +61,13 @@ export interface ListEntry {
 }
 
 function readUint16(data: Uint8Array, offset: number): number {
+  // 防御：调用方均以 endBound（≤ data.length）预检偏移，越界正常不可达
   if (offset < 0 || offset + 2 > data.length) return 0
   return data[offset] | (data[offset + 1] << 8)
 }
 
 function readUint32(data: Uint8Array, offset: number): number {
+  // 防御：调用方均以 endBound（≤ data.length）预检偏移，越界正常不可达
   if (offset < 0 || offset + 4 > data.length) return 0
   return (data[offset] | (data[offset + 1] << 8) | (data[offset + 2] << 16) | (data[offset + 3] << 24)) >>> 0
 }
@@ -329,6 +331,7 @@ export function parsePlcfLfo(data: Uint8Array, fc: number, lcb: number): LfoEntr
 
   for (let i = 0; i < n; i++) {
     const offset = lfoStart + i * 8
+    // 防御：n = floor((lcb-4)/12) 保证 lfoStart + n*8 ≤ fc+lcb，越界正常不可达
     if (offset + 8 > fc + lcb) break
     const lsid = readUint32(data, offset)
     const clfoLvl = data[offset + 4] & 0xFF
