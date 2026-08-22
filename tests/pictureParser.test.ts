@@ -588,3 +588,163 @@ describe('pictureParser partial match', () => {
     expect(pics[0].format).toBe('png')
   })
 })
+
+describe('pictureParser malformed image walks', () => {
+  it('returns null when lcb is between the stream bound and the 50MB cap', () => {
+    // lcb=51MB ≤ dataStream.length-fcPic(52MB)，但超过 50MB 上限
+    const stream = new Uint8Array(52 * 1024 * 1024)
+    new DataView(stream.buffer).setUint32(0, 51 * 1024 * 1024, true)
+    expect(parsePicfAt(stream, 0)).toBeNull()
+  })
+
+  it('detects GIF magic through the unknown-mm fallback', () => {
+    const stream = buildPicfEnvelope(0, 0, 0, buildMinimalGif())
+    const pic = parsePicfAt(stream, 0)
+    expect(pic?.format).toBe('gif')
+  })
+
+  it('detects BMP magic through the unknown-mm fallback', () => {
+    const stream = buildPicfEnvelope(0, 0, 0, buildMinimalBmp())
+    const pic = parsePicfAt(stream, 0)
+    expect(pic?.format).toBe('bmp')
+  })
+
+  it('falls back to the envelope end when a JPEG marker runs out of bounds', () => {
+    // FFD8 FFE0 后没有任何长度字节 → findJpegEnd -1 → 数据保持 lcb 剩余部分
+    const img = new Uint8Array([0xff, 0xd8, 0xff, 0xe0])
+    const stream = buildPicfEnvelope(8, 0, 0, img)
+    const pic = parsePicfAt(stream, 0)
+    expect(pic?.format).toBe('jpeg')
+    expect(pic?.data.length).toBe(4)
+  })
+
+  it('falls back to the envelope end when a JPEG segment length is under 2', () => {
+    const img = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x01, 0x00, 0x00])
+    const stream = buildPicfEnvelope(8, 0, 0, img)
+    const pic = parsePicfAt(stream, 0)
+    expect(pic?.format).toBe('jpeg')
+    expect(pic?.data.length).toBe(8)
+  })
+
+  it('falls back when a PNG chunk length decodes negative', () => {
+    const png = buildMinimalPng()
+    png[8] = 0xff; png[9] = 0xff; png[10] = 0xff; png[11] = 0xff // IHDR length → 负数
+    const stream = buildPicfEnvelope(10, 0, 0, png)
+    const pic = parsePicfAt(stream, 0)
+    expect(pic?.format).toBe('png')
+    expect(pic?.data.length).toBe(png.length)
+  })
+
+  it('falls back when a PNG chunk end passes the limit', () => {
+    const png = buildMinimalPng()
+    const stream = buildPicfEnvelope(10, 0, 0, png)
+    const dv = new DataView(stream.buffer)
+    // 图像起点 4+68=72，chunk 起点为 +8；把 IHDR length 设为恰好 limit-offset，
+    // 使 length 检查通过而 chunkEnd = offset+12+length 越过 limit
+    const chunkOffset = 72 + 8
+    const limit = 72 + 68 + png.length
+    dv.setUint32(chunkOffset, limit - chunkOffset, false)
+    const pic = parsePicfAt(stream, 0)
+    expect(pic?.format).toBe('png')
+    expect(pic?.data.length).toBe(png.length)
+  })
+
+  it('falls back when a BMP header is too close to the stream end', () => {
+    const img = new Uint8Array([0x42, 0x4d]) // 只有 'BM'
+    const stream = buildPicfEnvelope(3, 0, 0, img)
+    const pic = parsePicfAt(stream, 0)
+    expect(pic?.format).toBe('bmp')
+    expect(pic?.data.length).toBe(2)
+  })
+
+  it('falls back when the declared BMP size is below the 54-byte header', () => {
+    const bmp = buildMinimalBmp()
+    new DataView(bmp.buffer).setUint32(2, 10, true) // fileSize = 10
+    const stream = buildPicfEnvelope(3, 0, 0, bmp)
+    const pic = parsePicfAt(stream, 0)
+    expect(pic?.format).toBe('bmp')
+    expect(pic?.data.length).toBe(bmp.length)
+  })
+
+  it('falls back when the declared BMP size exceeds the envelope', () => {
+    const bmp = buildMinimalBmp()
+    new DataView(bmp.buffer).setUint32(2, 0x7ffffff0, true)
+    const stream = buildPicfEnvelope(3, 0, 0, bmp)
+    const pic = parsePicfAt(stream, 0)
+    expect(pic?.format).toBe('bmp')
+    expect(pic?.data.length).toBe(bmp.length)
+  })
+
+  it('falls back when a GIF header is shorter than 13 bytes', () => {
+    const img = new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61])
+    const stream = buildPicfEnvelope(15, 0, 0, img)
+    const pic = parsePicfAt(stream, 0)
+    expect(pic?.format).toBe('gif')
+    expect(pic?.data.length).toBe(6)
+  })
+
+  it('falls back when a GIF image descriptor is truncated at the limit', () => {
+    const img = new Uint8Array([
+      0x47, 0x49, 0x46, 0x38, 0x39, 0x61, // GIF89a
+      0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, // 13 字节头（无 GCT）
+      0x2c, 0x00, 0x00, 0x00, 0x00, // 描述符被截断
+    ])
+    const stream = buildPicfEnvelope(15, 0, 0, img)
+    const pic = parsePicfAt(stream, 0)
+    expect(pic?.format).toBe('gif')
+    expect(pic?.data.length).toBe(img.length)
+  })
+})
+
+describe('parseJpegDimensions truncated walks', () => {
+  it('returns null when an SOF marker lacks room for the dimension fields', () => {
+    // FFD8 FFC0 后只剩 2 字节
+    expect(parseJpegDimensions(new Uint8Array([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x00]))).toBeNull()
+  })
+
+  it('returns null when a non-SOF marker lacks room for its length', () => {
+    expect(parseJpegDimensions(new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00]))).toBeNull()
+  })
+
+  it('returns null when a segment length is under 2', () => {
+    expect(parseJpegDimensions(new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x01, 0x00, 0x00]))).toBeNull()
+  })
+})
+
+describe('parsePngDimensions signature check', () => {
+  it('returns null for 24+ bytes without the PNG signature', () => {
+    const data = new Uint8Array(32)
+    data[0] = 0x89
+    expect(parsePngDimensions(data)).toBeNull()
+  })
+})
+
+describe('extractPicturesFromDataStream PICF scan rejects', () => {
+  function buildScanStream(mm: number, imageOffset: number, image: Uint8Array): Uint8Array {
+    const stream = new Uint8Array(Math.max(imageOffset + image.length, 96))
+    const dv = new DataView(stream.buffer)
+    dv.setUint32(0, 100, true) // lcb ≥ 68 且 ≤ imgOffset+1024
+    dv.setUint16(4, mm, true)
+    stream.set(image, imageOffset)
+    return stream
+  }
+
+  it('uses the raw fallback when the preceding PICF has an unknown mm type', () => {
+    // mm=5 在 1-20 范围内但 mmToPictureType → unknown → findPrecedingPicf 跳过
+    const png = buildMinimalPng()
+    const stream = buildScanStream(5, 80, png)
+    const pics = extractPicturesFromDataStream(stream)
+    expect(pics).toHaveLength(1)
+    expect(pics[0].dataOffset).toBe(80)
+    expect(pics[0].widthPx).toBe(1) // 裸回退从 IHDR 恢复尺寸
+  })
+
+  it('uses the raw fallback when the image starts inside the PICF header', () => {
+    // 图像起点 14 < picfStart+68=72 → findPrecedingPicf 跳过
+    const png = buildMinimalPng()
+    const stream = buildScanStream(8, 14, png)
+    const pics = extractPicturesFromDataStream(stream)
+    expect(pics).toHaveLength(1)
+    expect(pics[0].dataOffset).toBe(14)
+  })
+})

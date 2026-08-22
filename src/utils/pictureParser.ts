@@ -64,11 +64,13 @@ const MM_WMF = 0x0002
 const PICF_HEADER_SIZE = 68
 
 function readUint16(data: Uint8Array, offset: number): number {
+  // 防御：调用方（parsePicfAt/findPrecedingPicf/findBmpEnd）均已做边界预检，越界正常不可达
   if (offset < 0 || offset + 2 > data.length) return 0
   return data[offset] | (data[offset + 1] << 8)
 }
 
 function readUint32(data: Uint8Array, offset: number): number {
+  // 防御：调用方均已做边界预检，越界正常不可达
   if (offset < 0 || offset + 4 > data.length) return 0
   return (
     (data[offset] |
@@ -497,6 +499,7 @@ function findImageIndexInStream(
   img: Uint8Array,
   startFrom: number,
 ): number {
+  // 防御：extractImagesFromStream 不会返回空数据，空图片正常不可达
   if (img.length === 0) return -1
   const firstByte = img[0]
   for (let i = startFrom; i < stream.length - img.length + 1; i++) {
