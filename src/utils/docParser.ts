@@ -1866,12 +1866,9 @@ export class DocParser {
     const data = wordStream.data
     const fib = parseFib(data)
 
-    // Unreachable: parseFib always reports fcMin=fcMac=0.
-    /* v8 ignore start */
-    if (fib && fib.fcMin > 0 && fib.fcMac > 0) {
-      return { paragraphs: this.extractTextWithFormatFromFib(data, fib), tocEntries: [], indexEntries: [], documentFields: {}, equations: [] }
-    }
-    /* v8 ignore stop */
+    // Note: parseFib always reports fcMin=fcMac=0 for Word 97+ files (the
+    // legacy FibBase range is only kept as fcMinBase/fcMacBase), so there is
+    // no direct fcMin/fcMac extraction path here — CLX or auto-detect below.
 
     // For libwv/non-standard files: lcbClx=0 but ccpText > 0
     // Text is at offset 2048, UTF-16LE, for ccpText characters
@@ -2476,16 +2473,6 @@ export class DocParser {
       logger.warn('DOP 提取失败:', err instanceof Error ? err.message : String(err))
       return null
     }
-  }
-
-  private extractTextWithFormatFromFib(data: Uint8Array, fib: FibData): any[] {
-    const clxEnd = fib.fcClx + fib.lcbClx
-    const options = { fcMin: fib.fcMin, fComplex: fib.fComplex, fcMac: fib.fcMac || data.length }
-    if (clxEnd > data.length) {
-      return this.extractParagraphsWithFormat(data, options)
-    }
-    const paragraphs = this.extractParagraphsWithFormat(data, options)
-    return this.filterParagraphsWithGenericLogic(paragraphs)
   }
 
   private extractParagraphsWithFormat(data: Uint8Array, options?: { fcMin?: number; fComplex?: boolean; _isRetry?: boolean; fcMac?: number; trustFcMin?: boolean }): any[] {
