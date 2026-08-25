@@ -387,13 +387,11 @@ export class DocParser {
       /* v8 ignore stop */
     }
 
-    if (fib.fcMin === 0 || fib.fcMac === 0) {
-      // textutil files have unreliable fComplex — ignore it and lean toward UTF-16
-      const suggestedComplex = fib.isTextutil ? false : fib.fComplex
-      return this.extractTextWithAutoDetect(data, suggestedComplex)
-    }
-
-    return this.extractTextSimple(data, { fcMin: fib.fcMin, fComplex: fib.fComplex })
+    // parseFib reports fcMin=fcMac=0 for Word 97+ files (the legacy FibBase
+    // text range is kept separately as fcMinBase/fcMacBase), so plain-text
+    // extraction always resolves through encoding auto-detection here.
+    const suggestedComplex = fib.isTextutil ? false : fib.fComplex
+    return this.extractTextWithAutoDetect(data, suggestedComplex)
   }
 
   /**
