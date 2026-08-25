@@ -1780,6 +1780,90 @@ describe('CLX-unreachable fallback paths', () => {
     expect(texts).toContain('Hello libwv world')
   })
 
+  /** WordDocument stream (8192 bytes) whose scan region holds 8-bit filler
+   *  with ~6.5% NUL bytes and NO paragraph marks, so both heuristics in
+   *  detectEncodingFromBinary are inconclusive and the scoring fallback
+   *  decides the encoding. lcbClx points at a zeroed Pcdt (no pieces) while
+   *  ccpText stays >0 to skip the libwv gate. */
+  function buildScoringNullOle(): ArrayBuffer {
+    const SECTOR = 512
+    // Layout: sector 0=FAT, 1=directory, 2..17 = WordDocument (8192 bytes)
+    const buf = new ArrayBuffer(SECTOR * 20)
+    const view = new Uint8Array(buf)
+    const w16 = (off: number, v: number) => { view[off] = v & 0xff; view[off + 1] = (v >> 8) & 0xff }
+    const w32 = (off: number, v: number) => {
+      view[off] = v & 0xff; view[off + 1] = (v >> 8) & 0xff
+      view[off + 2] = (v >> 16) & 0xff; view[off + 3] = (v >> 24) & 0xff
+    }
+    const END = 0xFFFFFFFE, FREE = 0xFFFFFFFF
+    view[0] = 0xD0; view[1] = 0xCF; view[2] = 0x11; view[3] = 0xE0
+    view[4] = 0xA1; view[5] = 0xB1; view[6] = 0x1A; view[7] = 0xE1
+    w16(26, 3); w16(30, 9); w16(32, 6)
+    w32(48, 1); w32(56, 4096)
+    w32(60, END); w32(64, 0); w32(68, END); w32(72, 0)
+    w32(76, 0)
+    for (let i = 1; i < 109; i++) w32(76 + i * 4, FREE)
+    const fatBase = SECTOR
+    w32(fatBase + 0 * 4, END)
+    for (let s = 2; s < 17; s++) w32(fatBase + s * 4, s + 1)
+    w32(fatBase + 17 * 4, END)
+    w32(fatBase + 1 * 4, END)
+    for (let i = 18; i < 128; i++) w32(fatBase + i * 4, FREE)
+    // Sector 18: minimal (zeroed) 0Table so readClxData/tryParseFormats find it
+    w32(fatBase + 18 * 4, END)
+    const bufViewLimit = SECTOR * 20
+    void bufViewLimit
+    const dirBase = SECTOR * 2
+    const writeDir = (off: number, name: string, type: number, start: number, size: number) => {
+      for (let i = 0; i < name.length; i++) w16(off + i * 2, name.charCodeAt(i))
+      w16(off + 64, name.length * 2)
+      view[off + 66] = type
+      view[off + 67] = 1
+      w32(off + 116, start)
+      w32(off + 120, size)
+    }
+    writeDir(dirBase + 0 * 128, 'Root Entry', 5, END, 0)
+    writeDir(dirBase + 1 * 128, 'WordDocument', 2, 2, 8192)
+    writeDir(dirBase + 2 * 128, '0Table', 2, 18, 16)
+    writeDir(dirBase + 3 * 128, 'MSGraph.Chart.8', 1, END, 0)
+    // FIB at stream offset 0
+    const wdBase = SECTOR * 3
+    w16(0 + wdBase, 0xA5EC)
+    w16(2 + wdBase, 0x0101)
+    w16(10 + wdBase, 0)
+    w16(32 + wdBase, 0)
+    w16(34 + wdBase, 22)
+    w32(36 + 12 + wdBase, 300) // ccpText > 0 (libwv gate needs lcbClx==0)
+    w16(124 + wdBase, 34)
+    // CLX pair pointing at 'A' filler inside WordDocument ([500,510)):
+    // clxt != 2 -> no pieces, while lcbClx > 0 skips the libwv gate.
+    w32(126 + 33 * 8 + wdBase, 500)
+    w32(126 + 33 * 8 + 4 + wdBase, 10)
+    // Scan region [2048, 8192): 'A' filler with every 15th byte NUL (~6.7%),
+    // strictly no 0x0D so both encoding heuristics stay inconclusive.
+    // The first 600 bytes also get periodic spaces so the 8-bit decode wins
+    // the scoring step with multiple dictionary-ish words.
+    view[wdBase + 10] = 0x04 // fComplex (byte10 bit2) -> suggestedComplex
+    for (let i = 2048; i < 8192; i++) {
+      const rel = i - 2048
+      if (rel % 15 === 14) view[wdBase + i] = 0x00
+      else if (rel < 600 && rel % 8 === 7) view[wdBase + i] = 0x20
+      else view[wdBase + i] = 0x41
+    }
+    return buf
+  }
+
+  it('resolves encoding via the scoring fallback when detection is null', () => {
+    const parser = new DocParser(buildScoringNullOle())
+    const result = parser.parseWithFormat()
+    expect(result.success).toBe(true)
+    const paras = result.document.paragraphs as Array<{ text: string }>
+    expect(paras.length).toBeGreaterThan(0)
+    // MSGraph storage keeps tryParseFormatsFromTableStream non-null, so the
+    // scored paragraphs flow through applyParsedStylesToParagraphs.
+    expect(result.document.charts.length).toBe(1)
+  })
+
 })
 
 describe('form feed page breaks', () => {
