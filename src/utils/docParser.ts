@@ -30,8 +30,8 @@ import type { StreamData, DirectoryEntry } from './oleParser'
 import { parseFib } from './fibParser'
 import type { FibData, RgCcp } from './fibParser'
 import { isTableRowText } from './tableText'
-import { extractImagesFromStream, imagesToDataUrls } from './imageExtractor'
-import type { ExtractedImage } from './imageExtractor'
+import { extractImagesFromStream, imagesToDataUrls, imageFormatMime } from './imageExtractor'
+import type { ExtractedImage, ImageFormat } from './imageExtractor'
 import { extractPicturesFromDataStream, parsePicfAt } from './pictureParser'
 import type { ParsedPicture } from './pictureParser'
 import { parseChpxRuns, parsePapxRuns, parseChpxRunsFromFkp, parsePapxRunsFromFkp, mergeCharFormatForParagraph } from './formatParser'
@@ -2366,12 +2366,9 @@ export class DocParser {
           chunks.push(chunk)
         }
         binary = chunks.join('')
-        let mime: string
-        if (pic.format === 'png') mime = 'image/png'
-        else if (pic.format === 'jpeg') mime = 'image/jpeg'
-        else if (pic.format === 'gif') mime = 'image/gif'
-        else if (pic.format === 'bmp') mime = 'image/bmp'
-        else mime = 'application/octet-stream'
+        // pic.format is guaranteed non-'unknown' by the guard above, so the
+        // shared helper covers every remaining case.
+        const mime = imageFormatMime(pic.format as ImageFormat)
         const dataUrl = `data:${mime};base64,${btoa(binary)}`
 
         const item: {
