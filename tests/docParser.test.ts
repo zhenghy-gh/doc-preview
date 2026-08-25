@@ -1082,6 +1082,39 @@ describe('character format title guessing', () => {
   })
 })
 
+describe('extractTextSimple UTF-16 junk filtering', () => {
+  const parser = new DocParser(new ArrayBuffer(512))
+
+  it('keeps paragraphs after the significant Chinese start', () => {
+    // Two UTF-16LE Chinese paragraphs: the first one (>=3 CJK chars, no
+    // junk) anchors the start, the second flows through the post-start
+    // keep-branch of the filter loop.
+    const text = '这是第一个中文段落开头\r\n后续内容也要保留完整\r\n'
+    const data = new Uint8Array(text.length * 2)
+    for (let i = 0; i < text.length; i++) {
+      const code = text.charCodeAt(i)
+      data[i * 2] = code & 0xff
+      data[i * 2 + 1] = (code >> 8) & 0xff
+    }
+    const result = (parser as any).extractTextSimple(data)
+    expect(result).toContain('这是第一个中文段落开头')
+    expect(result).toContain('后续内容也要保留完整')
+  })
+
+  it('falls back to the first paragraphs when no Chinese anchor exists', () => {
+    // Pure-ASCII text never sets foundStart -> the slice(0,3) fallback runs.
+    const ascii = 'Hello world paragraph\r\nSecond plain paragraph\r\n'
+    const data = new Uint8Array(ascii.length * 2)
+    for (let i = 0; i < ascii.length; i++) {
+      const code = ascii.charCodeAt(i)
+      data[i * 2] = code & 0xff
+      data[i * 2 + 1] = (code >> 8) & 0xff
+    }
+    const result = (parser as any).extractTextSimple(data)
+    expect(result).toContain('Hello world paragraph')
+  })
+})
+
 describe('paragraph format heuristics', () => {
   const parser = new DocParser(new ArrayBuffer(512))
 
