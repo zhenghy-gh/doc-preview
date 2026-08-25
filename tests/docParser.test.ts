@@ -1178,7 +1178,7 @@ describe('parseWithFormat field assembly', () => {
    */
   function buildOleWithFields(): ArrayBuffer {
     const SECTOR = 512
-    const buf = new ArrayBuffer(SECTOR * 9)
+    const buf = new ArrayBuffer(SECTOR * 10)
     const view = new Uint8Array(buf)
     const w16 = (off: number, v: number) => { view[off] = v & 0xff; view[off + 1] = (v >> 8) & 0xff }
     const w32 = (off: number, v: number) => {
@@ -1200,6 +1200,7 @@ describe('parseWithFormat field assembly', () => {
     w32(fatBase + 4 * 4, END); w32(fatBase + 5 * 4, END)
     w32(fatBase + 6 * 4, END); w32(fatBase + 7 * 4, END)
     for (let i = 8; i < 128; i++) w32(fatBase + i * 4, FREE)
+    w32(fatBase + 8 * 4, END) // sector 8: EquationText stream
     // Directory
     const dirBase = SECTOR * 2
     const writeDir = (off: number, name: string, type: number, start: number, size: number) => {
@@ -1218,6 +1219,10 @@ describe('parseWithFormat field assembly', () => {
     const dirBase2 = SECTOR * 7
     writeDir(dirBase2 + 0 * 128, 'WordArt.1', 1, END, 0)
     writeDir(dirBase2 + 1 * 128, 'Data', 2, 7, 512)
+    // Equation.1 storage + its EquationText payload stream in sector 8
+    writeDir(dirBase2 + 2 * 128, 'Equation.1', 1, END, 0)
+    const eqnName = 'Equation.1\x00EquationText'
+    writeDir(dirBase2 + 3 * 128, eqnName, 2, 8, 24)
 
     // WordDocument stream (sectors 2-3)
     const wdBase = SECTOR * 3
@@ -1484,6 +1489,12 @@ describe('parseWithFormat field assembly', () => {
     const bname = 'MyBookmark'
     for (let i = 0; i < bname.length; i++) w16(bkmkBase + 6 + i * 2, bname.charCodeAt(i))
     w16(bkmkBase + 6 + bname.length * 2, 0)
+    // EquationText stream in sector 8: u32 length prefix + ASCII eqn text
+    const eqnStream = SECTOR * 9
+    const eqnContent = '\\alpha x+y=z'
+    w32(eqnStream + 0, eqnContent.length)
+    for (let i = 0; i < eqnContent.length; i++) view[eqnStream + 4 + i] = eqnContent.charCodeAt(i)
+    view[eqnStream + 4 + eqnContent.length] = 0
     // DOP at 350: byte0 bit1 set -> fTitlePage
     view[tblBase + 350] = 0x02
     view[tblBase + 351] = 0x00
@@ -1512,7 +1523,7 @@ describe('parseWithFormat field assembly', () => {
     expect(doc.charts[0].type).toBe('msgraph')
     expect(doc.wordArts.length).toBe(1)
     expect(doc.shapes.length).toBe(2) // WordDocument FDG + Data stream FDG
-    expect(doc.equations.length).toBe(1)
+    expect(doc.equations.length).toBe(2) // WordDocument magic + Equation.1 storage
     expect(doc.revisions.length).toBe(1)
     expect(doc.revisions[0].type).toBe('insert')
     expect(doc.revisions[0].timestamp).toBe(0x01020304)

@@ -694,11 +694,12 @@ export class OleParser {
       const terminator = nameLength >= 2 && this.safeReadUint16(offset + nameLength - 2) === 0
         ? nameLength - 2
         : nameLength
+      // Read exactly terminator/2 UTF-16 units. Interior NULs are legal in
+      // compound stream names ("Equation.1\0EquationText"), so unlike a
+      // break-at-NUL scan we keep them for downstream name matching.
       let name = ''
       for (let i = 0; i < terminator && offset + i + 1 < this.buffer.byteLength; i += 2) {
-        const char = this.safeReadUint16(offset + i)
-        if (char === 0) break
-        name += String.fromCharCode(char)
+        name += String.fromCharCode(this.safeReadUint16(offset + i))
       }
 
       return {
