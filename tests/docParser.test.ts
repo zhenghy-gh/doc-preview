@@ -1807,6 +1807,76 @@ describe('form feed page breaks', () => {
   })
 })
 
+describe('dop and paragraph-scan guards', () => {
+  const parser = new DocParser(new ArrayBuffer(512))
+
+  it('extractDop returns null when no table stream exists', () => {
+    // lcbDop/fcDop are set but the directory carries no 0Table/1Table entry.
+    const fib = { lcbDop: 100, fcDop: 50, fWhichTblStm: false }
+    expect((parser as any).extractDop(fib, [])).toBeNull()
+  })
+
+  it('extractDop returns null when the DOP range exceeds the table stream', () => {
+    // Minimal 4-sector OLE with a real 512-byte 0Table so readStream can
+    // resolve it; fcDop+lcbDop then points past the stream end.
+    const SECTOR = 512
+    const buf = new ArrayBuffer(SECTOR * 4)
+    const view = new Uint8Array(buf)
+    const w16 = (off: number, v: number) => { view[off] = v & 0xff; view[off + 1] = (v >> 8) & 0xff }
+    const w32 = (off: number, v: number) => {
+      view[off] = v & 0xff; view[off + 1] = (v >> 8) & 0xff
+      view[off + 2] = (v >> 16) & 0xff; view[off + 3] = (v >> 24) & 0xff
+    }
+    const END = 0xFFFFFFFE, FREE = 0xFFFFFFFF
+    view[0] = 0xD0; view[1] = 0xCF; view[2] = 0x11; view[3] = 0xE0
+    view[4] = 0xA1; view[5] = 0xB1; view[6] = 0x1A; view[7] = 0xE1
+    w16(26, 3); w16(30, 9); w16(32, 6)
+    w32(48, 1); w32(56, 4096)
+    w32(60, END); w32(64, 0); w32(68, END); w32(72, 0)
+    w32(76, 0)
+    for (let i = 1; i < 109; i++) w32(76 + i * 4, FREE)
+    const fatBase = SECTOR
+    for (let i = 0; i < 3; i++) w32(fatBase + i * 4, END)
+    for (let i = 3; i < 128; i++) w32(fatBase + i * 4, FREE)
+    const dirBase = SECTOR * 2
+    const writeDir = (off: number, name: string, type: number, start: number, size: number) => {
+      for (let i = 0; i < name.length; i++) w16(off + i * 2, name.charCodeAt(i))
+      w16(off + 64, name.length * 2)
+      view[off + 66] = type
+      view[off + 67] = 1
+      w32(off + 116, start)
+      w32(off + 120, size)
+    }
+    writeDir(dirBase + 0 * 128, 'Root Entry', 5, END, 0)
+    writeDir(dirBase + 1 * 128, 'WordDocument', 2, END, 0)
+    writeDir(dirBase + 2 * 128, '0Table', 2, 2, 512)
+    const docParser = new DocParser(buf)
+    const ole = (docParser as any).ole
+    const header = ole.parseHeader()
+    const fat = ole.getFatSectors(header)
+    const directory = ole.getDirectorySectors(header, fat)
+    const fib = { lcbDop: 200, fcDop: 400, fWhichTblStm: false }
+    expect((docParser as any).extractDop(fib, directory)).toBeNull()
+  })
+
+  it('extractParagraphsWithFormat applies the 2048 floor when fcMin is absent', () => {
+    // No options: startOffset defaults to 0 and is floored to 2048 before
+    // scanning; UTF-16 text placed past the floor is still extracted.
+    const prefix = new Uint8Array(2048)
+    const text = 'Floor test body text'
+    const data = new Uint8Array(2048 + text.length * 2 + 2)
+    data.set(prefix)
+    for (let i = 0; i < text.length; i++) {
+      const code = text.charCodeAt(i)
+      data[2048 + i * 2] = code & 0xff
+      data[2048 + i * 2 + 1] = (code >> 8) & 0xff
+    }
+    data[2048 + text.length * 2] = 0x0d
+    const paras = (parser as any).extractParagraphsWithFormat(data)
+    expect(paras.some((p: any) => p.text.includes('Floor test body text'))).toBe(true)
+  })
+})
+
 describe('readClxData WordDocument fallback', () => {
   it('falls back to the WordDocument stream when the table stream is too small', () => {
     const SECTOR = 512
