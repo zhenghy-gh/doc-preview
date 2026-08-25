@@ -1743,9 +1743,14 @@ export class DocParser {
               }
               // Apply style's font name
               if (resolved.fontIndex !== undefined && fontNames && fontNames.length > resolved.fontIndex) {
+                // Unreachable: guessCharFormat always seeds charFormat.fontName
+                // ('Times New Roman' / 宋体 / 仿宋_GB2312), so the guard below
+                // never sees an empty font name. Kept for spec symmetry.
+                /* v8 ignore start */
                 if (!newPara.charFormat.fontName) {
                   newPara.charFormat.fontName = fontNames[resolved.fontIndex]
                 }
+                /* v8 ignore stop */
               }
               // Only use style-name-based heading level if outlineLevel wasn't set
               if (newPara.paraFormat.headingLevel === undefined) {
