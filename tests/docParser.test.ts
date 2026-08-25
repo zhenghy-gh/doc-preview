@@ -1227,11 +1227,20 @@ describe('parseWithFormat field assembly', () => {
     w16(32 + wdBase, 0)
     w16(34 + wdBase, 22)
     const text = 'X HYPERLINK "a.com" Click AUTHOR John PAGE 1 TOC \\o "1" Head.....1 INDEX A\t1 REF _R1 \\h 1'
+    const hddText = 'First Page Header\r\n'
+    const hddLen = hddText.length
     // FibBase fcMin/fcMac: text starts at character 300 (byte 600)
     w32(24 + wdBase, 300)
     w32(28 + wdBase, 300 + text.length)
     w32(36 + 12 + wdBase, text.length) // ccpText
+    w32(36 + 20 + wdBase, hddLen) // ccpHdd
     w16(124 + wdBase, 52) // cbRgFcLcb
+    // pair 11: fcPlcfHdd/lcbPlcfHdd -> 0Table offset 360 (one title range)
+    w32(126 + 11 * 8 + wdBase, 360)
+    w32(126 + 11 * 8 + 4 + wdBase, 16)
+    // pair 31: fcDop/lcbDop -> 0Table offset 350 (fTitlePage set)
+    w32(126 + 31 * 8 + wdBase, 350)
+    w32(126 + 31 * 8 + 4 + wdBase, 8)
     // pair 6: fcPlcfSed/lcbPlcfSed -> 0Table offset 160, 16 bytes
     w32(126 + 6 * 8 + wdBase, 160)
     w32(126 + 6 * 8 + 4 + wdBase, 16)
@@ -1259,13 +1268,18 @@ describe('parseWithFormat field assembly', () => {
     w32(126 + 51 * 8 + wdBase, 320)
     w32(126 + 51 * 8 + 4 + wdBase, 18)
     // pair 33: fcClx/lcbClx -> 0Table offset 0
-    const clxSize = 1 + 4 + 4 * 2 + 8
+    const clxSize = 33 // clxt + Pcdt(28) + trailing PCD-B prm byte
     w32(126 + 33 * 8 + wdBase, 0)
     w32(126 + 33 * 8 + 4 + wdBase, clxSize)
     // Text at offset 600 (after the 52-pair rgFcLcb blob ending at 542)
     const textOffset = 600
     for (let i = 0; i < text.length; i++) w16(textOffset + i * 2 + wdBase, text.charCodeAt(i))
     w16(textOffset + text.length * 2 + wdBase, 0x0D)
+    // Header story bytes parked in the rgFcLcb blob gap [546, 584)
+    // (blob ends at 542, main text starts at 600), referenced by PCD B.
+    const hddOffset = 546
+    for (let i = 0; i < hddText.length; i++) w16(hddOffset + i * 2 + wdBase, hddText.charCodeAt(i))
+    w16(hddOffset + hddText.length * 2 + wdBase, 0x0D)
     // Office Art FDG (rectangle) after the text so shapes are detected
     const recHeader = (off: number, recVer: number, recInstance: number, recType: number, recLen: number) => {
       view[wdBase + off] = (recVer << 6) | ((recInstance >> 8) & 0x3F)
@@ -1309,14 +1323,21 @@ describe('parseWithFormat field assembly', () => {
 
     // 0Table stream (sector 5 -> physical offset (5+1)*512)
     const tblBase = SECTOR * 6
-    // CLX: bare Pcdt, single piece
+    // CLX: bare Pcdt with TWO pieces — main text [0,len) at 600 and the
+    // header story [len, len+hddLen) parked in the free blob gap at 546.
+    // (lcb counts only Pcdt data: 12*n + 4*(n+1); total span 1+lcb = 29,
+    // the trailing prm byte lands on tblBase+32 which is cps[0]==0.)
     view[tblBase + 0] = 0x02
-    w32(tblBase + 1, 16)
+    w32(tblBase + 1, 12 * 2 + 4) // PlcPcd byte size: 12n+4 with n=2
     w32(tblBase + 5, 0)
     w32(tblBase + 9, text.length)
-    // PCD fc with the fChp bit set (bit 31) and prm chpxIndex = 0
-    w32(tblBase + 13 + 2, textOffset | 0x80000000)
-    w16(tblBase + 13 + 6, 0)
+    w32(tblBase + 13, text.length + hddLen)
+    // PCD A: main text at 600, fChp set, prm chpxIndex 0
+    w32(tblBase + 17 + 2, textOffset | 0x80000000)
+    w16(tblBase + 17 + 6, 0)
+    // PCD B: header story bytes at 546
+    w32(tblBase + 25 + 2, 546)
+    w16(tblBase + 25 + 6, 0)
     // PlcfFld at offset 32: 6 fields, 19 CPs + 18 (ch, flt) pairs
     const fldBase = tblBase + 32
     const cps = [0, 19, 25, 25, 32, 37, 37, 42, 44, 44, 55, 66, 66, 72, 76, 76, 87, 89, 89]
@@ -1463,12 +1484,19 @@ describe('parseWithFormat field assembly', () => {
     const bname = 'MyBookmark'
     for (let i = 0; i < bname.length; i++) w16(bkmkBase + 6 + i * 2, bname.charCodeAt(i))
     w16(bkmkBase + 6 + bname.length * 2, 0)
+    // DOP at 350: byte0 bit1 set -> fTitlePage
+    view[tblBase + 350] = 0x02
+    view[tblBase + 351] = 0x00
+    // PlcfHdd at 360: one subrange covering the whole header story
+    w32(tblBase + 360, 0)
+    w32(tblBase + 364, hddLen)
     return buf
   }
 
   it('assembles hyperlinks, toc, index, fields, page fields, cross references and sections', () => {
     const parser = new DocParser(buildOleWithFields())
     const result = parser.parseWithFormat()
+    console.log('DBG err:', result.error)
     expect(result.success).toBe(true)
     const doc = result.document
     expect(doc.hyperlinks.length).toBe(1)
@@ -1498,6 +1526,12 @@ describe('parseWithFormat field assembly', () => {
     expect(pics[0].widthPx).toBe(2)
     expect(pics[0].heightPx).toBe(3)
     expect(pics[0].cp).toBe(0)
+    // Header story split via PlcfHdd with the DOP fTitlePage flag, plus the
+    // image-annotated variant (the PICF picture is scanned for header parts)
+    const stories = doc.stories as any
+    expect(stories?.headers).toContain('First Page Header')
+    expect(stories?.headerParts?.titleHeader).toBe('First Page Header')
+    expect(stories?.headerPartsWithImages?.titleHeader?.text).toBe('First Page Header')
   })
 })
 
