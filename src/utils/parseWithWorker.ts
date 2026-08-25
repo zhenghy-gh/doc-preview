@@ -26,6 +26,26 @@ export function parseWithWorker(
   onProgress?: ProgressCallback,
 ): Promise<WorkerParseResult> {
   return new Promise((resolve) => {
+    let settled = false
+    const finish = (result: WorkerParseResult) => {
+      if (settled) return
+      settled = true
+      resolve(result)
+    }
+    const fallback = (fallbackBuffer: ArrayBuffer) => {
+      if (settled) return
+      fallbackParse(fallbackBuffer, maxScanBytes, finish, onProgress)
+    }
+
+    // Keep the old fallback behaviour for small files, but avoid duplicating
+    // large documents just to protect an unlikely worker failure path. A second
+    // full ArrayBuffer copy is expensive for 100MB+ documents.
+    // Keep a fallback copy only when it is cheap. Large files are transferred
+    // to the worker and cannot be duplicated without defeating the memory goal.
+    const fallbackBuffer = buffer.byteLength <= 16 * 1024 * 1024
+      ? buffer.slice(0)
+      : null
+
     // Attempt Web Worker path
     try {
       const worker = new Worker(
@@ -34,9 +54,13 @@ export function parseWithWorker(
       )
 
       const timeout = setTimeout(() => {
+        if (settled) return
         worker.terminate()
-        // Fallback on timeout
-        fallbackParse(buffer, maxScanBytes, resolve, onProgress)
+        if (fallbackBuffer !== null) {
+          fallback(fallbackBuffer)
+        } else {
+          finish({ success: false, error: 'Worker 解析超时' })
+        }
       }, 30_000)
 
       worker.onmessage = (e: MessageEvent<WorkerParseResponse>) => {
@@ -49,7 +73,7 @@ export function parseWithWorker(
         // msg.type === 'result'
         clearTimeout(timeout)
         worker.terminate()
-        resolve({
+        finish({
           success: msg.success,
           document: msg.document,
           text: msg.text,
@@ -60,14 +84,18 @@ export function parseWithWorker(
       worker.onerror = () => {
         clearTimeout(timeout)
         worker.terminate()
-        fallbackParse(buffer, maxScanBytes, resolve, onProgress)
+        if (fallbackBuffer !== null) {
+          fallback(fallbackBuffer)
+        } else {
+          finish({ success: false, error: 'Worker 解析异常' })
+        }
       }
 
       // Transfer buffer for zero-copy
       worker.postMessage({ buffer, maxScanBytes }, [buffer])
     } catch {
       // Workers unsupported (e.g. some older browsers) → main thread
-      fallbackParse(buffer, maxScanBytes, resolve, onProgress)
+      fallback(fallbackBuffer ?? buffer)
     }
   })
 }

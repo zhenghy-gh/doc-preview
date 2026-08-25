@@ -34,11 +34,17 @@ const percentLabel = computed(() => {
 </script>
 
 <template>
-  <div class="loading-container">
+  <div class="loading-container" role="status" aria-live="polite">
     <div class="loading-spinner"></div>
     <p class="loading-step">{{ progressStep || t('loading.text') }}</p>
     <p class="loading-filename" v-if="fileName">{{ fileName }}</p>
-    <div class="progress-track">
+    <div
+      class="progress-track"
+      role="progressbar"
+      :aria-valuemin="0"
+      :aria-valuemax="100"
+      :aria-valuenow="isIndeterminate ? undefined : Math.round(progressPercent as number)"
+    >
       <div
         class="progress-bar"
         :class="{ indeterminate: isIndeterminate }"

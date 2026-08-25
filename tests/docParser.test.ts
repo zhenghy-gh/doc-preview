@@ -1509,6 +1509,20 @@ describe('libwv fallback mode', () => {
     pngBytes.push(0, 0, 0, 0, 0x49, 0x45, 0x4E, 0x44)
     for (let i = 0; i < 4; i++) pngBytes.push(0)
     pngBytes.forEach((b, i) => { view[pngBase + i] = b })
+    // A minimal GIF (header + logical screen descriptor + trailer) after the PNG
+    const gifBase = pngBase + pngBytes.length
+    const gifBytes: number[] = [0x47, 0x49, 0x46, 0x38, 0x39, 0x61] // GIF89a
+    gifBytes.push(1, 0, 1, 0) // width=1, height=1
+    gifBytes.push(0x00, 0x00, 0x00) // packed (no GCT), bgcolor, aspect
+    gifBytes.push(0x3B) // trailer
+    gifBytes.forEach((b, i) => { view[gifBase + i] = b })
+    // A minimal BMP (54-byte file header + DIB header) after the GIF
+    const bmpBase = gifBase + gifBytes.length
+    const bmpBytes: number[] = [0x42, 0x4D] // 'BM'
+    const bmpSize = 54
+    bmpBytes.push(bmpSize & 0xff, 0, 0, 0) // file size LE32
+    while (bmpBytes.length < bmpSize) bmpBytes.push(0)
+    bmpBytes.forEach((b, i) => { view[bmpBase + i] = b })
     // 0Table (sector 7): STTB Ffn header + one 'Times New Roman' FFN entry
     // (cttb=1, cbFfn=49) so tryParseFormatsFromTableStream finds a font table
     const tblBase = SECTOR * 8
@@ -1531,6 +1545,8 @@ describe('libwv fallback mode', () => {
     const pics = result.document.pictures as Array<{ format: string }>
     expect(pics.some(p => p.format === 'jpeg')).toBe(true)
     expect(pics.some(p => p.format === 'png')).toBe(true)
+    expect(pics.some(p => p.format === 'gif')).toBe(true)
+    expect(pics.some(p => p.format === 'bmp')).toBe(true)
     expect(result.document.charts.length).toBe(1)
     expect(texts).toContain('A\u0007B')
     expect(texts).toContain('E\u0007F')

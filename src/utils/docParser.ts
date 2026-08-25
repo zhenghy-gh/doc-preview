@@ -255,7 +255,11 @@ export class DocParser {
       /* v8 ignore stop */
 
       onProgress?.('building_paragraphs', 80)
-      const plainText = extracted.paragraphs.map(p => p.text).join('\n\n')
+      let plainText = ''
+      for (let i = 0; i < extracted.paragraphs.length; i++) {
+        if (i > 0) plainText += '\n\n'
+        plainText += extracted.paragraphs[i].text
+      }
       const document: any = { paragraphs: extracted.paragraphs }
       if (extracted.stories) document.stories = extracted.stories
       if (extracted.hyperlinks && extracted.hyperlinks.length > 0) {
@@ -1594,9 +1598,15 @@ export class DocParser {
     const allParagraphs: Array<{ text: string; cpStart: number; originalIndex: number }> = []
     let cp = 0
 
-    const parts = text.split(/\n/)
-    for (let i = 0; i < parts.length; i++) {
-      const paraText = parts[i]
+    // Avoid split() creating a second full string array for large documents.
+    // Paragraph extraction is allocation-sensitive because this path runs for
+    // every formatted document. Walk the source string once and only retain
+    // paragraph slices that survive into the result metadata.
+    let partStart = 0
+    let partIndex = 0
+    for (let i = 0; i <= text.length; i++) {
+      if (i !== text.length && text.charCodeAt(i) !== 10) continue
+      const paraText = text.slice(partStart, i)
       // Word table rows end with a TTP mark (0x07) instead of a paragraph
       // mark (0x0D), so whole tables arrive glued to the following text
       // inside a single \n-part. Split after each row boundary (two
@@ -1608,13 +1618,20 @@ export class DocParser {
         : [paraText]
       let subOffset = 0
       for (const subText of subParts) {
-        allParagraphs.push({ text: subText, cpStart: cp + subOffset, originalIndex: i })
+        allParagraphs.push({ text: subText, cpStart: cp + subOffset, originalIndex: partIndex })
         subOffset += subText.length
       }
       cp += paraText.length + 1 // +1 for the \n (paragraph mark)
+      partStart = i + 1
+      partIndex++
     }
 
     const result: any[] = []
+    const styleById = new Map<number, StyleDefinition>()
+    for (const style of styles) styleById.set(style.istd, style)
+    // Keep piece lookup linear over the document instead of filtering every
+    // paragraph. Large documents can contain tens of thousands of paragraphs.
+    let pieceCursor = 0
     const characterStyleFormats = new Map<number, Partial<CharacterFormat>>()
     for (const style of styles) {
       const resolved = resolveStyleFormat(styles, style.istd)
@@ -1704,7 +1721,7 @@ export class DocParser {
             newPara.paraFormat.headingLevel = papx.format.outlineLevel + 1 // 0-based → 1-based
           }
           if (styles.length > 0 && papx.istd !== undefined) {
-            const style = styles.find(s => s.istd === papx.istd)
+            const style = styleById.get(papx.istd)
             if (style) {
               newPara.paraFormat.styleName = style.name
               // Resolve the full style formatting along the istdBase
@@ -1779,9 +1796,14 @@ export class DocParser {
           // We need to know the paragraph's range in piece-map coordinates.
           // Since pieceMap and para are both based on `text`, para.cpStart
           // IS the offset in the same coordinate system.
-          const overlapping = pieceMap.filter(p =>
-            !(p.end <= cpStart || p.start >= cpEnd),
-          )
+          while (pieceCursor < pieceMap.length && pieceMap[pieceCursor].end <= cpStart) {
+            pieceCursor++
+          }
+          const overlapping: Array<{ start: number; end: number; chpxIndex?: number }> = []
+          for (let pi = pieceCursor; pi < pieceMap.length && pieceMap[pi].start < cpEnd; pi++) {
+            const p = pieceMap[pi]
+            if (p.end > cpStart) overlapping.push(p)
+          }
           if (overlapping.length > 0) {
             const ratio = overlapping.reduce((s, p) => {
               const overlapStart = Math.max(p.start, cpStart)
@@ -2330,13 +2352,20 @@ export class DocParser {
         let binary = ''
         const bytes = pic.data
         const chunkSize = 0x8000
+        const chunks: string[] = []
         for (let i = 0; i < bytes.length; i += chunkSize) {
           const slice = bytes.subarray(i, Math.min(i + chunkSize, bytes.length))
-          binary += String.fromCharCode.apply(
-            null,
-            Array.from(slice) as unknown as number[],
-          )
+          // Avoid Array.from(slice): for large embedded images it creates an
+          // intermediate JS number array roughly as large as the image chunk.
+          // Joining chunks also avoids repeatedly reallocating the accumulated
+          // string for every byte.
+          let chunk = ''
+          for (let j = 0; j < slice.length; j++) {
+            chunk += String.fromCharCode(slice[j])
+          }
+          chunks.push(chunk)
         }
+        binary = chunks.join('')
         let mime: string
         if (pic.format === 'png') mime = 'image/png'
         else if (pic.format === 'jpeg') mime = 'image/jpeg'
