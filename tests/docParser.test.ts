@@ -1240,7 +1240,7 @@ describe('parseWithFormat field assembly', () => {
     w32(126 + 16 * 8 + 4 + wdBase, 112)
     // pair 12: PlcfBteChpx -> 0Table offset 270 (CHPX with a revision mark)
     w32(126 + 12 * 8 + wdBase, 270)
-    w32(126 + 12 * 8 + 4 + wdBase, 33)
+    w32(126 + 12 * 8 + 4 + wdBase, 39)
     // pair 1: Stshf -> 0Table offset 400 (one 'Strong' character style)
     w32(126 + 1 * 8 + wdBase, 400)
     w32(126 + 1 * 8 + 4 + wdBase, 41)
@@ -1380,14 +1380,33 @@ describe('parseWithFormat field assembly', () => {
     w16(dataBase + 36, 0x0001)
     w32(dataBase + 40 + 4, 10); w32(dataBase + 40 + 8, 20)
     w32(dataBase + 40 + 28, 30); w32(dataBase + 40 + 32, 40)
+    // PICF envelope at Data offset 128 wrapping a minimal PNG (65 bytes):
+    // lcb=133 (68-byte PICF header + image), mm=PNG, xExt/yExt = 2x3 px
+    const picf = dataBase + 128
+    w32(picf + 0, 68 + 65) // FCPic lcb
+    w16(picf + 4, 0x000A)  // mm = PNG
+    w16(picf + 6, 2)       // xExt
+    w16(picf + 8, 3)       // yExt
+    const pngAt = picf + 72 // picf+4+68: start of the wrapped image
+    const picPng: number[] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
+    picPng.push(0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52)
+    for (let i = 0; i < 13; i++) picPng.push(0)
+    for (let i = 0; i < 4; i++) picPng.push(0)
+    picPng.push(0, 0, 0, 8, 0x49, 0x44, 0x41, 0x54)
+    for (let i = 0; i < 8; i++) picPng.push(0)
+    for (let i = 0; i < 4; i++) picPng.push(0)
+    picPng.push(0, 0, 0, 0, 0x49, 0x45, 0x4E, 0x44)
+    for (let i = 0; i < 4; i++) picPng.push(0)
+    picPng.forEach((b, i) => { view[pngAt + i] = b })
     // PlcfBteChpx at 270: one CHPX run over cp [0, 10] with a revision mark
     const chpxBase = tblBase + 270
     w32(chpxBase + 0, 0)
     w32(chpxBase + 4, 10)
     // grpprl: CFRMark on, then IBST_RMARK (author 0), DTTM_RMARK,
-    // sprmCIstd pointing at the 'Strong' character style (istd 0), and
-    // sprmCRgFtc0 pointing at font index 0 in the SttbfFfn table.
-    w16(chpxBase + 8, 23) // aPcb cb = 23; grpprl (21 bytes) follows at +10
+    // sprmCIstd pointing at the 'Strong' character style (istd 0),
+    // sprmCRgFtc0 pointing at font index 0 in the SttbfFfn table, and
+    // sprmCPicLocation pointing at the PICF envelope in the Data stream.
+    w16(chpxBase + 8, 29) // aPcb cb = 29; grpprl (27 bytes) follows at +10
     view[chpxBase + 10] = 0x01 // sprmCFRMark (0x0801)
     view[chpxBase + 11] = 0x08
     view[chpxBase + 12] = 0x01 // toggle on -> insert revision
@@ -1404,6 +1423,9 @@ describe('parseWithFormat field assembly', () => {
     view[chpxBase + 27] = 0x4F // sprmCRgFtc0 (0x4A4F)
     view[chpxBase + 28] = 0x4A
     w16(chpxBase + 29, 0) // font index 0 = Times New Roman
+    view[chpxBase + 31] = 0x03 // sprmCPicLocation (0x6A03)
+    view[chpxBase + 32] = 0x6A
+    w32(chpxBase + 33, 128) // PICF envelope at Data offset 128
     // STSH at 400: LPStshi (cbStshi=6) + STSHI(cstd=1, cbSTDBaseInFile=10)
     // + one LPStd: 'Strong' character style with a bold CHPX grpprl
     const stshBase = tblBase + 400
@@ -1469,6 +1491,13 @@ describe('parseWithFormat field assembly', () => {
     expect(doc.revisions[0].author).toBe('Alice')
     expect(doc.charts.length).toBe(2) // MSGraph storage + embedded magic
     expect(doc.paragraphs.length).toBeGreaterThan(0)
+    // PICF picture from the Data stream, anchored to cp 0 via fcPic
+    const pics = doc.pictures as Array<{ format: string; widthPx?: number; heightPx?: number; cp?: number }>
+    expect(pics.length).toBe(1)
+    expect(pics[0].format).toBe('png')
+    expect(pics[0].widthPx).toBe(2)
+    expect(pics[0].heightPx).toBe(3)
+    expect(pics[0].cp).toBe(0)
   })
 })
 
