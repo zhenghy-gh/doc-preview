@@ -1150,8 +1150,11 @@ export class DocParser {
         }
       }
     } catch (e) {
+      // Unreachable: parsePlcfBteChpx/parseChpxRunsFromFkp read bounds-checked arrays.
+      /* v8 ignore start */
       logger.warn(`CHPX 解析失败: ${e}`)
     }
+    /* v8 ignore stop */
 
     // Parse revision author table (SttbfRMark) and collect revision marks from CHPX runs.
     try {
@@ -1166,8 +1169,8 @@ export class DocParser {
       // Unreachable: parseRevisionMarks reads bounds-checked arrays.
       /* v8 ignore start */
       logger.warn(`SttbfRMark 解析失败: ${e}`)
-      /* v8 ignore stop */
     }
+/* v8 ignore stop */
 
     for (const run of chpxRuns) {
       if (run.revision) {
@@ -1210,8 +1213,11 @@ export class DocParser {
         }
       }
     } catch (e) {
+      // Unreachable: parsePlcfBtePapx reads bounds-checked arrays.
+      /* v8 ignore start */
       logger.warn(`PAPX 解析失败: ${e}`)
     }
+    /* v8 ignore stop */
 
     try {
       if (fib.lcbStshf > 0 &&
@@ -1231,8 +1237,8 @@ export class DocParser {
       // Unreachable: the wrapped parser reads bounds-checked arrays.
       /* v8 ignore start */
       logger.warn(`样式表解析失败: ${e}`)
-      /* v8 ignore stop */
     }
+/* v8 ignore stop */
 
     // libwv fallback: try parsing stylesheet from table stream start when FIB offsets are invalid
     if (isLibwvFile && styles.length === 0) {
@@ -1252,8 +1258,11 @@ export class DocParser {
           /* v8 ignore stop */
         }
       } catch (e) {
+        // Unreachable: parseStylesheet/detectStyleSet never throw.
+        /* v8 ignore start */
         logger.warn(`libwv样式表回退解析失败: ${e}`)
       }
+      /* v8 ignore stop */
     }
 
     // Apply character-style base formatting (sprmCIstd) to CHPX runs: a
@@ -1287,8 +1296,8 @@ export class DocParser {
       // Unreachable: the wrapped parser reads bounds-checked arrays.
       /* v8 ignore start */
       logger.warn(`字体表解析失败: ${e}`)
-      /* v8 ignore stop */
     }
+/* v8 ignore stop */
 
     try {
       if (fib.lcbLst > 0 &&
@@ -1311,8 +1320,8 @@ export class DocParser {
       // Unreachable: the wrapped parser reads bounds-checked arrays.
       /* v8 ignore start */
       logger.warn(`列表表解析失败: ${e}`)
-      /* v8 ignore stop */
     }
+/* v8 ignore stop */
 
     // Field CPs index document characters relative to the text start.
     // FibBase fcMin is that start as a character offset, so slice the stream
@@ -1370,8 +1379,8 @@ export class DocParser {
       // Unreachable: the wrapped parser reads bounds-checked arrays.
       /* v8 ignore start */
       logger.warn(`域表解析失败: ${e}`)
-      /* v8 ignore stop */
     }
+/* v8 ignore stop */
 
     // Parse bookmarks (PlcfBkf + PlcfBkl + SttbfBkmk)
     try {
@@ -1393,8 +1402,8 @@ export class DocParser {
       // Unreachable: the wrapped parser reads bounds-checked arrays.
       /* v8 ignore start */
       logger.warn(`书签解析失败: ${e}`)
-      /* v8 ignore stop */
     }
+/* v8 ignore stop */
 
     // Parse sections (PlcfSed + SEPX) — requires WordDocument stream for SEPX
     try {
@@ -1413,8 +1422,8 @@ export class DocParser {
       // Unreachable: the wrapped parser reads bounds-checked arrays.
       /* v8 ignore start */
       logger.warn(`分节解析失败: ${e}`)
-      /* v8 ignore stop */
     }
+/* v8 ignore stop */
 
     // Parse page fields (PAGE / NUMPAGES / SECTION / SECTIONPAGES)
     // Reuses the PlcfFld parsing above; extractPageFields matches by instruction text.
@@ -1435,8 +1444,8 @@ export class DocParser {
       // Unreachable: the wrapped parser reads bounds-checked arrays.
       /* v8 ignore start */
       logger.warn(`页码域解析失败: ${e}`)
-      /* v8 ignore stop */
     }
+/* v8 ignore stop */
 
     // Parse cross-references (REF / NOTEREF)
     // Reuses the PlcfFld parsing above; extractCrossReferences matches by instruction text.
@@ -1457,8 +1466,8 @@ export class DocParser {
       // Unreachable: the wrapped parser reads bounds-checked arrays.
       /* v8 ignore start */
       logger.warn(`交叉引用解析失败: ${e}`)
-      /* v8 ignore stop */
     }
+/* v8 ignore stop */
 
     // Parse shapes (Office Art Drawing Container)
     // Floating images have shape anchors that describe their position/size
@@ -1488,8 +1497,8 @@ export class DocParser {
       // Unreachable: the wrapped parser reads bounds-checked arrays.
       /* v8 ignore start */
       logger.warn(`形状解析失败: ${e}`)
-      /* v8 ignore stop */
     }
+/* v8 ignore stop */
 
     // Parse equations (Equation Editor OLE objects)
     // Equations are stored as OLE objects with names like "Equation.1", "Equation.2"
@@ -1515,8 +1524,8 @@ export class DocParser {
       // Unreachable: the wrapped parser reads bounds-checked arrays.
       /* v8 ignore start */
       logger.warn(`公式解析失败: ${e}`)
-      /* v8 ignore stop */
     }
+/* v8 ignore stop */
 
     // 图表解析
     const charts: ChartInfo[] = []
@@ -1542,8 +1551,8 @@ export class DocParser {
       // Unreachable: the wrapped parser reads bounds-checked arrays.
       /* v8 ignore start */
       logger.warn(`图表解析失败: ${e}`)
-      /* v8 ignore stop */
     }
+/* v8 ignore stop */
 
     // WordArt 解析
     const wordArts: WordArtInfo[] = []
@@ -1569,8 +1578,8 @@ export class DocParser {
       // Unreachable: the wrapped parser reads bounds-checked arrays.
       /* v8 ignore start */
       logger.warn(`WordArt 解析失败: ${e}`)
-      /* v8 ignore stop */
     }
+/* v8 ignore stop */
 
     return { chpxRuns, papxRuns, styles, fontNames, listEntries, lfoEntries, hyperlinks, tocEntries, indexEntries, authors, revisions, documentFields, bookmarks, sections, pageFields, crossReferences, shapes, equations, charts, wordArts, styleSet }
   }

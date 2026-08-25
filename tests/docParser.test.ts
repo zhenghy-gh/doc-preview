@@ -1507,7 +1507,6 @@ describe('parseWithFormat field assembly', () => {
   it('assembles hyperlinks, toc, index, fields, page fields, cross references and sections', () => {
     const parser = new DocParser(buildOleWithFields())
     const result = parser.parseWithFormat()
-    console.log('DBG err:', result.error)
     expect(result.success).toBe(true)
     const doc = result.document
     expect(doc.hyperlinks.length).toBe(1)
