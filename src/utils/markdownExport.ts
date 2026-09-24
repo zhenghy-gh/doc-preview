@@ -17,7 +17,7 @@ export function escapeMdText(text: string): string {
 function isSafeUrl(value: string, allowDataImage: boolean = false): boolean {
   const url = value.trim()
   if (!url || /[\u0000-\u001f\u007f]/.test(url)) return false
-  if (allowDataImage && /^data:image\/[a-z0-9.+-]+(?:;[^,]*)?,/i.test(url)) return true
+  if (allowDataImage && /^data:image\/(?:avif|bmp|gif|jpe?g|png|webp)(?:;[^,]*)?,/i.test(url)) return true
   return !/^[a-z][a-z0-9+.-]*:/i.test(url) || /^(?:https?|mailto):/i.test(url)
 }
 

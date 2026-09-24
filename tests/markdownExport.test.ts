@@ -67,6 +67,7 @@ describe('convertInlineToMd', () => {
   it('filters unsafe destinations and escapes markdown delimiters', () => {
     expect(convertInlineToMd(el('<a href="javascript:alert(1)">run</a>'))).toBe('run')
     expect(convertInlineToMd(el('<img src="data:text/html,alert(1)" alt="bad">'))).toBe('')
+    expect(convertInlineToMd(el('<img src="data:image/svg+xml,<svg/onload=alert(1)>" alt="svg">'))).toBe('')
     expect(convertInlineToMd(el('<a href="https://x/a)b">safe</a>'))).toBe('[safe](https://x/a\\)b)')
     expect(convertInlineToMd(el('<a href="/docs/a\\b">relative</a>'))).toBe('[relative](/docs/a\\\\b)')
     expect(convertInlineToMd(el('<img alt="pic">'))).toBe('')
