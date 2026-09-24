@@ -92,10 +92,16 @@ export function applyRevisionsToText(
   // 降序处理：先处理靠后的修订，避免前面的替换影响后面修订的偏移量
   paraRevisions.sort((a, b) => b.cpStart - a.cpStart)
 
+  // Track original ranges already rendered so overlapping revisions cannot cut into
+  // HTML tags inserted by a later revision.
+  const appliedRanges: Array<{ start: number; end: number }> = []
+
   for (const rev of paraRevisions) {
     const revStartInPara = Math.max(0, rev.cpStart - paraCpStart)
     const revEndInPara = Math.min(text.length, rev.cpEnd - paraCpStart)
     if (revStartInPara >= revEndInPara) continue
+    if (appliedRanges.some(range => revStartInPara < range.end && revEndInPara > range.start)) continue
+    appliedRanges.push({ start: revStartInPara, end: revEndInPara })
 
     const before = workingText.substring(0, revStartInPara)
     const revText = workingText.substring(revStartInPara, revEndInPara)

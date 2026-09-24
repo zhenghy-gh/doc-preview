@@ -208,12 +208,22 @@ describe('applyRevisionsToText', () => {
       expect(result.hasRevisionHtml).toBe(false)
     })
 
+    it('skips overlapping revisions to preserve valid HTML', () => {
+      const revisions = [
+        buildRev(0, 7, 'insert', { author: 'wide' }),
+        buildRev(4, 9, 'delete', { author: 'overlap' }),
+      ]
+      const result = applyRevisionsToText(text, 0, text.length, revisions, 'marks')
+      expect(result.text).toBe('Hell<del class="rev-delete" title="overlap">o Wor</del>ld')
+      expect(result.text).not.toContain('</ins><del')
+    })
     it('skips revisions with zero-length overlap', () => {
       const revisions = [buildRev(5, 5, 'insert')]
       const result = applyRevisionsToText(text, 0, text.length, revisions, 'marks')
       expect(result.text).toBe(text)
       expect(result.hasRevisionHtml).toBe(false)
     })
+
   })
 
   describe('mode switching produces consistent results', () => {
