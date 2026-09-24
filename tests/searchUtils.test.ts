@@ -27,8 +27,8 @@ describe('escapeRegExp', () => {
 
 describe('buildWordRegex', () => {
   it('uses global flag and honors case sensitivity', () => {
-    expect(buildWordRegex('a', true).flags).toBe('g')
-    expect(buildWordRegex('a', false).flags).toBe('gi')
+    expect(buildWordRegex('a', true).flags).toBe('gu')
+    expect(buildWordRegex('a', false).flags).toBe('giu')
   })
 
   it('escapes special characters in the query', () => {
@@ -78,6 +78,9 @@ describe('findTextMatches', () => {
     expect(matches.map(m => m.start)).toEqual([1, 5])
   })
 
+  it('treats CJK letters as word characters in whole-word mode', () => {
+    expect(findTextMatches('文档中的文档 文档', '文档', ww).map(m => m.start)).toEqual([7])
+  })
   it('whole-word mode honors case sensitivity', () => {
     expect(findTextMatches('Cat cat', 'Cat', wwcs).map(m => m.start)).toEqual([0])
   })

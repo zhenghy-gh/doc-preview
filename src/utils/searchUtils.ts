@@ -32,7 +32,7 @@ export function escapeRegExp(s: string): string {
 
 /** 构建全词匹配正则：词边界用消费组（^|[^\w]）实现，兼容不支持 lookbehind 的浏览器 */
 export function buildWordRegex(query: string, caseSensitive: boolean): RegExp {
-  return new RegExp(`(^|[^\\w])(${escapeRegExp(query)})($|[^\\w])`, caseSensitive ? 'g' : 'gi')
+  return new RegExp(`(^|[^\\p{L}\\p{N}_])(${escapeRegExp(query)})($|[^\\p{L}\\p{N}_])`, `${caseSensitive ? '' : 'i'}gu`)
 }
 
 /**
