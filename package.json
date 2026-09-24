@@ -71,14 +71,14 @@
   "devDependencies": {
     "@types/node": "^26.2.0",
     "@vitejs/plugin-vue": "^6.0.8",
-    "@vitest/coverage-v8": "^4.1.11",
+    "@vitest/coverage-v8": "^5.0.1",
     "@vue/test-utils": "^2.4.11",
     "happy-dom": "^20.11.6",
     "playwright": "^1.40.0",
     "typescript": "^7.0.2",
     "vite": "^8.2.2",
     "vite-plugin-dts": "^5.0.3",
-    "vitest": "^4.1.11",
+    "vitest": "^5.0.1",
     "vue": "^3.4.21",
     "vue-tsc": "^3.3.10"
   }
