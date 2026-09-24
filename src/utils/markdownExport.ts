@@ -132,11 +132,13 @@ export function convertListToMd(list: HTMLElement, indent: number = 0): string[]
   const startValue = isOrdered ? Number.parseInt(list.getAttribute('start') || '1', 10) : 1
   const start = Number.isFinite(startValue) && startValue > 0 ? startValue : 1
 
-  for (let i = 0; i < list.children.length; i++) {
-    const li = list.children[i] as HTMLLIElement
+  let itemIndex = 0
+  for (const child of Array.from(list.children)) {
+    const li = child as HTMLLIElement
     if (li.tagName.toLowerCase() !== 'li') continue
 
-    const bullet = isOrdered ? `${start + i}.` : '-'
+    const bullet = isOrdered ? `${start + itemIndex}.` : '-'
+    itemIndex++
     let itemText = ''
     const nestedLists: string[] = []
 

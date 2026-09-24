@@ -168,10 +168,15 @@ describe('convertListToMd', () => {
     expect(convertListToMd(el('<ol start="4"><li>a</li><li>b</li></ol>'))).toEqual(['4. a', '5. b'])
     expect(convertListToMd(el('<ol start="0"><li>a</li></ol>'))).toEqual(['1. a'])
   })
+  it('keeps ordered numbering contiguous when non-li children are skipped', () => {
+    const list = el('<ol start="3"><li>a</li><p>stray</p><li>b</li></ol>')
+    expect(convertListToMd(list)).toEqual(['3. a', '4. b'])
+  })
   it('skips non-li children', () => {
     const list = el('<ul><li>a</li><p>stray</p></ul>')
     expect(convertListToMd(list)).toEqual(['- a'])
   })
+
 
   it('indents nested lists and unwraps p in li', () => {
     const list = el(`<ul>
