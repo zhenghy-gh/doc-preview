@@ -164,6 +164,10 @@ describe('convertListToMd', () => {
     expect(convertListToMd(list)).toEqual(['1. a', '2. b'])
   })
 
+  it('preserves a valid ordered-list start value and normalizes invalid values', () => {
+    expect(convertListToMd(el('<ol start="4"><li>a</li><li>b</li></ol>'))).toEqual(['4. a', '5. b'])
+    expect(convertListToMd(el('<ol start="0"><li>a</li></ol>'))).toEqual(['1. a'])
+  })
   it('skips non-li children', () => {
     const list = el('<ul><li>a</li><p>stray</p></ul>')
     expect(convertListToMd(list)).toEqual(['- a'])
