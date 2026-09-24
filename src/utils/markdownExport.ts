@@ -14,6 +14,17 @@ export function escapeMdText(text: string): string {
     .replace(/\]/g, '\\]')
 }
 
+function isSafeUrl(value: string, allowDataImage: boolean = false): boolean {
+  const url = value.trim()
+  if (!url || /[\u0000-\u001f\u007f]/.test(url)) return false
+  if (allowDataImage && /^data:image\/[a-z0-9.+-]+(?:;[^,]*)?,/i.test(url)) return true
+  return !/^[a-z][a-z0-9+.-]*:/i.test(url) || /^(?:https?|mailto):/i.test(url)
+}
+
+function escapeMdDestination(value: string): string {
+  return value.replace(/([\\()\r\n])/g, '\\$1')
+}
+
 export function convertInlineToMd(node: ChildNode): string {
   if (node.nodeType === Node.TEXT_NODE) {
     return escapeMdText(node.textContent || '')
@@ -31,12 +42,13 @@ export function convertInlineToMd(node: ChildNode): string {
     case 'code': return `\`${inner}\``
     case 'a': {
       const href = el.getAttribute('href') || ''
-      return `[${inner}](${href})`
+      if (!href) return `[${inner}]()`
+      return isSafeUrl(href) ? `[${inner}](${escapeMdDestination(href)})` : inner
     }
     case 'img': {
       const src = el.getAttribute('src') || ''
       const alt = el.getAttribute('alt') || ''
-      return src ? `![${alt}](${src})` : inner
+      return isSafeUrl(src, true) ? `![${escapeMdText(alt)}](${escapeMdDestination(src)})` : inner
     }
     case 'sub': return `<sub>${inner}</sub>`
     case 'sup': return `<sup>${inner}</sup>`

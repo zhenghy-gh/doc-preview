@@ -64,10 +64,15 @@ describe('convertInlineToMd', () => {
     expect(convertInlineToMd(el('<img src="a.png" alt="pic">'))).toBe('![pic](a.png)')
   })
 
-  it('falls back to inner text for src-less images and unknown tags', () => {
+  it('filters unsafe destinations and escapes markdown delimiters', () => {
+    expect(convertInlineToMd(el('<a href="javascript:alert(1)">run</a>'))).toBe('run')
+    expect(convertInlineToMd(el('<img src="data:text/html,alert(1)" alt="bad">'))).toBe('')
+    expect(convertInlineToMd(el('<a href="https://x/a)b">safe</a>'))).toBe('[safe](https://x/a\\)b)')
+    expect(convertInlineToMd(el('<a href="/docs/a\\b">relative</a>'))).toBe('[relative](/docs/a\\\\b)')
     expect(convertInlineToMd(el('<img alt="pic">'))).toBe('')
     expect(convertInlineToMd(el('<mark>marked</mark>'))).toBe('marked')
   })
+
 
   it('unwraps span/font containers', () => {
     expect(convertInlineToMd(el('<span><font>s</font></span>'))).toBe('s')
