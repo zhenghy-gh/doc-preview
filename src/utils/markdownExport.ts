@@ -58,12 +58,17 @@ export function convertInlineToMd(node: ChildNode): string {
   }
 }
 
+function getCellColspan(cell: HTMLTableCellElement): number {
+  const value = Number.parseInt(cell.getAttribute('colspan') || '1', 10)
+  return Number.isFinite(value) && value > 0 ? value : 1
+}
+
 export function getTableColCount(table: HTMLTableElement): number {
   let maxCols = 0
   for (const row of table.rows) {
     let cols = 0
     for (const cell of row.cells) {
-      cols += parseInt(cell.getAttribute('colspan') || '1')
+      cols += getCellColspan(cell)
     }
     maxCols = Math.max(maxCols, cols)
   }
@@ -91,7 +96,7 @@ export function convertTableToMd(table: HTMLTableElement): string {
 
     for (let c = 0; c < cells.length; c++) {
       const cell = cells[c]
-      const colspan = parseInt(cell.getAttribute('colspan') || '1')
+      const colspan = getCellColspan(cell)
       const cellText = Array.from(cell.childNodes).map(n => convertInlineToMd(n)).join('').trim()
 
       for (let s = 0; s < colspan; s++) {

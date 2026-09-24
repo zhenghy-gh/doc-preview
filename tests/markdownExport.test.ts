@@ -96,6 +96,13 @@ describe('getTableColCount', () => {
     </table>`) as HTMLTableElement
     expect(getTableColCount(table)).toBe(4)
   })
+  it('normalizes invalid colspan values to one column', () => {
+    const table = el(`<table>
+      <tr><td colspan="0">zero</td><td colspan="-2">negative</td><td colspan="nope">text</td></tr>
+    </table>`) as HTMLTableElement
+    expect(getTableColCount(table)).toBe(3)
+    expect(convertTableToMd(table)).toContain('| zero | negative | text |')
+  })
 })
 
 describe('convertTableToMd', () => {
