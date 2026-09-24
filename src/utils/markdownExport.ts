@@ -196,7 +196,8 @@ export function convertBlockToMd(node: ChildNode): string {
     }
     case 'pre': {
       const code = el.querySelector('code')
-      const lang = code?.getAttribute('class')?.replace(/^language-/, '') || ''
+      const languageClass = code?.getAttribute('class')?.match(/(?:^|\s)language-([a-z0-9_+-]+)/i)
+      const lang = languageClass?.[1] || ''
       const codeText = code ? code.textContent || '' : el.textContent || ''
       return '```' + lang + '\n' + codeText.replace(/\n$/, '') + '\n```'
     }

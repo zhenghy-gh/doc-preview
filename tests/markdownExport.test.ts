@@ -217,6 +217,10 @@ describe('convertBlockToMd', () => {
     )
   })
 
+  it('accepts only safe language class tokens in code fences', () => {
+    expect(convertBlockToMd(el('<pre><code class="language-ts extra">x</code></pre>'))).toBe('```ts\nx\n```')
+    expect(convertBlockToMd(el('<pre><code class="language-<svg>">x</code></pre>'))).toBe('```\nx\n```')
+  })
   it('renders pre without code from raw text', () => {
     expect(convertBlockToMd(el('<pre>raw\n</pre>'))).toBe('```\nraw\n```')
   })
