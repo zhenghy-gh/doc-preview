@@ -63,6 +63,10 @@ function getCellColspan(cell: HTMLTableCellElement): number {
   return Number.isFinite(value) && value > 0 ? value : 1
 }
 
+function escapeMdTableCell(text: string): string {
+  return text.replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/[\r\n]+/g, ' ')
+}
+
 export function getTableColCount(table: HTMLTableElement): number {
   let maxCols = 0
   for (const row of table.rows) {
@@ -97,7 +101,7 @@ export function convertTableToMd(table: HTMLTableElement): string {
     for (let c = 0; c < cells.length; c++) {
       const cell = cells[c]
       const colspan = getCellColspan(cell)
-      const cellText = Array.from(cell.childNodes).map(n => convertInlineToMd(n)).join('').trim()
+      const cellText = escapeMdTableCell(Array.from(cell.childNodes).map(n => convertInlineToMd(n)).join('').trim())
 
       for (let s = 0; s < colspan; s++) {
         cellTexts.push(s === 0 ? cellText : '')

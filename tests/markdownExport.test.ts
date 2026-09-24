@@ -151,9 +151,12 @@ describe('convertTableToMd', () => {
       ].join('\n'),
     )
   })
-})
+  it('escapes pipes and line breaks inside table cells', () => {
+    const table = el('<table><tr><td>a|b\nc</td></tr></table>') as HTMLTableElement
+    expect(convertTableToMd(table)).toContain('| a\\|b c |')
+  })
 
-describe('convertListToMd', () => {
+
   it('renders unordered items with dashes', () => {
     const list = el('<ul><li>a</li><li>b</li></ul>')
     expect(convertListToMd(list)).toEqual(['- a', '- b'])
