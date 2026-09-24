@@ -133,8 +133,11 @@ export function convertListToMd(list: HTMLElement, indent: number = 0): string[]
   const isOrdered = list.tagName.toLowerCase() === 'ol'
   const prefix = '  '.repeat(indent)
   const lines: string[] = []
-  const startValue = isOrdered ? Number.parseInt(list.getAttribute('start') || '1', 10) : 1
-  const start = Number.isFinite(startValue) && startValue > 0 ? startValue : 1
+  const startAttribute = isOrdered ? list.getAttribute('start') : null
+  const startValue = startAttribute && /^\d+$/.test(startAttribute.trim())
+    ? Number(startAttribute)
+    : 1
+  const start = Number.isSafeInteger(startValue) && startValue > 0 ? startValue : 1
 
   let itemIndex = 0
   for (const child of Array.from(list.children)) {
