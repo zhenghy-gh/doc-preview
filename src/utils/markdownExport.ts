@@ -212,17 +212,17 @@ export function htmlToMarkdown(html: string): string {
 
   const parts: string[] = []
   const pageContents = container.querySelectorAll('.page-content')
-  const roots: ChildNode[] = []
-
-  if (pageContents.length > 0) {
-    pageContents.forEach(pc => roots.push(...Array.from(pc.childNodes)))
-  } else {
-    roots.push(...Array.from(container.childNodes))
+  const appendChildren = (parent: ParentNode) => {
+    for (const child of parent.childNodes) {
+      const md = convertBlockToMd(child)
+      if (md) parts.push(md)
+    }
   }
 
-  for (const child of roots) {
-    const md = convertBlockToMd(child)
-    if (md) parts.push(md)
+  if (pageContents.length > 0) {
+    pageContents.forEach(appendChildren)
+  } else {
+    appendChildren(container)
   }
 
   return parts.join('\n\n')
