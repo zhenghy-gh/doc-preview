@@ -217,6 +217,32 @@ describe('wordArtParser', () => {
       expect(wordArts[0].effects).toContain('3d')
     })
 
+    it('should preserve first-seen unique colors and limit output to eight', () => {
+      const colorBytes = [
+        [0x11, 0x22, 0x33, 0xFF],
+        [0x11, 0x22, 0x33, 0xFF],
+        [0x44, 0x55, 0x66, 0xFF],
+        [0x77, 0x88, 0x99, 0xFF],
+        [0xAA, 0xBB, 0xCC, 0xFF],
+        [0xDD, 0xEE, 0xFF, 0xFF],
+        [0x10, 0x20, 0x30, 0xFF],
+        [0x40, 0x50, 0x60, 0xFF],
+        [0x70, 0x80, 0x90, 0xFF],
+        [0xA0, 0xB0, 0xC0, 0xFF],
+      ].flat()
+      const directory: DirectoryEntry[] = [
+        {
+          name: 'WordArt.1', objectType: 1, leftSibling: -1, rightSibling: -1, child: -1,
+          clsid: new Uint8Array(16), stateBits: 0, creationTime: 0, modificationTime: 0,
+          startSector: 1, size: colorBytes.length,
+        },
+      ]
+      const wordArts = extractWordArtFromDirectory(directory, () => ({ data: new Uint8Array(colorBytes), size: colorBytes.length }))
+      expect(wordArts[0].colors).toEqual([
+        '#332211', '#665544', '#998877', '#ccbbaa', '#ffeedd', '#302010', '#605040', '#908070',
+      ])
+    })
+
     it('should extract colors from data', () => {
       const colorData = new Uint8Array([0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0xFF])
       const directory: DirectoryEntry[] = [

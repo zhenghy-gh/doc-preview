@@ -149,7 +149,8 @@ function extractTextFromData(data: Uint8Array): string | undefined {
 
 function extractColorsFromData(data: Uint8Array): string[] {
   const colors: string[] = []
-  
+  const seenColors = new Set<string>()
+
   for (let i = 0; i < data.length - 3; i++) {
     if (data[i] === 0x00 && data[i + 1] === 0x00 &&
         data[i + 2] === 0x00 && data[i + 3] === 0x00) {
@@ -163,7 +164,8 @@ function extractColorsFromData(data: Uint8Array): string[] {
     
     if (a === 0xFF) {
       const color = `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`
-      if (!colors.includes(color)) {
+      if (!seenColors.has(color)) {
+        seenColors.add(color)
         colors.push(color)
       }
     }
