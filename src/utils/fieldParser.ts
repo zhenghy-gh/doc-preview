@@ -21,6 +21,14 @@ export interface FieldRange {
   instruction: string
   /** Field result text (between 0x14 and 0x15). */
   result: string
+  /**
+   * result 字段的切片轴（R-F2-1）。
+   * - `'raw'`（缺省）：与 cpStart/cpEnd 同轴，来自 textBytes 的字节轴切片
+   *   （cp×2 寻址，与 instruction 同款）——规范态。
+   * - `'text'`：textBytes 缺失/越界时回退调用方字符轴 text.slice 的产物，
+   *   与 CP 坐标不可比，消费方不得据此做 CP 算术。
+   */
+  axis?: 'raw' | 'text'
   /** For HYPERLINK: the extracted URL. */
   url?: string
   /** For TOC: parsed TOC entries. */
@@ -291,9 +299,22 @@ export function extractAllFields(
       }
     }
 
+    // R-F2-1：result 与 instruction 统一走字节轴（cp×2 寻址），消除
+    // 「instruction=字节轴、result=调用方字符轴」的双轴混用——后者曾导致
+    // result 错位/跨段污染（FIELD-CP-GOV 实证 L1/L2）。仅当 textBytes
+    // 缺失或越界时回退 text 轴切片，并在返回值标注 axis:'text' 提示
+    // 消费方该 result 与 CP 坐标不可比。
     let result = ''
+    let resultAxis: 'raw' | 'text' = 'raw'
     if (resultEnd > resultStart) {
-      result = text.slice(resultStart, resultEnd)
+      const byteStart = resultStart * 2
+      const byteEnd = resultEnd * 2
+      if (textBytes && byteStart < textBytes.length && byteEnd <= textBytes.length) {
+        result = decodeUtf16le(textBytes, byteStart, byteEnd - byteStart)
+      } else if (resultEnd <= text.length) {
+        result = text.slice(resultStart, resultEnd)
+        resultAxis = 'text'
+      }
     }
 
     const field: FieldRange = {
@@ -302,6 +323,7 @@ export function extractAllFields(
       flt: begin.flt,
       instruction,
       result,
+      axis: resultAxis,
     }
 
     if (begin.flt === 37) {
@@ -401,7 +423,7 @@ export function parseTocInstruction(instruction: string): TocOptions {
  */
 export function parseTocResult(result: string): TocEntry[] {
   const entries: TocEntry[] = []
-  const lines = result.split('\n').filter(line => line.trim())
+  const lines = result.split('\n')
 
   for (const line of lines) {
     const trimmed = line.trim()
@@ -434,7 +456,7 @@ export function parseTocResult(result: string): TocEntry[] {
  */
 export function parseIndexResult(result: string): IndexEntry[] {
   const entries: IndexEntry[] = []
-  const lines = result.split('\n').filter(line => line.trim())
+  const lines = result.split('\n')
 
   let currentMainTerm = ''
 
