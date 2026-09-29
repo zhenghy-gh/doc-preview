@@ -68,10 +68,16 @@ describe('fontParser', () => {
     expect(fonts).toEqual(['Times New Roman', 'Arial'])
   })
 
-  it('should parse CJK font names', () => {
-    const buf = buildFontTable(['宋体', '黑体'])
+  it('should parse CJK and supplementary Unicode font names', () => {
+    const buf = buildFontTable(['宋体', '黑体', '𝄞 Font'])
     const fonts = parseFontTable(buf, 0, buf.length)
-    expect(fonts).toEqual(['宋体', '黑体'])
+    expect(fonts).toEqual(['宋体', '黑体', '𝄞 Font'])
+  })
+
+  it('should stop font names at the UTF-16 null terminator', () => {
+    const buf = buildFontTable(['Before\u0000After'])
+    const fonts = parseFontTable(buf, 0, buf.length)
+    expect(fonts).toEqual(['Before'])
   })
 
   it('should parse a font table embedded at a non-zero offset', () => {

@@ -14,13 +14,13 @@ function readUint16(data: Uint8Array, offset: number): number {
 }
 
 function readUtf16leString(data: Uint8Array, offset: number, maxLen: number): string {
-  const chars: string[] = []
+  const charCodes: number[] = []
   for (let i = 0; i < maxLen && offset + i * 2 + 1 < data.length; i++) {
     const charCode = data[offset + i * 2] | (data[offset + i * 2 + 1] << 8)
     if (charCode === 0) break // null terminator
-    chars.push(String.fromCharCode(charCode))
+    charCodes.push(charCode)
   }
-  return chars.join('')
+  return String.fromCharCode(...charCodes)
 }
 
 /**
