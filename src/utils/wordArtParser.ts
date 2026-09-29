@@ -182,17 +182,20 @@ export function extractWordArtFromDirectory(
 ): WordArtInfo[] {
   const wordArts: WordArtInfo[] = []
 
-  const wordArtEntries = directory.filter(e => {
-    if (e.objectType !== 1) return false
-    const name = e.name.trim()
-    if (WORDART_NAME_REGEX.test(name)) return true
-    for (const pattern of WORDART_NAME_PATTERN_KEYS) {
-      if (name.includes(pattern)) return true
+  for (const entry of directory) {
+    if (entry.objectType !== 1) continue
+    const name = entry.name.trim()
+    let isWordArt = WORDART_NAME_REGEX.test(name)
+    if (!isWordArt) {
+      for (const pattern of WORDART_NAME_PATTERN_KEYS) {
+        if (name.includes(pattern)) {
+          isWordArt = true
+          break
+        }
+      }
     }
-    return false
-  })
+    if (!isWordArt) continue
 
-  for (const entry of wordArtEntries) {
     try {
       const data = readStream(entry)
       const effects = detectWordArtEffects(entry.name, data?.data)
