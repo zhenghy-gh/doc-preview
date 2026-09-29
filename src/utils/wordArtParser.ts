@@ -40,6 +40,7 @@ const WORDART_NAME_PATTERNS: Record<string, boolean> = {
 }
 
 const WORDART_NAME_REGEX = /^WordArt(?:\.\d+)?$/
+const WORDART_NAME_PATTERN_KEYS = Object.keys(WORDART_NAME_PATTERNS)
 
 function detectWordArtEffects(name: string, data?: Uint8Array): WordArtEffect[] {
   const effects: WordArtEffect[] = []
@@ -183,7 +184,7 @@ export function extractWordArtFromDirectory(
     if (e.objectType !== 1) return false
     const name = e.name.trim()
     if (WORDART_NAME_REGEX.test(name)) return true
-    for (const pattern of Object.keys(WORDART_NAME_PATTERNS)) {
+    for (const pattern of WORDART_NAME_PATTERN_KEYS) {
       if (name.includes(pattern)) return true
     }
     return false
