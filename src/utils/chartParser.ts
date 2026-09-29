@@ -89,29 +89,17 @@ export function detectChartType(name: string): { type: ChartType; subtype: Chart
   return { type: 'unknown', subtype: 'unknown' }
 }
 
-function hasPictureStream(directory: DirectoryEntry[], parentName: string): boolean {
-  const pictureName = `${parentName}\x00Picture`
-  return directory.some(e => e.name === pictureName && e.objectType === 2)
-}
-
 function getDataStream(directory: DirectoryEntry[], parentName: string): DirectoryEntry | undefined {
   const dataName = `${parentName}\x00Data`
   return directory.find(e => e.name === dataName && e.objectType === 2)
 }
 
-function getPictureStream(directory: DirectoryEntry[], parentName: string): DirectoryEntry | undefined {
-  const pictureName = `${parentName}\x00Picture`
-  return directory.find(e => e.name === pictureName && e.objectType === 2)
-}
-
 function extractChartPictureDataUrl(
-  directory: DirectoryEntry[],
   parentName: string,
+  picEntry: DirectoryEntry | undefined,
   readStream?: (entry: DirectoryEntry) => StreamData | null
 ): string | undefined {
-  if (!readStream) return undefined
-  const picEntry = getPictureStream(directory, parentName)
-  if (!picEntry || picEntry.size < 8) return undefined
+  if (!readStream || !picEntry || picEntry.size < 8) return undefined
   try {
     const stream = readStream(picEntry)
     if (!stream || !stream.data || stream.data.length < 8) return undefined
@@ -156,19 +144,20 @@ export function extractChartsFromDirectory(
   for (const entry of chartEntries) {
     try {
       const { type, subtype } = detectChartType(entry.name)
-      const hasPic = hasPictureStream(directory, entry.name)
+      const pictureName = `${entry.name}\x00Picture`
+      const pictureEntry = directory.find(e => e.name === pictureName && e.objectType === 2)
       const dataEntry = getDataStream(directory, entry.name)
-      const pictureDataUrl = extractChartPictureDataUrl(directory, entry.name, readStream)
+      const pictureDataUrl = extractChartPictureDataUrl(entry.name, pictureEntry, readStream)
 
       charts.push({
         id: charts.length + 1,
         name: entry.name,
         type: type,
         subtype: subtype,
-        hasPicture: hasPic,
+        hasPicture: !!pictureEntry,
         hasData: !!dataEntry,
         dataSize: dataEntry?.size,
-        pictureSize: hasPic ? entry.size : undefined,
+        pictureSize: pictureEntry ? entry.size : undefined,
         objectType: entry.objectType,
         dataUrl: pictureDataUrl,
       })
