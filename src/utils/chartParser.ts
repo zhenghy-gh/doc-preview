@@ -175,15 +175,16 @@ export function extractChartsFromDirectory(
 }
 /* v8 ignore stop */
 
+const CHART_STREAM_MAGIC_PATTERNS = [
+  new Uint8Array([0xD0, 0xCF, 0x11, 0xE0]),
+  new Uint8Array([0x50, 0x4B, 0x03, 0x04]),
+]
+
 export function extractChartsFromWordDocumentStream(data: Uint8Array): ChartInfo[] {
   const charts: ChartInfo[] = []
-  const chartMagicPatterns = [
-    new Uint8Array([0xD0, 0xCF, 0x11, 0xE0]),
-    new Uint8Array([0x50, 0x4B, 0x03, 0x04]),
-  ]
 
   for (let offset = 0; offset < data.length - 100; offset++) {
-    for (const magic of chartMagicPatterns) {
+    for (const magic of CHART_STREAM_MAGIC_PATTERNS) {
       let match = true
       for (let i = 0; i < magic.length; i++) {
         if (data[offset + i] !== magic[i]) {
