@@ -422,14 +422,14 @@ export function computeListContinuity(
     const blockStart = i
     const blockListType = para.listType
     const blockListId = para.listId
-    const blockItems: ListParagraphInfo[] = []
+    let levelZeroCount = 0
 
     while (i < paragraphs.length) {
       const p = paragraphs[i]
       if (!p.listType || p.listType !== blockListType) break
       // ordered 列表中 listId 不同时视为新块（不同列表的独立编号）
       if (blockListType === 'ordered' && p.listId !== undefined && blockListId !== undefined && p.listId !== blockListId) break
-      blockItems.push(p)
+      if ((p.listLevel ?? 0) === 0) levelZeroCount++
       i++
     }
 
@@ -439,7 +439,6 @@ export function computeListContinuity(
       const prevCount = counters.get(blockListId) || 0
       startAt = prevCount + 1
       // 更新计数器：统计该块中 level 0 的项数
-      const levelZeroCount = blockItems.filter(p => (p.listLevel ?? 0) === 0).length
       counters.set(blockListId, prevCount + levelZeroCount)
     }
 
