@@ -246,7 +246,7 @@ export function extractWordArtFromDrawingData(data: Uint8Array): WordArtInfo[] {
       endOffset++
     }
 
-    const artData = data.slice(startOffset, endOffset)
+    const artData = data.subarray(startOffset, endOffset)
     const effects = detectWordArtEffects('', artData)
     const text = extractTextFromData(artData)
     const colors = extractColorsFromData(artData)
