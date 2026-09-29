@@ -32,7 +32,9 @@ export function convertInlineToMd(node: ChildNode): string {
   if (node.nodeType !== Node.ELEMENT_NODE) return ''
   const el = node as HTMLElement
   const tag = el.tagName.toLowerCase()
-  const inner = Array.from(el.childNodes).map(n => convertInlineToMd(n)).join('')
+  const innerParts: string[] = []
+  for (const child of el.childNodes) innerParts.push(convertInlineToMd(child))
+  const inner = innerParts.join('')
 
   switch (tag) {
     case 'strong': case 'b': return `**${inner}**`
@@ -92,7 +94,9 @@ export function convertTableToMd(table: HTMLTableElement): string {
     for (let c = 0; c < cells.length; c++) {
       const cell = cells[c]
       const colspan = parseInt(cell.getAttribute('colspan') || '1')
-      const cellText = Array.from(cell.childNodes).map(n => convertInlineToMd(n)).join('').trim()
+      const cellTextParts: string[] = []
+      for (const child of cell.childNodes) cellTextParts.push(convertInlineToMd(child))
+      const cellText = cellTextParts.join('').trim()
 
       for (let s = 0; s < colspan; s++) {
         cellTexts.push(s === 0 ? cellText : '')
@@ -178,8 +182,12 @@ export function convertBlockToMd(node: ChildNode): string {
     case 'ul': case 'ol': return convertListToMd(el).join('\n')
     case 'table': return convertTableToMd(el as HTMLTableElement)
     case 'blockquote': {
-      const inner = Array.from(el.childNodes).map(n => convertBlockToMd(n)).filter(Boolean).join('\n')
-      return inner.split('\n').map(l => `> ${l}`).join('\n')
+      const innerParts: string[] = []
+      for (const child of el.childNodes) {
+        const converted = convertBlockToMd(child)
+        if (converted) innerParts.push(converted)
+      }
+      return innerParts.join('\n').split('\n').map(l => `> ${l}`).join('\n')
     }
     case 'pre': {
       const code = el.querySelector('code')
@@ -191,11 +199,25 @@ export function convertBlockToMd(node: ChildNode): string {
     case 'br': return ''
     case 'div': {
       if (el.classList.contains('page-content')) {
-        return Array.from(el.childNodes).map(n => convertBlockToMd(n)).filter(Boolean).join('\n\n')
+        const innerParts: string[] = []
+        for (const child of el.childNodes) {
+          const converted = convertBlockToMd(child)
+          if (converted) innerParts.push(converted)
+        }
+        return innerParts.join('\n\n')
       }
-      return Array.from(el.childNodes).map(n => convertBlockToMd(n)).filter(Boolean).join('\n')
+      const innerParts: string[] = []
+      for (const child of el.childNodes) {
+        const converted = convertBlockToMd(child)
+        if (converted) innerParts.push(converted)
+      }
+      return innerParts.join('\n')
     }
-    default: return Array.from(el.childNodes).map(n => convertInlineToMd(n)).join('')
+    default: {
+      const innerParts: string[] = []
+      for (const child of el.childNodes) innerParts.push(convertInlineToMd(child))
+      return innerParts.join('')
+    }
   }
 }
 
