@@ -41,6 +41,8 @@ const CHART_NAME_PATTERNS: Record<string, { type: ChartType; subtype: ChartSubty
   'LibreOffice.ChartDocument': { type: 'chart', subtype: 'chart' },
 }
 
+const CHART_NAME_PATTERNS_KEYS = Object.keys(CHART_NAME_PATTERNS)
+
 const OBJECT_NAME_PATTERN = /^Object\.\d+/
 // LibreOffice embeds charts with numeric storage names like _2147483647
 const LIBREOFFICE_STORAGE_PATTERN = /^_\d+$/
@@ -139,14 +141,15 @@ export function extractChartsFromDirectory(
     if (e.objectType === 2 || e.objectType === 5) return false
 
     const name = e.name.trim()
+    const lowerName = name.toLowerCase()
     if (OBJECT_NAME_PATTERN.test(name)) return true
     // LibreOffice embedded charts use numeric storage names like _2147483647
     if (LIBREOFFICE_STORAGE_PATTERN.test(name)) return true
-    for (const pattern of Object.keys(CHART_NAME_PATTERNS)) {
+    for (const pattern of CHART_NAME_PATTERNS_KEYS) {
       if (name.includes(pattern)) return true
     }
-    if (name.toLowerCase().includes('smartart')) return true
-    if (name.toLowerCase().includes('chart') || name.toLowerCase().includes('graph')) return true
+    if (lowerName.includes('smartart')) return true
+    if (lowerName.includes('chart') || lowerName.includes('graph')) return true
     return false
   })
 
