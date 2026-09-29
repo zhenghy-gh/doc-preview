@@ -171,6 +171,20 @@ describe('extractEquationsFromDirectory', () => {
     expect(result).toEqual([])
   })
 
+  it('should use the first matching equation text stream when names are duplicated', () => {
+    const directory = [
+      makeDirEntry('Equation.1', 1),
+      makeDirEntry('Equation.1\x00EquationText', 2, 1),
+      makeDirEntry('Equation.1\x00EquationText', 2, 2),
+    ]
+    const result = extractEquationsFromDirectory(directory, entry => {
+      const text = entry.startSector === 1 ? '\\alpha' : '\\beta'
+      return makeStream([...text].map(ch => ch.charCodeAt(0)).concat([0]))
+    })
+    expect(result).toHaveLength(1)
+    expect(result[0].eqnText).toBe('\\alpha')
+  })
+
   it('should skip equations without an EquationText stream', () => {
     const directory = [makeDirEntry('Equation.1', 1)]
     const result = extractEquationsFromDirectory(directory, () => null)

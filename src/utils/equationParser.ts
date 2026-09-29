@@ -86,21 +86,22 @@ function parseEquationTextStream(streamData: StreamData): string {
   return text
 }
 
-function hasPictureStream(directory: DirectoryEntry[], parentName: string): boolean {
-  const pictureName = `${parentName}\x00Picture`
-  return directory.some(e => e.name === pictureName && e.objectType === 2)
-}
-
 export function extractEquationsFromDirectory(
   directory: DirectoryEntry[],
   readStream: (entry: DirectoryEntry) => StreamData | null
 ): EquationInfo[] {
   const equations: EquationInfo[] = []
   const equationEntries = directory.filter(e => EQUATION_NAME_PATTERN.test(e.name) && e.objectType === 1)
+  const streamEntries = new Map<string, DirectoryEntry>()
+  for (const entry of directory) {
+    if (entry.objectType === 2 && !streamEntries.has(entry.name)) {
+      streamEntries.set(entry.name, entry)
+    }
+  }
 
   for (const entry of equationEntries) {
     const eqnTextName = `${entry.name}\x00EquationText`
-    const eqnTextEntry = directory.find(e => e.name === eqnTextName && e.objectType === 2)
+    const eqnTextEntry = streamEntries.get(eqnTextName)
 
     if (!eqnTextEntry) continue
 
@@ -112,7 +113,7 @@ export function extractEquationsFromDirectory(
       if (!eqnText || eqnText.trim().length === 0) continue
 
       const latex = eqnToLatex(eqnText)
-      const hasPic = hasPictureStream(directory, entry.name)
+      const hasPic = streamEntries.has(`${entry.name}\x00Picture`)
 
       equations.push({
         id: equations.length + 1,
