@@ -1,4 +1,4 @@
-import type { TableInfo, TableCellInfo } from './docFormat'
+import type { TableInfo, TableCellInfo, ParagraphFormat, RenderParagraph, TableBlockResult } from './docFormat'
 
 /**
  * Cell delimiter used by Word 97-2003 binary format (.doc) inside table
@@ -26,25 +26,29 @@ export function splitTableCells(text: string, keepTrailingEmpty: boolean = false
   if (!text) return null
 
   if (text.includes(CELL_MARK)) {
-    const cells = text
-      .replace(/\u00a0/g, ' ')
-      .split(CELL_MARK)
-      .map(cell => cell.trim())
+    const cells: string[] = []
+    let nonEmptyCount = 0
+    for (const rawCell of text.replace(/\u00a0/g, ' ').split(CELL_MARK)) {
+      const cell = rawCell.trim()
+      cells.push(cell)
+      if (cell.length > 0) nonEmptyCount++
+    }
     if (!keepTrailingEmpty && cells.length > 0 && cells[cells.length - 1] === '') {
       cells.pop()
     }
-    const nonEmpty = cells.filter(cell => cell.length > 0)
-    if (nonEmpty.length < 2) return null
+    if (nonEmptyCount < 2) return null
     return cells
   }
 
   if (!text.includes('\t')) return null
-  const cells = text
-    .replace(/\u00a0/g, ' ')
-    .split(/\t+/)
-    .map(cell => cell.trim())
-  const nonEmpty = cells.filter(cell => cell.length > 0)
-  if (nonEmpty.length < 2) return null
+  const cells: string[] = []
+  let nonEmptyCount = 0
+  for (const rawCell of text.replace(/\u00a0/g, ' ').split(/\t+/)) {
+    const cell = rawCell.trim()
+    cells.push(cell)
+    if (cell.length > 0) nonEmptyCount++
+  }
+  if (nonEmptyCount < 2) return null
   return cells
 }
 
@@ -53,9 +57,11 @@ export function isTableRowText(text: string): boolean {
 }
 
 export function isWordTableRow(text: string): boolean {
-  if (!text) return false
-  const cells = text.split(CELL_MARK).map(c => c.trim())
-  return cells.filter(c => c.length > 0).length >= 1 && text.includes(CELL_MARK)
+  if (!text || !text.includes(CELL_MARK)) return false
+  for (const cell of text.split(CELL_MARK)) {
+    if (cell.trim().length > 0) return true
+  }
+  return false
 }
 
 export function renderTableHtml(rows: string[][], rowsTableInfo?: TableInfo[], headerRowCount: number = 0): string {
@@ -76,6 +82,15 @@ export function renderTableHtml(rows: string[][], rowsTableInfo?: TableInfo[], h
     const cellsHtml: string[] = []
     const nonEmptyCount = !hasCellInfo && isHeader ? row.filter(cell => cell && cell.length > 0).length : 0
     const singleNonEmptyHeader = !hasCellInfo && isHeader && nonEmptyCount === 1
+    let lastNonEmptyHeaderCell = -1
+    if (!hasCellInfo && isHeader && nonEmptyCount < columnCount) {
+      for (let c = columnCount - 1; c >= 0; c--) {
+        if (row[c] && row[c].length > 0) {
+          lastNonEmptyHeaderCell = c
+          break
+        }
+      }
+    }
 
     for (let c = 0; c < columnCount; c++) {
       const cellInfo = info?.cells?.[c]
@@ -117,17 +132,8 @@ export function renderTableHtml(rows: string[][], rowsTableInfo?: TableInfo[], h
       if (!hasCellInfo && isHeader) {
         if (singleNonEmptyHeader && row[c] && row[c].length > 0) {
           colspan = columnCount
-        } else if (nonEmptyCount < columnCount) {
-          let nextNonEmpty = -1
-          for (let cc = c + 1; cc < columnCount; cc++) {
-            if (row[cc] && row[cc].length > 0) {
-              nextNonEmpty = cc
-              break
-            }
-          }
-          if (nextNonEmpty === -1 && row[c] && row[c].length > 0) {
-            colspan = columnCount - c
-          }
+        } else if (nonEmptyCount < columnCount && c === lastNonEmptyHeaderCell) {
+          colspan = columnCount - c
         }
       }
 
@@ -243,13 +249,9 @@ function renderNestedTableRecursive(
 
   if (tableRows.length === 0) return ''
 
-  let html = renderTableHtml(tableRows, tableInfos, currentDepth === 1 ? headerRowCount : 0)
+  const html = renderTableHtml(tableRows, tableInfos, currentDepth === 1 ? headerRowCount : 0)
 
-  for (const [ph, childHtml] of placeholders) {
-    html = html.split(ph).join(childHtml)
-  }
-
-  return html
+  return html.replace(/\x00NESTED_\d+\x00/g, placeholder => placeholders.get(placeholder) ?? placeholder)
 }
 
 function buildCellStyle(cellInfo?: TableCellInfo, useDefaultBorders?: boolean, isHeader?: boolean): string {
@@ -379,4 +381,109 @@ function escapeHtml(text: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;')
+}
+
+/**
+ * 从 paragraphs[startIndex] 起连续收集表格行，直到首个非表格段落。
+ *
+ * 自 DocPreview.vue 原样迁出（contract-split-r1 §1.2 W1 · T3-W1b），
+ * 逻辑与行内注释逐字保留；纯函数，不触 DOM / 响应式状态（§1.3 纯度边界）。
+ *
+ * - Word 行内多行合并段：文本含 2+ 连续 \u0007 视为单段落内多个行边界，
+ *   按 /\u0007{2,}/ 切分为多行并按最大列数补齐空串；
+ * - 普通行：交由 splitTableCells 解析（\u0007 或 \t 分隔），解析失败即停止收集；
+ * - 行属性缺失时以 { inTable: true } 占位，保证 rowsTableInfo / rowsDepth 与 rows 下标对齐；
+ * - 表头启发式：首行仅 1 个非空单元格且少于列数 → headerRowCount=1；
+ *   或首行部分非空（≥2）且第二行填满全部列 → headerRowCount=1。
+ */
+export function collectTableBlock(paragraphs: RenderParagraph[], startIndex: number): TableBlockResult | null {
+  const rows: string[][] = []
+  const rowsTableInfo: TableInfo[] = []
+  const rowsDepth: number[] = []
+  let hasTableInfo = false
+  let i = startIndex
+
+  while (i < paragraphs.length) {
+    const para = paragraphs[i]
+    const text = para.text.trim()
+    // Check if this paragraph contains multiple table rows merged together.
+    // In Word binary format, multiple consecutive cell marks (2+)
+    // with empty content between them indicates a row boundary within a single paragraph.
+    // Common patterns: \u0007\u0007\u0007 (3+) or \u0007\u0007 (2) as row separators.
+    if (text.includes('\u0007\u0007')) {
+      const rawRows = text.split(/\u0007{2,}/)
+      const parsedRows: string[][] = []
+      for (const rowText of rawRows) {
+        const trimmed = rowText.trim()
+        if (trimmed.length === 0) continue
+        const cells = trimmed
+          .replace(/\u00a0/g, ' ')
+          .split('\u0007')
+          .map(cell => cell.trim())
+        if (cells.length > 0 && cells[cells.length - 1] === '') {
+          cells.pop()
+        }
+        const nonEmptyCount = cells.filter(c => c.length > 0).length
+        if (nonEmptyCount >= 1) {
+          parsedRows.push(cells)
+        }
+      }
+      if (parsedRows.length < 1) {
+        i++
+        continue
+      }
+      const columnCount = parsedRows.reduce((max, row) => Math.max(max, row.length), 0)
+      const paddedRows = parsedRows.map(row => {
+        while (row.length < columnCount) row.push('')
+        return row
+      })
+      for (const cells of paddedRows) {
+        rows.push(cells)
+        const tableInfo = (para.paraFormat as ParagraphFormat).table
+        const depth = tableInfo?.depth ?? 1
+        rowsDepth.push(depth)
+        if (tableInfo) {
+          hasTableInfo = true
+          rowsTableInfo.push(tableInfo)
+        } else {
+          rowsTableInfo.push({ inTable: true })
+        }
+      }
+      i++
+      continue
+    }
+    const cells = splitTableCells(text)
+    if (!cells) break
+    rows.push(cells)
+    const tableInfo = (para.paraFormat as ParagraphFormat).table
+    const depth = tableInfo?.depth ?? 1
+    rowsDepth.push(depth)
+    if (tableInfo) {
+      hasTableInfo = true
+      rowsTableInfo.push(tableInfo)
+    } else {
+      // Push a placeholder so indices align with rows[].
+      rowsTableInfo.push({ inTable: true })
+    }
+    i++
+  }
+
+  if (rows.length < 1) return null
+
+  let headerRowCount = 0
+  const columnCount = rows.reduce((max, row) => Math.max(max, row.length), 0)
+  if (rows.length >= 2 && columnCount >= 2) {
+    const firstRow = rows[0]
+    const firstRowNonEmpty = firstRow.filter(c => c && c.length > 0).length
+    if (firstRowNonEmpty === 1 && firstRowNonEmpty < columnCount) {
+      headerRowCount = 1
+    } else if (firstRowNonEmpty > 0 && firstRowNonEmpty < columnCount) {
+      const secondRowNonEmpty = rows[1].filter(c => c && c.length > 0).length
+      if (secondRowNonEmpty === columnCount) {
+        headerRowCount = 1
+      }
+    }
+  }
+
+  return { rows, rowsTableInfo: hasTableInfo ? rowsTableInfo : undefined, rowsDepth, headerRowCount, nextIndex: i }
 }
