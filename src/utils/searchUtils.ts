@@ -75,7 +75,9 @@ export function findTextMatches(text: string, rawQuery: string, options: SearchO
 function collectTextNodes(root: Node): Text[] {
   const result: Text[] = []
   const visit = (node: Node) => {
-    for (const child of Array.from(node.childNodes)) {
+    const children = node.childNodes
+    for (let i = 0; i < children.length; i++) {
+      const child = children[i]
       if (child.nodeType === Node.TEXT_NODE) {
         result.push(child as Text)
       } else if (
