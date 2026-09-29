@@ -68,9 +68,9 @@ export function detectChartType(name: string): { type: ChartType; subtype: Chart
     return { type: 'smartart', subtype: 'process' }
   }
 
-  for (const [pattern, info] of Object.entries(CHART_NAME_PATTERNS)) {
+  for (const pattern of CHART_NAME_PATTERNS_KEYS) {
     if (name.includes(pattern)) {
-      return info
+      return CHART_NAME_PATTERNS[pattern]
     }
   }
 
