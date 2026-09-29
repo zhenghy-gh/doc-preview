@@ -89,11 +89,6 @@ export function detectChartType(name: string): { type: ChartType; subtype: Chart
   return { type: 'unknown', subtype: 'unknown' }
 }
 
-function getDataStream(directory: DirectoryEntry[], parentName: string): DirectoryEntry | undefined {
-  const dataName = `${parentName}\x00Data`
-  return directory.find(e => e.name === dataName && e.objectType === 2)
-}
-
 function extractChartPictureDataUrl(
   parentName: string,
   picEntry: DirectoryEntry | undefined,
@@ -121,32 +116,39 @@ export function extractChartsFromDirectory(
 ): ChartInfo[] {
   const charts: ChartInfo[] = []
 
-  // Filter for potential chart entries:
-  // - objectType 1 = storage (standard OLE)
-  // - objectType 0 may appear in libwv-generated files
-  const chartEntries = directory.filter(e => {
-    // Skip streams (objectType 2) and root (objectType 5)
-    if (e.objectType === 2 || e.objectType === 5) return false
+  const chartEntries: DirectoryEntry[] = []
+  const streamEntries = new Map<string, DirectoryEntry>()
 
-    const name = e.name.trim()
-    const lowerName = name.toLowerCase()
-    if (OBJECT_NAME_PATTERN.test(name)) return true
-    // LibreOffice embedded charts use numeric storage names like _2147483647
-    if (LIBREOFFICE_STORAGE_PATTERN.test(name)) return true
-    for (const pattern of CHART_NAME_PATTERNS_KEYS) {
-      if (name.includes(pattern)) return true
+  for (const entry of directory) {
+    if (entry.objectType === 2) {
+      if (!streamEntries.has(entry.name)) streamEntries.set(entry.name, entry)
+      continue
     }
-    if (lowerName.includes('smartart')) return true
-    if (lowerName.includes('chart') || lowerName.includes('graph')) return true
-    return false
-  })
+    if (entry.objectType === 5) continue
+
+    const name = entry.name.trim()
+    const lowerName = name.toLowerCase()
+    if (OBJECT_NAME_PATTERN.test(name) || LIBREOFFICE_STORAGE_PATTERN.test(name)) {
+      chartEntries.push(entry)
+      continue
+    }
+    let isChart = false
+    for (const pattern of CHART_NAME_PATTERNS_KEYS) {
+      if (name.includes(pattern)) {
+        isChart = true
+        break
+      }
+    }
+    if (isChart || lowerName.includes('smartart') || lowerName.includes('chart') || lowerName.includes('graph')) {
+      chartEntries.push(entry)
+    }
+  }
 
   for (const entry of chartEntries) {
     try {
       const { type, subtype } = detectChartType(entry.name)
-      const pictureName = `${entry.name}\x00Picture`
-      const pictureEntry = directory.find(e => e.name === pictureName && e.objectType === 2)
-      const dataEntry = getDataStream(directory, entry.name)
+      const pictureEntry = streamEntries.get(`${entry.name}\x00Picture`)
+      const dataEntry = streamEntries.get(`${entry.name}\x00Data`)
       const pictureDataUrl = extractChartPictureDataUrl(entry.name, pictureEntry, readStream)
 
       charts.push({

@@ -198,6 +198,16 @@ describe('chartParser', () => {
       expect(charts[0].hasPicture).toBe(true)
     })
 
+    it('should preserve the first matching stream when names are duplicated', () => {
+      const directory = [
+        { name: 'Excel.Sheet.8', objectType: 1, startSector: 0, size: 10, nameLength: 13 },
+        { name: 'Excel.Sheet.8\x00Data', objectType: 2, startSector: 1, size: 100, nameLength: 18 },
+        { name: 'Excel.Sheet.8\x00Data', objectType: 2, startSector: 2, size: 200, nameLength: 18 },
+      ]
+      const charts = extractChartsFromDirectory(directory as any)
+      expect(charts[0].dataSize).toBe(100)
+    })
+
     it('should detect Data stream', () => {
       const directory: DirectoryEntry[] = [
         {
