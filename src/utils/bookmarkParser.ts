@@ -27,16 +27,13 @@ function parsePlcfBkf(
   if (n <= 0) return []
 
   const results: Array<{ cpStart: number; bklIndex: number }> = []
-  let offset = fc
-  const cpStarts: number[] = []
-  for (let i = 0; i <= n; i++) {
-    cpStarts.push(data[offset] | (data[offset + 1] << 8) | (data[offset + 2] << 16) | (data[offset + 3] << 24))
-    offset += 4
-  }
+  let offset = fc + (n + 1) * 4
   // BKF 结构：前 2 字节 = ibkl（到 PlcfBkl 的索引）
   for (let i = 0; i < n; i++) {
+    const cpOffset = fc + i * 4
+    const cpStart = data[cpOffset] | (data[cpOffset + 1] << 8) | (data[cpOffset + 2] << 16) | (data[cpOffset + 3] << 24)
     const bklIndex = data[offset] | (data[offset + 1] << 8)
-    results.push({ cpStart: cpStarts[i], bklIndex })
+    results.push({ cpStart, bklIndex })
     offset += 4 // BKF 总共 4 字节，跳过剩余 2 字节
   }
 
