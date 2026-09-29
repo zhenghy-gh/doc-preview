@@ -91,11 +91,13 @@ export function extractEquationsFromDirectory(
   readStream: (entry: DirectoryEntry) => StreamData | null
 ): EquationInfo[] {
   const equations: EquationInfo[] = []
-  const equationEntries = directory.filter(e => EQUATION_NAME_PATTERN.test(e.name) && e.objectType === 1)
+  const equationEntries: DirectoryEntry[] = []
   const streamEntries = new Map<string, DirectoryEntry>()
   for (const entry of directory) {
-    if (entry.objectType === 2 && !streamEntries.has(entry.name)) {
-      streamEntries.set(entry.name, entry)
+    if (entry.objectType === 2) {
+      if (!streamEntries.has(entry.name)) streamEntries.set(entry.name, entry)
+    } else if (entry.objectType === 1 && EQUATION_NAME_PATTERN.test(entry.name)) {
+      equationEntries.push(entry)
     }
   }
 
