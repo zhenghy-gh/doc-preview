@@ -78,21 +78,16 @@ export function convertTableToMd(table: HTMLTableElement): string {
 
   const colCount = getTableColCount(table)
   const lines: string[] = []
-  const isHeaderRow = (row: HTMLTableRowElement) => {
-    for (const cell of row.cells) {
-      if (cell.tagName.toLowerCase() === 'th') return true
-    }
-    return false
-  }
   let hasHeaderSep = false
 
   for (let r = 0; r < rows.length; r++) {
     const cells = rows[r].cells
     const cellTexts: string[] = []
-    const isHeader = isHeaderRow(rows[r])
+    let isHeader = false
 
     for (let c = 0; c < cells.length; c++) {
       const cell = cells[c]
+      if (cell.tagName.toLowerCase() === 'th') isHeader = true
       const colspan = parseInt(cell.getAttribute('colspan') || '1')
       const cellTextParts: string[] = []
       for (const child of cell.childNodes) cellTextParts.push(convertInlineToMd(child))
