@@ -347,10 +347,11 @@ export function splitHeaderTextHeuristic(
   try {
     const activeTypes = getActivePartTypes(titlePage, facingPages)
     // 按段落标记拆分（0x0D 在文本中表现为 \n 或 \r）
-    const paragraphs = headersText
-      .split(/[\r\n]+/)
-      .map((p) => p.trim())
-      .filter((p) => p.length > 0)
+    const paragraphs: string[] = []
+    for (const paragraph of headersText.split(/[\r\n]+/)) {
+      const trimmed = paragraph.trim()
+      if (trimmed.length > 0) paragraphs.push(trimmed)
+    }
 
     // Unreachable: non-blank headersText always yields at least one paragraph.
     /* v8 ignore start */
