@@ -150,9 +150,21 @@ export function parsePlcfHdd(
       return null
     }
 
-    // 读取所有 CP 值（n+1 个，每个 4 字节小端序）
+    // 获取第一节的有效子范围类型
+    const activeTypes = getActivePartTypes(titlePage, facingPages)
+    const partsPerSection = activeTypes.length
+
+    // Unreachable: getActivePartTypes always includes oddHeader/oddFooter.
+    /* v8 ignore start */
+    if (partsPerSection === 0) {
+      return { parts: [] }
+    }
+    /* v8 ignore stop */
+
+    // 只读取第一节需要的 CP；后续节的边界不会影响第一节拆分。
+    const cpCount = Math.min(n + 1, partsPerSection + 1)
     const cps: number[] = []
-    for (let i = 0; i <= n && i * 4 + 3 < data.length; i++) {
+    for (let i = 0; i < cpCount && i * 4 + 3 < data.length; i++) {
       const cp =
         (data[i * 4] |
           (data[i * 4 + 1] << 8) |
@@ -167,17 +179,6 @@ export function parsePlcfHdd(
     if (cps.length < 2) {
       logger.warn('PlcfHdd CP 数量不足')
       return null
-    }
-    /* v8 ignore stop */
-
-    // 获取第一节的有效子范围类型
-    const activeTypes = getActivePartTypes(titlePage, facingPages)
-    const partsPerSection = activeTypes.length
-
-    // Unreachable: getActivePartTypes always includes oddHeader/oddFooter.
-    /* v8 ignore start */
-    if (partsPerSection === 0) {
-      return { parts: [] }
     }
     /* v8 ignore stop */
 
