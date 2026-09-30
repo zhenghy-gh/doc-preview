@@ -72,23 +72,27 @@ export function getTableColCount(table: HTMLTableElement): number {
   return Math.max(maxCols, 1)
 }
 
-export function convertTableToMd(table: HTMLTableElement): string {
-  const rows = table.rows
-  if (rows.length === 0) return ''
+interface MarkdownTableRow {
+  cellTexts: string[]
+  isHeader: boolean
+}
 
-  const colCount = getTableColCount(table)
-  const lines: string[] = []
-  let hasHeaderSep = false
+function collectMarkdownTableRows(table: HTMLTableElement): {
+  rows: MarkdownTableRow[]
+  colCount: number
+} {
+  let maxCols = 0
+  const rows: MarkdownTableRow[] = []
 
-  for (let r = 0; r < rows.length; r++) {
-    const cells = rows[r].cells
+  for (const row of table.rows) {
+    let cols = 0
     const cellTexts: string[] = []
     let isHeader = false
 
-    for (let c = 0; c < cells.length; c++) {
-      const cell = cells[c]
+    for (const cell of row.cells) {
       if (cell.tagName.toLowerCase() === 'th') isHeader = true
       const colspan = parseInt(cell.getAttribute('colspan') || '1')
+      cols += colspan
       const cellTextParts: string[] = []
       for (const child of cell.childNodes) cellTextParts.push(convertInlineToMd(child))
       const cellText = cellTextParts.join('').trim()
@@ -98,13 +102,28 @@ export function convertTableToMd(table: HTMLTableElement): string {
       }
     }
 
-    while (cellTexts.length < colCount) {
-      cellTexts.push('')
+    maxCols = Math.max(maxCols, cols)
+    rows.push({ cellTexts, isHeader })
+  }
+
+  return { rows, colCount: Math.max(maxCols, 1) }
+}
+
+export function convertTableToMd(table: HTMLTableElement): string {
+  if (table.rows.length === 0) return ''
+
+  const { rows, colCount } = collectMarkdownTableRows(table)
+  const lines: string[] = []
+  let hasHeaderSep = false
+
+  for (const row of rows) {
+    while (row.cellTexts.length < colCount) {
+      row.cellTexts.push('')
     }
 
-    lines.push(`| ${cellTexts.join(' | ')} |`)
+    lines.push(`| ${row.cellTexts.join(' | ')} |`)
 
-    if (isHeader && !hasHeaderSep) {
+    if (row.isHeader && !hasHeaderSep) {
       const sepCols = Array(colCount).fill('---')
       lines.push(`| ${sepCols.join(' | ')} |`)
       hasHeaderSep = true
