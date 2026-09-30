@@ -48,6 +48,10 @@ const OBJECT_NAME_PATTERN = /^Object\.\d+/
 const LIBREOFFICE_STORAGE_PATTERN = /^_\d+$/
 
 export function detectChartType(name: string): { type: ChartType; subtype: ChartSubtype } {
+  return detectChartTypeInternal(name)
+}
+
+function detectChartTypeInternal(name: string, matchedPattern?: string): { type: ChartType; subtype: ChartSubtype } {
   const lowerName = name.toLowerCase()
   
   // LibreOffice embedded objects (storage names like _2147483647)
@@ -68,6 +72,9 @@ export function detectChartType(name: string): { type: ChartType; subtype: Chart
     return { type: 'smartart', subtype: 'process' }
   }
 
+  if (matchedPattern !== undefined) {
+    return CHART_NAME_PATTERNS[matchedPattern]
+  }
   for (const pattern of CHART_NAME_PATTERNS_KEYS) {
     if (name.includes(pattern)) {
       return CHART_NAME_PATTERNS[pattern]
@@ -116,7 +123,7 @@ export function extractChartsFromDirectory(
 ): ChartInfo[] {
   const charts: ChartInfo[] = []
 
-  const chartEntries: DirectoryEntry[] = []
+  const chartEntries: Array<{ entry: DirectoryEntry; matchedPattern?: string }> = []
   const streamEntries = new Map<string, DirectoryEntry>()
 
   for (const entry of directory) {
@@ -129,24 +136,24 @@ export function extractChartsFromDirectory(
     const name = entry.name.trim()
     const lowerName = name.toLowerCase()
     if (OBJECT_NAME_PATTERN.test(name) || LIBREOFFICE_STORAGE_PATTERN.test(name)) {
-      chartEntries.push(entry)
+      chartEntries.push({ entry, matchedPattern: undefined })
       continue
     }
-    let isChart = false
+    let matchedPattern: string | undefined
     for (const pattern of CHART_NAME_PATTERNS_KEYS) {
       if (name.includes(pattern)) {
-        isChart = true
+        matchedPattern = pattern
         break
       }
     }
-    if (isChart || lowerName.includes('smartart') || lowerName.includes('chart') || lowerName.includes('graph')) {
-      chartEntries.push(entry)
+    if (matchedPattern !== undefined || lowerName.includes('smartart') || lowerName.includes('chart') || lowerName.includes('graph')) {
+      chartEntries.push({ entry, matchedPattern })
     }
   }
 
-  for (const entry of chartEntries) {
+  for (const { entry, matchedPattern } of chartEntries) {
     try {
-      const { type, subtype } = detectChartType(entry.name)
+      const { type, subtype } = detectChartTypeInternal(entry.name, matchedPattern)
       const pictureEntry = streamEntries.get(`${entry.name}\x00Picture`)
       const dataEntry = streamEntries.get(`${entry.name}\x00Data`)
       const pictureDataUrl = extractChartPictureDataUrl(entry.name, pictureEntry, readStream)
