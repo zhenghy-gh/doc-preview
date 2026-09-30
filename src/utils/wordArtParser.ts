@@ -72,13 +72,14 @@ function detectWordArtEffects(name: string, data?: Uint8Array): WordArtEffect[] 
   }
 
   if (data && data.length > 0) {
-    if (hasGradientPattern(data)) {
+    const dataEffectMask = detectDataEffectMask(data)
+    if (dataEffectMask & 1) {
       effects.push('gradient')
     }
-    if (hasShadowPattern(data)) {
+    if (dataEffectMask & 2) {
       effects.push('shadow')
     }
-    if (has3dPattern(data)) {
+    if (dataEffectMask & 4) {
       effects.push('3d')
     }
   }
@@ -90,36 +91,33 @@ function detectWordArtEffects(name: string, data?: Uint8Array): WordArtEffect[] 
   return effects
 }
 
-function hasGradientPattern(data: Uint8Array): boolean {
-  for (let i = 0; i < data.length - 16; i++) {
-    if (data[i] === 0x10 && data[i + 1] === 0x00 && 
-        data[i + 2] === 0x00 && data[i + 3] === 0x00 &&
-        data[i + 4] === 0x00 && data[i + 5] === 0x00 &&
-        data[i + 6] === 0x00 && data[i + 7] === 0x00) {
-      return true
-    }
-  }
-  return false
-}
-
-function hasShadowPattern(data: Uint8Array): boolean {
+function detectDataEffectMask(data: Uint8Array): number {
+  let mask = 0
   for (let i = 0; i < data.length - 8; i++) {
-    if (data[i] === 0x4B && data[i + 1] === 0x00 &&
-        data[i + 2] === 0x00 && data[i + 3] === 0x00) {
-      return true
+    if (
+      i < data.length - 16 &&
+      data[i] === 0x10 && data[i + 1] === 0x00 &&
+      data[i + 2] === 0x00 && data[i + 3] === 0x00 &&
+      data[i + 4] === 0x00 && data[i + 5] === 0x00 &&
+      data[i + 6] === 0x00 && data[i + 7] === 0x00
+    ) {
+      mask |= 1
     }
-  }
-  return false
-}
-
-function has3dPattern(data: Uint8Array): boolean {
-  for (let i = 0; i < data.length - 8; i++) {
-    if (data[i] === 0x4C && data[i + 1] === 0x00 &&
-        data[i + 2] === 0x00 && data[i + 3] === 0x00) {
-      return true
+    if (
+      data[i] === 0x4B && data[i + 1] === 0x00 &&
+      data[i + 2] === 0x00 && data[i + 3] === 0x00
+    ) {
+      mask |= 2
     }
+    if (
+      data[i] === 0x4C && data[i + 1] === 0x00 &&
+      data[i + 2] === 0x00 && data[i + 3] === 0x00
+    ) {
+      mask |= 4
+    }
+    if (mask === 7) break
   }
-  return false
+  return mask
 }
 
 function extractTextFromData(data: Uint8Array): string | undefined {
