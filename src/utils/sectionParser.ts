@@ -41,6 +41,8 @@ const SPRM95_S_DYA_TOP = 0x9023
 const SPRM95_S_DYA_BOTTOM = 0x9024
 const SPRM95_S_DXA_GUTTER = 0xB025
 
+const SECTION_BREAK_TYPES: SectionBreakType[] = ['nextPage', 'evenPage', 'oddPage', 'continuous']
+
 /** twips → 磅：1 磅 = 20 twips */
 function twipsToPt(twips: number): number {
   return twips / 20
@@ -228,8 +230,7 @@ function parseSepx(
       case SPRM_S_BKC: {
         const val = wordDocData[offset]
         // 0=nextPage, 1=evenPage, 2=oddPage, 3=continuous
-        const breakMap: SectionBreakType[] = ['nextPage', 'evenPage', 'oddPage', 'continuous']
-        result.breakType = breakMap[val] || 'nextPage'
+        result.breakType = SECTION_BREAK_TYPES[val] || 'nextPage'
         break
       }
       case SPRM_S_PGN_START:
