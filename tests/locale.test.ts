@@ -1,11 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-// 本文件用 vi.resetModules() + 动态 import 重载模块图：首个用例要承担整张模块图
-// 的重新转换与求值。59 个测试文件并行时该步可能超过默认 5000ms 超时
-// （实测本机套件 environment 阶段可达 1900s，而该用例单跑仅约 700ms）。
-// 因此仅放宽超时上限，断言与用例语义均不变。
-vi.setConfig({ testTimeout: 30000 })
-
 function stubStorage(saved: string | null) {
   vi.stubGlobal('localStorage', {
     getItem: vi.fn(() => saved),
