@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { parseWithWorker } from '../src/utils/parseWithWorker'
 
+// 本文件含 vi.resetModules() + 动态 import 重载模块图的用例。59 个测试文件并行时
+// 该步可能超过默认 5000ms 超时（实测本机套件 environment 阶段可达 1900s）。
+// 仅放宽超时上限，断言不变。
+vi.setConfig({ testTimeout: 30000 })
+
 /** Minimal OLE2 fixture that DocParser can parse (from docParser.test.ts). */
 function buildValidOleBuffer(): ArrayBuffer {
   const SECTOR = 512

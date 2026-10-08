@@ -1,6 +1,11 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+// 本文件每个用例都走 vi.resetModules() + 动态 import 重载模块图，首个用例还要
+// 承担整张模块图的首次转换。59 个测试文件并行时该步可能超过默认 5000ms 超时
+// （实测本机套件 environment 阶段可达 1900s）。仅放宽超时上限，断言不变。
+vi.setConfig({ testTimeout: 30000 })
+
 /**
  * COMPOSABLES-E useI18n 单测（vue-dev-2 · 2026-08-25）
  *
