@@ -1,4 +1,5 @@
 import { logger } from './logger'
+import { readUint32 } from './binaryReader'
 
 /**
  * Word 版本类型（基于 nFib 值检测）。
@@ -236,8 +237,8 @@ export function parseFib(data: Uint8Array): FibData | null {
     // FibBase offsets 24/28 hold the legacy fcMin/fcMac text range. Word 97+
     // still writes them; keep the raw values around as a fallback for files
     // whose table stream (and therefore Clx) is missing.
-    const fcMinBase = readDwordAt(data, 24)
-    const fcMacBase = readDwordAt(data, 28)
+    const fcMinBase = readUint32(data, 24)
+    const fcMacBase = readUint32(data, 28)
 
     // csw at offset 32
     const csw = data[32] | (data[33] << 8)
@@ -305,14 +306,14 @@ export function parseFib(data: Uint8Array): FibData | null {
     //   +40 ccpHdrTxbx
     const rgCcpStart = fibRgLwStart
     const rgCcp: RgCcp = {
-      ccpText: readDwordAt(data, rgCcpStart + 12),
-      ccpFtn: readDwordAt(data, rgCcpStart + 16),
-      ccpHdd: readDwordAt(data, rgCcpStart + 20),
-      ccpMcr: readDwordAt(data, rgCcpStart + 24),
-      ccpAtn: readDwordAt(data, rgCcpStart + 28),
-      ccpEdn: readDwordAt(data, rgCcpStart + 32),
-      ccpTxbx: readDwordAt(data, rgCcpStart + 36),
-      ccpHdrTxbx: readDwordAt(data, rgCcpStart + 40),
+      ccpText: readUint32(data, rgCcpStart + 12),
+      ccpFtn: readUint32(data, rgCcpStart + 16),
+      ccpHdd: readUint32(data, rgCcpStart + 20),
+      ccpMcr: readUint32(data, rgCcpStart + 24),
+      ccpAtn: readUint32(data, rgCcpStart + 28),
+      ccpEdn: readUint32(data, rgCcpStart + 32),
+      ccpTxbx: readUint32(data, rgCcpStart + 36),
+      ccpHdrTxbx: readUint32(data, rgCcpStart + 40),
     }
 
     // cbRgFcLcb at fibRgLwEnd (2 bytes word)
@@ -345,9 +346,9 @@ export function parseFib(data: Uint8Array): FibData | null {
     // Field order is defined by MS-DOC §2.5.5. fc values are masked with
     // 0x3FFFFFFF because the top 2 bits act as flags in some fields.
     const fcAt = (pair: number): number =>
-      pair < cbRgFcLcb ? readDwordAt(data, blobStart + pair * 8) & 0x3FFFFFFF : 0
+      pair < cbRgFcLcb ? readUint32(data, blobStart + pair * 8) & 0x3FFFFFFF : 0
     const lcbAt = (pair: number): number =>
-      pair < cbRgFcLcb ? readDwordAt(data, blobStart + pair * 8 + 4) : 0
+      pair < cbRgFcLcb ? readUint32(data, blobStart + pair * 8 + 4) : 0
 
     // fcMin/fcMac are legacy Word 6/95 fields and are NOT part of FibRgFcLcb97.
     // Word 97+ locates text via the piece table (Clx), so these stay 0.
@@ -429,8 +430,3 @@ export function parseFib(data: Uint8Array): FibData | null {
   }
 }
 /* v8 ignore stop */
-
-function readDwordAt(data: Uint8Array, offset: number): number {
-  return (data[offset] | (data[offset + 1] << 8) |
-          (data[offset + 2] << 16) | (data[offset + 3] << 24)) >>> 0
-}

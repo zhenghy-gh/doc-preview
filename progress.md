@@ -643,3 +643,24 @@
 - 指标：**口径修正** —— 本项目历史记录的"主包 gzip"取自**应用形态 `npm run build` 的 `dist/assets/main-*.js`**（见 `docs/ACCEPTANCE_BASELINE.md`），而非库形态 `build:lib`。本轮按正确口径：主包 gzip 109.27 → **109.08 kB（−0.19 kB）**，连续多轮微增后**首次回落**。库形态 `doc-preview.js` 原始体积 360.8 → 350.72 kB。
 - 发布：版本 `0.7.34 → 0.7.35`，双包已发布。
 - 下一轮：继续去重/删减（`readDwordAt`、`twipsToPt`、`readUtf16leString` 各 2–3 份；以及 `escapeHtml` 两份），并复核是否存在可安全合并的同名实现。
+
+## Round 92/100 — 2026-10-08
+- 目标：把去重从"同名函数"扩展到"重复**逻辑块**"（跨文件 ≥6 行归一化后相同的代码）。
+- 方法：对 `src/` 做空白/注释归一化后的 ≥6 行滑窗比对，按文件聚合。**排除 `docparser/formatRecovery.ts`** —— 它是 round 91 已确认的停放 WIP 模块，其"重复"多数是 `docParser.ts` 的陈旧镜像。
+- 改动（5 处，均为**活代码**）：
+  1. **`scorePlainText` 逐行重复**：`encodingDetector.ts:191`（已导出）与 `DocParser.prototype.scorePlainText`（`docParser.ts:1765`）完全相同。`docParser.ts` 本就有 `enc*` 前缀委托模式，改为 `return encScorePlainText(text)`；方法保持 public（`tests/docParser.test.ts` 直接调用它）。
+  2. **`formatRevisionTime` 跨 UI/解析器重复**：`revisionRender.ts:47`（已导出）与 `DocPreview.vue:455`（本地）相同。`DocPreview.vue` 原先只导入其**类型** `RevisionMode`，现同时导入函数并删除本地副本。`revisionRender` 已被 `rendering/documentRenderer.ts` 引入，**不新增模块**。
+  3. **`bytesEqual` 在两个图片模块各一份**：`pictureParser.ts` 本就 import 自 `imageExtractor`，改为由后者导出、前者导入。
+  4. **`readWordAt`/`readDwordAt` 是 `readUint16`/`readUint32` 的无守卫孪生**：`sectionParser.ts` 有 `readWordAt`+`readDwordAt`，`fibParser.ts` 另有一份 `readDwordAt`。三者与 `binaryReader` 的版本只差边界守卫，而守卫**只在负偏移**时产生差异（正偏移越界两侧都得 0）。已证明所有调用点偏移非负：
+     - `fibParser`：字面量 24/28、`fibRgLwStart + 12…40`、`blobStart + pair*8`（pair ≥ 0）。链路推导 `csw = data[32] | (data[33]<<8)` ∈ [0,65535] ⇒ `fibRgWEnd = 34 + csw*2 ≥ 34` ⇒ `fibRgLwStart ≥ 36` ⇒ `fibRgLwEnd ≥ fibRgLwStart+4` ⇒ `blobStart ≥ 42`。
+     - `sectionParser`：`parsePlcfSed` 开头即 `fc < 0 → return []`；其余为 `fc + (i+1)*4`（i ≥ 0）、`offset + 2`（`offset = fc + (n+1)*4`，n > 0）、`fcSepx`（本身来自**无符号**读取）。
+  5. **`ChartType`/`ChartSubtype`/`ChartInfo` 在 `chartParser.ts` 与 `docFormat.ts` 各声明一份**（结构逐字相同，仅 JSDoc 不同）。`docFormat.ts` 不 import `chartParser`，无环；`chartParser.ts` 改为 `import type ... from './docFormat'` + `export type { ... }` 再导出，使 `docParser.ts` 的 `import type { ChartInfo } from './chartParser'` 契约不变。
+- **刻意未动**（看着像重复但语义不同，已逐一核实）：
+  - `escapeHtml`（`textRender.ts` 走 DOM `div.innerHTML`，只转义 `&<>`；`tableText.ts` 走字符串替换，**额外转义引号**，因为用于属性值）—— 合并会改变输出。
+  - `findPngEnd`/`findJpegEnd`/`findGifEnd`/`findBmpEnd`（`pictureParser` 版带 `maxLen` 钳制，且其 `findJpegEnd` 无 SOS/熵编码段处理）。
+  - `readUtf16leString` ×3：第三参数在两个文件里是**字符数**、在 `styleParser` 里是**字节长度**。
+  - `twipsToPt` ×2：`Math.round((twips/20)*100)/100` vs 直接 `twips/20`。
+- 验证：`npm run lint` 通过；`npm run build`（vue-tsc + Vite）通过；`npm test` 59 文件 / **1334 项**通过。
+- 指标：主包 gzip 109.08 → **108.76 kB（−0.32 kB）**，连续第二轮回落。
+- 发布：版本 `0.7.35 → 0.7.36`，双包已发布。
+- 下一轮：继续找可安全合并的重复；剩余同名重复已全部判定为"语义不同"，后续可转向**重复字面量/常量表**与**未使用的导出**两类目标。

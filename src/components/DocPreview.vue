@@ -7,7 +7,7 @@ import { renderDocumentToPages } from '../utils/rendering/documentRenderer'
 import { PT_TO_PX } from '../utils/rendering/pageBuilder'
 import type { CharacterFormat, ParagraphFormat, RevisionMark, RevisionType, BookmarkRange, SectionInfo, PageFieldRange, CrossReferenceRange, ShapeInfo, EquationInfo, ChartInfo, WordArtInfo, RenderParagraph } from '../utils/docFormat'
 import type { DocumentFields } from '../utils/fieldParser'
-import type { RevisionMode } from '../utils/revisionRender'
+import { formatRevisionTime, type RevisionMode } from '../utils/revisionRender'
 import { htmlToMarkdown } from '../utils/markdownExport'
 import { highlightTextMatches, clearSearchHighlights } from '../utils/searchUtils'
 import { escapeHtml, formatTextWithInferredFormat } from '../utils/textRender'
@@ -448,17 +448,6 @@ function formatSizePt(pt: number | undefined): string {
 
 // --- Hidden text ---
 const showHiddenText = ref(false)
-
-/**
- * 修订时间戳 → 本地时区 “YYYY-MM-DD HH:mm”；缺省或无效返回空串。
- */
-function formatRevisionTime(ts?: number): string {
-  if (!ts) return ''
-  const d = new Date(ts)
-  if (Number.isNaN(d.getTime())) return ''
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
 
 const revisionItems = computed<Array<{ type: RevisionType; label: string; author: string; time: string; count: number }>>(() => {
   if (!revisions.value.length) return []

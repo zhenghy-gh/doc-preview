@@ -1,5 +1,6 @@
 import { logger } from './logger'
 import type { SectionInfo, SectionBreakType } from './docFormat'
+import { readUint16, readUint32 } from './binaryReader'
 
 // ==================== Section SPRM 定义 ====================
 // MS-DOC §2.4.10 Section SPRM 列表。
@@ -46,21 +47,6 @@ const SECTION_BREAK_TYPES: SectionBreakType[] = ['nextPage', 'evenPage', 'oddPag
 /** twips → 磅：1 磅 = 20 twips */
 function twipsToPt(twips: number): number {
   return twips / 20
-}
-
-/**
- * 读取 little-endian word (2 bytes，无符号)。
- */
-function readWordAt(data: Uint8Array, offset: number): number {
-  return (data[offset] | (data[offset + 1] << 8)) >>> 0
-}
-
-/**
- * 读取 little-endian dword (4 bytes，无符号)。
- */
-function readDwordAt(data: Uint8Array, offset: number): number {
-  return (data[offset] | (data[offset + 1] << 8) |
-          (data[offset + 2] << 16) | (data[offset + 3] << 24)) >>> 0
 }
 
 /**
@@ -133,13 +119,13 @@ function parsePlcfSed(
 
   const entries: SedEntry[] = []
   let offset = fc + (n + 1) * 4
-  let cpStart = readDwordAt(data, fc)
+  let cpStart = readUint32(data, fc)
 
   // aSED: n 个 SED (每个 8 字节)
   for (let i = 0; i < n; i++) {
-    const cpEnd = readDwordAt(data, fc + (i + 1) * 4)
-    const fn = readWordAt(data, offset)
-    const fcSepx = readDwordAt(data, offset + 2)
+    const cpEnd = readUint32(data, fc + (i + 1) * 4)
+    const fn = readUint16(data, offset)
+    const fcSepx = readUint32(data, offset + 2)
     // fnMpr (2 bytes) 保留，跳过
     entries.push({
       cpStart,
@@ -178,7 +164,7 @@ function parseSepx(
     return result
   }
 
-  const cb = readWordAt(wordDocData, fcSepx)
+  const cb = readUint16(wordDocData, fcSepx)
   if (cb === 0 || fcSepx + 2 + cb > wordDocData.length) return result
 
   const grpprlStart = fcSepx + 2
@@ -186,7 +172,7 @@ function parseSepx(
   let offset = grpprlStart
 
   while (offset + 2 <= grpprlEnd) {
-    const sprm = readWordAt(wordDocData, offset)
+    const sprm = readUint16(wordDocData, offset)
     offset += 2
     // 防御：循环条件保证 offset+2 <= grpprlEnd，故 offset 不会超过 grpprlEnd
     if (offset > grpprlEnd) break
@@ -197,31 +183,31 @@ function parseSepx(
     switch (sprm) {
       case SPRM_S_XA_PAGE:
       case SPRM95_S_XA_PAGE:
-        result.pageWidthPt = twipsToPt(readWordAt(wordDocData, offset))
+        result.pageWidthPt = twipsToPt(readUint16(wordDocData, offset))
         break
       case SPRM_S_YA_PAGE:
       case SPRM95_S_YA_PAGE:
-        result.pageHeightPt = twipsToPt(readWordAt(wordDocData, offset))
+        result.pageHeightPt = twipsToPt(readUint16(wordDocData, offset))
         break
       case SPRM_S_DXA_LEFT:
       case SPRM95_S_DXA_LEFT:
-        result.marginLeftPt = twipsToPt(readWordAt(wordDocData, offset))
+        result.marginLeftPt = twipsToPt(readUint16(wordDocData, offset))
         break
       case SPRM_S_DXA_RIGHT:
       case SPRM95_S_DXA_RIGHT:
-        result.marginRightPt = twipsToPt(readWordAt(wordDocData, offset))
+        result.marginRightPt = twipsToPt(readUint16(wordDocData, offset))
         break
       case SPRM_S_DYA_TOP:
       case SPRM95_S_DYA_TOP:
-        result.marginTopPt = twipsToPt(readWordAt(wordDocData, offset))
+        result.marginTopPt = twipsToPt(readUint16(wordDocData, offset))
         break
       case SPRM_S_DYA_BOTTOM:
       case SPRM95_S_DYA_BOTTOM:
-        result.marginBottomPt = twipsToPt(readWordAt(wordDocData, offset))
+        result.marginBottomPt = twipsToPt(readUint16(wordDocData, offset))
         break
       case SPRM_S_DXA_GUTTER:
       case SPRM95_S_DXA_GUTTER:
-        result.gutterPt = twipsToPt(readWordAt(wordDocData, offset))
+        result.gutterPt = twipsToPt(readUint16(wordDocData, offset))
         break
       case SPRM_S_B_ORIENTATION: {
         const val = wordDocData[offset]
@@ -235,13 +221,13 @@ function parseSepx(
         break
       }
       case SPRM_S_PGN_START:
-        result.pageStart = readWordAt(wordDocData, offset)
+        result.pageStart = readUint16(wordDocData, offset)
         break
       case SPRM_S_CCOLUMNS:
-        result.columnCount = readWordAt(wordDocData, offset)
+        result.columnCount = readUint16(wordDocData, offset)
         break
       case SPRM_S_DXA_COLUMNS:
-        result.columnSpacingPt = twipsToPt(readWordAt(wordDocData, offset))
+        result.columnSpacingPt = twipsToPt(readUint16(wordDocData, offset))
         break
       // 以下属性暂不提取，仅跳过
       case SPRM_S_DYA_HDR_TOP:

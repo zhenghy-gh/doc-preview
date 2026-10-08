@@ -63,6 +63,7 @@ import {
   extractTextSimple as encExtractTextSimple,
   detectEncodingFromBinary as encDetectEncodingFromBinary,
   scoreRawParagraphs as encScoreRawParagraphs,
+  scorePlainText as encScorePlainText,
   nonTextualSymbolRatio as encNonTextualSymbolRatio,
   shouldTryCrossEncodingRetry as encShouldTryCrossEncodingRetry,
   crossEncodingRetryWins as encCrossEncodingRetryWins,
@@ -1763,19 +1764,7 @@ export class DocParser {
   }
 
   scorePlainText(text: string): number {
-    if (!text || text.length === 0) return 0
-    const paragraphs = text.split(/\n{2,}/).filter(p => p.trim().length > 0)
-    let score = 0
-    for (const p of paragraphs) {
-      if (p.length < 4) continue
-      const englishWords = (p.match(/[A-Za-z]{3,}/g) || []).length
-      if (englishWords >= 2) score += 30; else if (englishWords >= 1) score += 10
-      const chineseCount = (p.match(/[一-鿿]/g) || []).length
-      if (chineseCount >= 3) score += 25; else if (chineseCount >= 1) score += 5
-      if (p.length >= 10 && p.length <= 500) score += Math.min(p.length / 2, 50)
-      if (/[,.]/.test(p) || /[，。]/.test(p)) score += 10
-    }
-    return score
+    return encScorePlainText(text)
   }
 
   // ==================== Character / paragraph format ====================

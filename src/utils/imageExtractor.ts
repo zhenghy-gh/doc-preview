@@ -33,7 +33,7 @@ const JPEG_SOI = [0xFF, 0xD8]
 const GIF_SIGNATURE_87 = [0x47, 0x49, 0x46, 0x38, 0x37, 0x61] // GIF87a
 const GIF_SIGNATURE_89 = [0x47, 0x49, 0x46, 0x38, 0x39, 0x61] // GIF89a
 
-function bytesEqual(data: Uint8Array, offset: number, signature: number[]): boolean {
+export function bytesEqual(data: Uint8Array, offset: number, signature: number[]): boolean {
   if (offset + signature.length > data.length) return false
   for (let i = 0; i < signature.length; i++) {
     if (data[offset + i] !== signature[i]) return false

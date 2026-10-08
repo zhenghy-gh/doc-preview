@@ -30,7 +30,7 @@
  * the image is still visible.
  */
 
-import { extractImagesFromStream, imageFormatMime, type ImageFormat } from './imageExtractor'
+import { extractImagesFromStream, imageFormatMime, bytesEqual, type ImageFormat } from './imageExtractor'
 import { readUint16, readUint32 } from './binaryReader'
 
 export type PictureType =
@@ -88,14 +88,6 @@ function pictureTypeToFormat(type: PictureType): ImageFormat | 'unknown' {
     return type
   }
   return 'unknown'
-}
-
-function bytesEqual(data: Uint8Array, offset: number, signature: number[]): boolean {
-  if (offset + signature.length > data.length) return false
-  for (let i = 0; i < signature.length; i++) {
-    if (data[offset + i] !== signature[i]) return false
-  }
-  return true
 }
 
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]

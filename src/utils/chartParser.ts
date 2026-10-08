@@ -2,28 +2,11 @@ import { logger } from './logger'
 import { DirectoryEntry, StreamData } from './oleParser'
 import { extractImagesFromStream, imagesToDataUrls } from './imageExtractor'
 
-export type ChartType = 'msgraph' | 'excel' | 'smartart' | 'oleobject' | 'chart' | 'unknown'
-
-export type ChartSubtype = 
-  | 'column' | 'bar' | 'line' | 'pie' | 'area' | 'scatter' | 'doughnut'
-  | 'radar' | 'surface' | 'bubble' | 'stock' | 'cone' | 'cylinder' | 'pyramid'
-  | 'orgchart' | 'process' | 'cycle' | 'hierarchy' | 'matrix' | 'relationship' | 'list'
-  | 'picture' | 'chart' | 'unknown'
-
-export interface ChartInfo {
-  id: number
-  name: string
-  type: ChartType
-  subtype: ChartSubtype
-  hasPicture?: boolean
-  hasData?: boolean
-  dataSize?: number
-  pictureSize?: number
-  objectType?: number
-  format?: string
-  /** Data URL of the chart preview image (from the OLE Picture stream), if available. */
-  dataUrl?: string
-}
+// 图表类型族（ChartType / ChartSubtype / ChartInfo）原先在本模块与 docFormat.ts
+// 各定义一份，结构逐字相同。现以 docFormat.ts 为唯一来源，此处按原符号名再导出，
+// 保持既有导入契约不变（docParser.ts 仍从本模块导入 ChartInfo）。
+import type { ChartType, ChartSubtype, ChartInfo } from './docFormat'
+export type { ChartType, ChartSubtype, ChartInfo }
 
 const CHART_NAME_PATTERNS: Record<string, { type: ChartType; subtype: ChartSubtype }> = {
   'MSGraph.Chart': { type: 'msgraph', subtype: 'chart' },
