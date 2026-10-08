@@ -32,25 +32,44 @@ export type ParagraphHtmlFn = (
   cpEnd: number,
 ) => string
 
+// 列表标记正则：这些模式在每个列表项上都会被用到，且原先以字面量形式写在
+// 函数体内——正则字面量每次求值都会新建一个 RegExp 对象。全部为 `^` 锚定的
+// 非全局正则、仅配合 `String.replace` 使用，因此提到模块作用域共享是安全的。
+const ORDERED_MARKER_RES = [
+  /^\d+(?:\.\d+)+[\.\s\t]+/,            // 1.1 / 1.2.3
+  /^\d+[\.\)][\s\t]+/,                  // 1. / 2)
+  /^[\(\（\[]\d+[\)\）\]][\s\t]+/,        // (1) / （2） / [3]
+  /^[a-zA-Z][\.\)][\s\t]+/,             // a. / B)
+  /^[\(\（][a-zA-Z][\)\）][\s\t]+/,       // (a) / （B）
+  /^(?:i{1,3}|iv|v|vi{0,3}|ix|x|I{1,3}|IV|V|VI{0,3}|IX|X)[\.\)][\s\t]+/, // i. / II.
+  /^([一二三四五六七八九十百千零〇]{1,4}|[甲乙丙丁戊己庚辛壬癸]|[壹贰叁肆伍陆柒捌玖拾佰仟]{1,4})[\、\.\)][\s\t]*/, // 一、 / 甲.
+  /^[\(\（]([一二三四五六七八九十]{1,4}|[甲乙丙丁戊己庚辛壬癸])[）\)][\s\t]+/, // （一）
+  /^[\u2460-\u2473\u3251-\u325F\u32B1-\u32BF][\s\t]+/, // ① ②
+]
+const UNORDERED_MARKER_RES = [
+  /^[•\-\*][\s\t]+/,
+  /^[○●▪▸►→◇◆▪▫◦‣⁃]\s*/,
+]
+const P_OPEN_RE = /^<p[^>]*>/
+const P_CLOSE_RE = /<\/p>$/
+
 export function extractListItemText(text: string, listType: string): string {
   const trimmed = text.trimStart()
-  // Ordered markers
+  // Ordered markers: 逐条按序剥离（一个标记剥掉后，后面的模式仍可能继续命中，
+  // 例如 "1) a. foo"，因此不能在中途提前返回）。
   if (listType === 'ordered') {
-    return trimmed
-      .replace(/^\d+(?:\.\d+)+[\.\s\t]+/, '')            // 1.1 / 1.2.3
-      .replace(/^\d+[\.\)][\s\t]+/, '')                   // 1. / 2)
-      .replace(/^[\(\（\[]\d+[\)\）\]][\s\t]+/, '')        // (1) / （2） / [3]
-      .replace(/^[a-zA-Z][\.\)][\s\t]+/, '')              // a. / B)
-      .replace(/^[\(\（][a-zA-Z][\)\）][\s\t]+/, '')       // (a) / （B）
-      .replace(/^(?:i{1,3}|iv|v|vi{0,3}|ix|x|I{1,3}|IV|V|VI{0,3}|IX|X)[\.\)][\s\t]+/, '') // i. / II.
-      .replace(/^([一二三四五六七八九十百千零〇]{1,4}|[甲乙丙丁戊己庚辛壬癸]|[壹贰叁肆伍陆柒捌玖拾佰仟]{1,4})[\、\.\)][\s\t]*/, '') // 一、 / 甲.
-      .replace(/^[\(\（]([一二三四五六七八九十]{1,4}|[甲乙丙丁戊己庚辛壬癸])[）\)][\s\t]+/, '') // （一）
-      .replace(/^[\u2460-\u2473\u3251-\u325F\u32B1-\u32BF][\s\t]+/, '') // ① ②
+    let result = trimmed
+    for (let i = 0; i < ORDERED_MARKER_RES.length; i++) {
+      result = result.replace(ORDERED_MARKER_RES[i], '')
+    }
+    return result
   }
   // Unordered markers
-  return trimmed
-    .replace(/^[•\-\*][\s\t]+/, '')
-    .replace(/^[○●▪▸►→◇◆▪▫◦‣⁃]\s*/, '')
+  let result = trimmed
+  for (let i = 0; i < UNORDERED_MARKER_RES.length; i++) {
+    result = result.replace(UNORDERED_MARKER_RES[i], '')
+  }
+  return result
 }
 
 interface ListItemNode {
@@ -110,7 +129,7 @@ export function renderNestedList(
     if (node.children.length === 0) return ''
     const renderedItems = node.children.map(child => {
       const content = renderParagraph(child.text, child.charFormat, child.paraFormat, 0, child.text.length)
-        .replace(/^<p[^>]*>/, '').replace(/<\/p>$/, '')
+        .replace(P_OPEN_RE, '').replace(P_CLOSE_RE, '')
       const subList = render(child, false)
       // Apply paragraph-level font-size to li so items without char-styles
       // still get the correct font size (otherwise the <p> tag was stripped).
