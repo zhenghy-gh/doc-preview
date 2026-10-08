@@ -24,6 +24,7 @@
  */
 
 import { logger } from './logger'
+import { bytesToBase64 } from './binaryReader'
 import type { HeaderFooterPartType, HeaderFooterPartContent, HeaderFooterImage } from './docFormat'
 import type { ParsedPicture } from './pictureParser'
 
@@ -42,18 +43,7 @@ export interface HeaderFooterPart {
  */
 function pictureToHeaderFooterImage(pic: ParsedPicture): HeaderFooterImage | null {
   if (pic.format === 'unknown') return null
-  
-  let binary = ''
-  const bytes = pic.data
-  const chunkSize = 0x8000
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    const slice = bytes.subarray(i, Math.min(i + chunkSize, bytes.length))
-    binary += String.fromCharCode.apply(
-      null,
-      slice as unknown as number[],
-    )
-  }
-  
+
   const mime =
     pic.format === 'png'
       ? 'image/png'
@@ -67,7 +57,7 @@ function pictureToHeaderFooterImage(pic: ParsedPicture): HeaderFooterImage | nul
   
   return {
     format: pic.format,
-    dataUrl: `data:${mime};base64,${btoa(binary)}`,
+    dataUrl: `data:${mime};base64,${bytesToBase64(pic.data)}`,
     widthPx: pic.widthPx,
     heightPx: pic.heightPx,
     floating: pic.floating,

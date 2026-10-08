@@ -41,7 +41,7 @@ import {
   BMP_SIGNATURE,
   type ImageFormat,
 } from './imageExtractor'
-import { readUint16, readUint32 } from './binaryReader'
+import { readUint16, readUint32, bytesToBase64 } from './binaryReader'
 
 export type PictureType =
   | 'jpeg'
@@ -521,17 +521,5 @@ function findPrecedingPicf(dataStream: Uint8Array, imgOffset: number): number {
 export function picturesToDataUrls(pictures: ParsedPicture[]): string[] {
   return pictures
     .filter(p => p.format !== 'unknown')
-    .map(p => {
-      let binary = ''
-      const bytes = p.data
-      const chunkSize = 0x8000
-      for (let i = 0; i < bytes.length; i += chunkSize) {
-        const slice = bytes.subarray(i, Math.min(i + chunkSize, bytes.length))
-        binary += String.fromCharCode.apply(
-          null,
-          Array.from(slice) as unknown as number[],
-        )
-      }
-      return `data:${imageFormatMime(p.format as ImageFormat)};base64,${btoa(binary)}`
-    })
+    .map(p => `data:${imageFormatMime(p.format as ImageFormat)};base64,${bytesToBase64(p.data)}`)
 }

@@ -18,6 +18,8 @@
  * positives. They can be added later once PICF parsing is in place.
  */
 
+import { bytesToBase64 } from './binaryReader'
+
 /** MIME type / format tag for an extracted image. */
 export type ImageFormat = 'png' | 'jpeg' | 'bmp' | 'gif'
 
@@ -340,18 +342,12 @@ export function imageFormatMime(format: ImageFormat): string {
 /**
  * PERF-T2：共享快速 base64 dataUrl 编码。
  *
- * 直接对 Uint8Array 子块做 String.fromCharCode.apply（免去 Array.from 的
- * 32k 元素数字数组中转），兆级嵌入图的编码耗时下降一个数量级；
- * docParser 的 pictures 编码路径复用本函数，消除逐字符拼接副本。
+ * 逐块编码的实现已统一到 `binaryReader.bytesToBase64`（那里也记了分块为什么是
+ * 0x2000、为什么不能用 `TextDecoder('latin1')`、为什么不能传 `Array.from`）。
+ * 本函数只负责加 `data:` 前缀。
  */
 export function bytesToBase64DataUrl(bytes: Uint8Array, format: ImageFormat): string {
-  let binary = ''
-  const chunkSize = 0x8000
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    const slice = bytes.subarray(i, Math.min(i + chunkSize, bytes.length))
-    binary += String.fromCharCode.apply(null, slice as unknown as number[])
-  }
-  return `data:${imageFormatMime(format)};base64,${btoa(binary)}`
+  return `data:${imageFormatMime(format)};base64,${bytesToBase64(bytes)}`
 }
 
 export function imagesToDataUrls(images: ExtractedImage[]): string[] {
