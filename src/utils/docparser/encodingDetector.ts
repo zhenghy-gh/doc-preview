@@ -70,8 +70,12 @@ const JUNK_CODE_SET = (() => {
   return set
 })()
 
-/** 统计 CJK 统一表意文字（U+4E00–U+9FFF）个数，避免 match(/…/g) 的数组分配。 */
-function countChineseChars(text: string): number {
+/**
+ * 统计 CJK 统一表意文字（U+4E00–U+9FFF）个数，避免 match(/…/g) 的数组分配。
+ * 由 heuristics/textHeuristics.ts 复用（其 guessCharFormat / detectAlignment 原各自
+ * 用 `match(/[一-鿿]/g).length` 统计）。
+ */
+export function countChineseChars(text: string): number {
   let count = 0
   for (let i = 0; i < text.length; i++) {
     const code = text.charCodeAt(i)

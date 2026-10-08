@@ -12,6 +12,7 @@
  */
 
 import type { CharacterFormat, ParagraphFormat, CharStyle, CharStyleSegment } from '../../docFormat'
+import { countChineseChars } from '../encodingDetector'
 
 /**
  * 与 JS `\s` 等价的码点判定（WhiteSpace + LineTerminator）。
@@ -49,12 +50,91 @@ const DATE_COLON_BEFORE_RE = /[：:]\s*$/
 const DATE_UNIT_RE = /[年日月时分秒]/
 const DATE_TIME_RE = /[0-9]{2,4}[年月日时分秒]/
 
+/** 统计与 `\s` 匹配的码点个数（等价于 `text.replace(/\s/g, '').length` 的差值）。 */
+function countWhitespaceChars(text: string): number {
+  let count = 0
+  for (let i = 0; i < text.length; i++) {
+    if (isWhitespaceCode(text.charCodeAt(i))) count++
+  }
+  return count
+}
+
+/** 前导空白个数，等价于 `text.length - text.trimStart().length`。 */
+function leadingWhitespaceCount(text: string): number {
+  let i = 0
+  while (i < text.length && isWhitespaceCode(text.charCodeAt(i))) i++
+  return i
+}
+
+/**
+ * 尾部空白个数，等价于
+ * `text.trimEnd().length === 0 ? 0 : text.length - text.trimEnd().length`。
+ * 全空白串自然得 0：此时前导计数已等于 text.length，循环上限为 0。
+ * `leading` 作为上限保证前导段与尾部段不重叠。
+ */
+function trailingWhitespaceCount(text: string, leading: number): number {
+  const limit = text.length - leading
+  let count = 0
+  while (count < limit && isWhitespaceCode(text.charCodeAt(text.length - 1 - count))) count++
+  return count
+}
+
+/**
+ * 前导缩进"视觉宽度"：把前导空白串中的 TAB(09) 与全角空格(3000) 各算 2、
+ * 其余空白各算 1 后的总长度。
+ * 原实现先 match 出前导空白串，再分别 replace 制表符与全角空格为两格，
+ * 一次 match 加两次 replace 共三次整串分配；此处单趟扫描零分配。
+ */
+function leadingIndentWidth(text: string): number {
+  let width = 0
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i)
+    if (!isWhitespaceCode(code)) break
+    width += code === 0x09 || code === 0x3000 ? 2 : 1
+  }
+  return width
+}
+
+// ---- guessCharFormat 用的模式（原先都是函数体内的字面量，每次调用新建 RegExp）----
+// 注意 SENTENCE_PUNCT_RE 含 ASCII `. ! ?`，与 detectAlignment 的
+// ALIGN_SENTENCE_PUNCT_RE（只含中文标点）**不同**，不可合并。
+const SENTENCE_PUNCT_RE = /[，。！？、；.!?]/
+const EN_TITLE_START_RE = /^[A-Z][a-z]/
+const HAS_LATIN_RE = /[A-Za-z]/
+const ALL_CAPS_TITLE_RE = /^[A-Z\s]{3,}$/
+// 下面两个带 `g`，仅用于 String.match（会重置并忽略 lastIndex），跨调用共享安全。
+const CAPITAL_WORD_RE = /\b[A-Z][a-z]{2,}\b/g
+const WORD_RE = /\b[a-zA-Z]{2,}\b/g
+
+// ---- detectAlignment 用的模式 ----
+const ALIGN_YEAR_RE = /^\s*\d{4}\s*年/
+const ALIGN_MONTH_RE = /^\s*\d{1,2}\s*月/
+const ALL_CAPS_LINE_RE = /^[A-Z][A-Z\s]+$/
+const ALIGN_SENTENCE_PUNCT_RE = /[，。！？、；]/
+
+// ---- detectListInfo 用的模式 ----
+const LIST_MULTI_LEVEL_RE = /^\d+(?:\.\d+)+[\.\s\t]/
+const LIST_ARABIC_RE = /^\d+[\.\)][\s\t]/
+const LIST_PAREN_ARABIC_RE = /^[\(\（\[]\d+[\)\）\]][\s\t]*/
+const LIST_ROMAN_RE = /^(?:i{1,3}|iv|v|vi{0,3}|ix|x|I{1,3}|IV|V|VI{0,3}|IX|X)[\.\)][\s\t]/
+const LIST_ROMAN_UPPER_RE = /^[IVXLCDM]/
+const LIST_LATIN_RE = /^[a-zA-Z][\.\)][\s\t]/
+const LIST_PAREN_LATIN_RE = /^[\(\（][a-zA-Z][\)\）][\s\t]*/
+const LIST_CJK_NUMERAL_RE = /^([一二三四五六七八九十百千零〇]{1,4}|[甲乙丙丁戊己庚辛壬癸]|[壹贰叁肆伍陆柒捌玖拾佰仟]{1,4})[\、\.\)]/
+const LIST_PAREN_CJK_RE = /^[\(\（]([一二三四五六七八九十]{1,4}|[甲乙丙丁戊己庚辛壬癸])[）\)][\s\t]*/
+const LIST_CIRCLED_RE = /^[\u2460-\u2473\u3251-\u325F\u32B1-\u32BF][\s\t]/
+const LIST_BULLET_ASCII_RE = /^[•\-\*][\s\t]/
+const LIST_BULLET_ASCII_ALT_RE = /^[•\*]\s/
+const LIST_BULLET_CJK_RE = /^[○●▪▸►→◇◆]\s/
+const LIST_BULLET_SQUARE_RE = /^[▪▫◦‣⁃]\s/
+
 export function guessCharFormat(text: string, _paragraphIndex?: number): CharacterFormat {
     const charFormat: CharacterFormat = { styles: [] }
-    const chineseCount = (text.match(/[\u4e00-\u9fff]/g) || []).length
+    const chineseCount = countChineseChars(text)
     const totalLength = text.length
     const chineseRatio = chineseCount / totalLength
-    const stripped = text.replace(/\s/g, '')
+    // 原先 `text.replace(/\s/g, '')` 只为拿长度，现直接计数，省掉一次整串分配。
+    const strippedLength = totalLength - countWhitespaceChars(text)
     const trimmed = text.trim()
 
     // Default font: Chinese docs use Song, English use Times New Roman
@@ -69,13 +149,13 @@ export function guessCharFormat(text: string, _paragraphIndex?: number): Charact
 
     // --- Title detection ---
     // Chinese title: short, >50% Chinese, no sentence punctuation
-    const hasSentencePunct = /[，。！？、；.!?]/.test(text)
+    const hasSentencePunct = SENTENCE_PUNCT_RE.test(text)
     const noSentencePunct = !hasSentencePunct
-    const pureName = chineseCount >= 2 && chineseCount <= 4 && stripped.length === chineseCount && trimmed.length <= 4
+    const pureName = chineseCount >= 2 && chineseCount <= 4 && strippedLength === chineseCount && trimmed.length <= 4
 
     if (!pureName && noSentencePunct && !text.includes('：') && !text.includes(':')) {
-      const isEnglishTitle = /^[A-Z][a-z]/.test(trimmed) && /[A-Za-z]/.test(trimmed) && !/[，。！？、；.!?]/.test(trimmed)
-      const isAllCapsTitle = /^[A-Z\s]{3,}$/.test(trimmed) && trimmed.length >= 3 && trimmed.length <= 40
+      const isEnglishTitle = EN_TITLE_START_RE.test(trimmed) && HAS_LATIN_RE.test(trimmed) && !SENTENCE_PUNCT_RE.test(trimmed)
+      const isAllCapsTitle = ALL_CAPS_TITLE_RE.test(trimmed) && trimmed.length >= 3 && trimmed.length <= 40
       const isShortChineseTitle = chineseRatio > 0.5 && totalLength < 22 && chineseCount >= 2
 
       if (isAllCapsTitle) {
@@ -84,8 +164,8 @@ export function guessCharFormat(text: string, _paragraphIndex?: number): Charact
         charFormat.fontSize = 28
       } else if (isEnglishTitle && totalLength < 40) {
         // "This Is A Title" pattern or first-word-capitalized
-        const capitalWords = (trimmed.match(/\b[A-Z][a-z]{2,}\b/g) || []).length
-        const totalWords = (trimmed.match(/\b[a-zA-Z]{2,}\b/g) || []).length
+        const capitalWords = (trimmed.match(CAPITAL_WORD_RE) || []).length
+        const totalWords = (trimmed.match(WORD_RE) || []).length
         if (capitalWords >= Math.min(totalWords, 2) && totalWords >= 2) {
           charFormat.bold = true
           charFormat.fontSize = 22
@@ -95,7 +175,7 @@ export function guessCharFormat(text: string, _paragraphIndex?: number): Charact
         }
       } else if (isShortChineseTitle) {
         charFormat.bold = true
-        charFormat.fontSize = stripped.length < 6 ? 36 : 22
+        charFormat.fontSize = strippedLength < 6 ? 36 : 22
       }
     }
 
@@ -237,68 +317,67 @@ export function detectParagraphFormat(text: string, index: number, totalParagrap
    * Returns null if the paragraph does not look like a list item.
    */
 export function detectListInfo(text: string): { listType: 'ordered' | 'unordered'; listStyle: string; listLevel: number } | null {
-    // Count leading whitespace (spaces / tabs / full-width spaces).
-    const leadingMatch = text.match(/^[\s\u3000\t]*/)
-    const leadingSpaces = leadingMatch ? leadingMatch[0].replace(/\t/g, '  ').replace(/\u3000/g, '  ').length : 0
-    const listLevel = Math.floor(leadingSpaces / 2)
+    // Count leading whitespace (spaces / tabs / full-width spaces) as an indent width.
+    // 原先 match(/^[\s\u3000\t]*/) + 两次 replace 共 3 次整串分配，现单趟扫描。
+    const listLevel = Math.floor(leadingIndentWidth(text) / 2)
 
     const trimmed = text.trim()
     if (trimmed.length < 2) return null
 
     // 1. Multi-level Arabic: 1.1 / 1.2.3 (at least one dot-separated number followed by space or end)
-    if (/^\d+(?:\.\d+)+[\.\s\t]/.test(trimmed)) {
+    if (LIST_MULTI_LEVEL_RE.test(trimmed)) {
       return { listType: 'ordered', listStyle: 'decimal', listLevel }
     }
 
     // 2. Arabic numeral with . or ) then space: 1. / 2) / 12.
-    if (/^\d+[\.\)][\s\t]/.test(trimmed)) {
+    if (LIST_ARABIC_RE.test(trimmed)) {
       return { listType: 'ordered', listStyle: 'decimal', listLevel }
     }
 
     // 3. Parenthesized Arabic: (1) / （2） / [1] — allow optional space after closing paren.
-    if (/^[\(\（\[]\d+[\)\）\]][\s\t]*/.test(trimmed)) {
+    if (LIST_PAREN_ARABIC_RE.test(trimmed)) {
       return { listType: 'ordered', listStyle: 'decimal', listLevel }
     }
 
     // 4. Roman numerals: i. / ii. / iv. / I. / II. (checked BEFORE single Latin letter
     //    so "i." / "v." / "x." are treated as Roman rather than lower-alpha).
-    if (/^(?:i{1,3}|iv|v|vi{0,3}|ix|x|I{1,3}|IV|V|VI{0,3}|IX|X)[\.\)][\s\t]/.test(trimmed)) {
-      const isUpper = /^[IVXLCDM]/.test(trimmed)
+    if (LIST_ROMAN_RE.test(trimmed)) {
+      const isUpper = LIST_ROMAN_UPPER_RE.test(trimmed)
       return { listType: 'ordered', listStyle: isUpper ? 'upper-roman' : 'lower-roman', listLevel }
     }
 
     // 5. Latin letter with . or ): a. / B) / (a)
-    if (/^[a-zA-Z][\.\)][\s\t]/.test(trimmed) && trimmed.length >= 3) {
+    if (LIST_LATIN_RE.test(trimmed) && trimmed.length >= 3) {
       return { listType: 'ordered', listStyle: 'lower-alpha', listLevel }
     }
-    if (/^[\(\（][a-zA-Z][\)\）][\s\t]*/.test(trimmed)) {
+    if (LIST_PAREN_LATIN_RE.test(trimmed)) {
       return { listType: 'ordered', listStyle: 'lower-alpha', listLevel }
     }
 
     // 6. CJK ideographic numerals: 一、二、三、...、十、十一、... / 甲、乙、... / 壹、贰、...
     //    Also accept （一）（二） parenthesized form (no trailing space required,
     //    since Chinese numbered items often have no separator).
-    const cjkNumeralMatch = trimmed.match(/^([一二三四五六七八九十百千零〇]{1,4}|[甲乙丙丁戊己庚辛壬癸]|[壹贰叁肆伍陆柒捌玖拾佰仟]{1,4})[\、\.\)]/)
-    if (cjkNumeralMatch) {
+    //    原实现用 match() 但只用其结果做真值判断，改用 test() 等价且不产出数组。
+    if (LIST_CJK_NUMERAL_RE.test(trimmed)) {
       return { listType: 'ordered', listStyle: 'cjk-ideographic', listLevel }
     }
-    if (/^[\(\（]([一二三四五六七八九十]{1,4}|[甲乙丙丁戊己庚辛壬癸])[）\)][\s\t]*/.test(trimmed)) {
+    if (LIST_PAREN_CJK_RE.test(trimmed)) {
       return { listType: 'ordered', listStyle: 'cjk-ideographic', listLevel }
     }
 
     // 7. Circled numbers: ① ② ... ㊿ (U+2460..U+2473, U+3251..U+325F, U+32B1..U+32BF)
-    if (/^[\u2460-\u2473\u3251-\u325F\u32B1-\u32BF][\s\t]/.test(trimmed)) {
+    if (LIST_CIRCLED_RE.test(trimmed)) {
       return { listType: 'ordered', listStyle: 'cjk-ideographic', listLevel }
     }
 
     // 8. Unordered: ASCII and CJK bullets
-    if (/^[•\-\*][\s\t]/.test(trimmed) || /^[•\*]\s/.test(trimmed)) {
+    if (LIST_BULLET_ASCII_RE.test(trimmed) || LIST_BULLET_ASCII_ALT_RE.test(trimmed)) {
       return { listType: 'unordered', listStyle: 'disc', listLevel }
     }
-    if (/^[○●▪▸►→◇◆]\s/.test(trimmed)) {
+    if (LIST_BULLET_CJK_RE.test(trimmed)) {
       return { listType: 'unordered', listStyle: 'disc', listLevel }
     }
-    if (/^[▪▫◦‣⁃]\s/.test(trimmed)) {
+    if (LIST_BULLET_SQUARE_RE.test(trimmed)) {
       return { listType: 'unordered', listStyle: 'square', listLevel }
     }
 
@@ -307,11 +386,14 @@ export function detectListInfo(text: string): { listType: 'ordered' | 'unordered
 
 export function detectAlignment(text: string, index: number, totalParagraphs: number): ParagraphFormat['alignment'] | null {
     const trimmed = text.trim()
-    const stripped = trimmed.replace(/\s/g, '')
-    const chineseCount = (stripped.match(/[一-鿿]/g) || []).length
     const totalLen = trimmed.length
-    const leadingSpaces = text.length - text.trimStart().length
-    const trailingSpaces = text.trimEnd().length === 0 ? 0 : text.length - text.trimEnd().length
+    // 原先每次调用要 trim()/trimStart()/trimEnd()×2/replace()/match() 共 6 次分配。
+    // 前导/尾部空白改为计数（trimStart/trimEnd 只用于取长度），
+    // stripped 只用到长度与其中的中文字数 —— 两者都可直接在 trimmed 上算。
+    const leadingSpaces = leadingWhitespaceCount(text)
+    const trailingSpaces = trailingWhitespaceCount(text, leadingSpaces)
+    const strippedLen = totalLen - countWhitespaceChars(trimmed)
+    const chineseCount = countChineseChars(trimmed)
 
     // Detect centering by leading whitespace: if text is centered in the "page",
     // it will have roughly equal leading and trailing whitespace within the line.
@@ -325,19 +407,19 @@ export function detectAlignment(text: string, index: number, totalParagraphs: nu
     if (leadingSpaces > 2 && trailingSpaces > 2 && totalLen < 60) return 'center'
 
     // Pure Chinese name (2-4 chars) in the second half of document → right-aligned (signature)
-    const onlyName = chineseCount >= 2 && chineseCount <= 4 && stripped.length === chineseCount
+    const onlyName = chineseCount >= 2 && chineseCount <= 4 && strippedLen === chineseCount
     if (onlyName && index > totalParagraphs * 0.5) return 'right'
 
     // Date lines → right-aligned
-    if (/^\s*\d{4}\s*年/.test(trimmed) || /^\s*\d{1,2}\s*月/.test(trimmed)) return 'right'
+    if (ALIGN_YEAR_RE.test(trimmed) || ALIGN_MONTH_RE.test(trimmed)) return 'right'
 
     // Short ALL-CAPS English → center (likely a title/subtitle)
-    if (/^[A-Z][A-Z\s]+$/.test(trimmed) && totalLen >= 3 && totalLen <= 50) return 'center'
+    if (ALL_CAPS_LINE_RE.test(trimmed) && totalLen >= 3 && totalLen <= 50) return 'center'
 
     // Short centered Chinese title
-    const hasSentencePunct = /[，。！？、；]/.test(trimmed)
+    const hasSentencePunct = ALIGN_SENTENCE_PUNCT_RE.test(trimmed)
     const noFieldMarkers = !trimmed.includes('：') && !trimmed.includes(':') && !trimmed.includes('？') && !trimmed.includes('?') && !hasSentencePunct
-    if (totalLen < 18 && chineseCount >= 2 && chineseCount / stripped.length > 0.5 && noFieldMarkers) return 'center'
+    if (totalLen < 18 && chineseCount >= 2 && chineseCount / strippedLen > 0.5 && noFieldMarkers) return 'center'
 
     return null
   }

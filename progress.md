@@ -695,3 +695,22 @@
 - 指标：主包 gzip 108.56 → **108.62 kB（+0.06 kB）**。区间列表与 `isWhitespaceCode` 的体积略大于被删掉的数组填充 —— 与 round 87–89 相同的"以小体积换分配"取舍。
 - 发布：版本 `0.7.37 → 0.7.38`，双包已发布。
 - 下一轮：`textHeuristics.ts` 仍有**逐段落**级别的冗余分配可清（`guessCharFormat` 的 `match(/…/g)` + `replace(/\s/g,'')` + `trim()`；`detectAlignment` 一次调用就要 `trim()`/`trimStart()`/`trimEnd()`/`replace()` 四次字符串分配；`detectListInfo` 的 `match` + 两次 `replace`），以及把这些函数体内的正则字面量提升到模块级。
+
+## Round 95/100 — 2026-10-08
+- 目标：承接 Round 94（逐**字符**级分配），清掉 `textHeuristics.ts` 的**逐段落**级分配。`guessCharFormat` / `detectListInfo` / `detectAlignment` 每个段落各调一次，却为了读一个长度或计数而反复分配整串临时值。
+- 改动（`textHeuristics.ts` + `encodingDetector.ts`）：
+  1. **新增 4 个零分配计数函数**，全部复用 Round 94 引入的 `isWhitespaceCode`（精确复刻 ECMAScript `\s` 码点集）：`countWhitespaceChars`（≡ `replace(/\s/g,'').length`）、`leadingWhitespaceCount`（≡ `length - trimStart().length`）、`trailingWhitespaceCount`（以 `leading` 为上限，保证前后两段扫描不重叠；全空白串得 0，与 `trimEnd()` 口径一致）、`leadingIndentWidth`（TAB/全角空格各计 2、其余空白计 1，等价于原 `match` + 两次 `replace`）。
+  2. **`guessCharFormat`**：`replace(/\s/g,'')` → `totalLength - countWhitespaceChars(text)`；`match(/[\u4e00-\u9fff]/g)` → 复用 `encodingDetector.countChineseChars`。
+  3. **`detectAlignment`**：原先一次调用就有 `trim()` + `trimStart()` + `trimEnd()`×2 + `replace(/\s/g,'')` + `match(/[一-鿿]/g)` **共 6 次整串分配**；现只保留一次 `trim()`，其余全改为计数。
+  4. **`detectListInfo`**：`match(/^[\s\u3000\t]*/)` + 两次 `replace` → `leadingIndentWidth`；CJK 数字那处 `match()` 其结果只用于真值判断，改 `test()`（不再产出数组）。
+  5. **22 个函数体内的正则字面量提升到模块级**（按消费者分组注释）。其中 `CAPITAL_WORD_RE` / `WORD_RE` 带 `g`，但只喂给 `String.match`（会重置并忽略 `lastIndex`），跨调用共享安全 —— 已在源码注明。**明确保留两处"看似重复"**：`SENTENCE_PUNCT_RE`（含 ASCII `.!?`）与 `ALIGN_SENTENCE_PUNCT_RE`（仅中文标点）语义不同，合并会改行为。
+  6. **`encodingDetector.countChineseChars` 由私有改为导出**，避免 `textHeuristics` 再写第四份 `0x4e00–0x9fff` 扫描；依赖方向 `heuristics → encodingDetector` 本就存在，无环。
+- **等价性证据（三重）**：
+  - **全函数差分**：`git show HEAD:…` 抽出 Round 94 版并排导入，对 **~60 000 条种子化模糊串 + ~150 条定向用例**逐函数比对 `JSON.stringify` —— `guessCharFormat` / `detectListInfo` / `detectAlignment`（每组 7 种 `index/total`）/ `detectCharacterStyles` / `shouldHaveUnderline` / `detectParagraphFormat` / `isSameStyle` **差异均为 0**。另做**阴性对照**（人为把 `listLevel` +1）确认该测试确实能捕获差异（6 个样本中命中 5 个）。
+  - **端到端逐位一致**：`bench-diff.mjs` 改动前后各跑一次，报告里除 `cycle`/`timestamp` 外**全部字段逐位相同**，含 13 个 `failures` 样本各自的相似度（median 0.9502433994244857、p10 0.8968160758834334、p25 0.9154504595379104、min 0.8115474418758475、max 0.9999259480622746、`topIssues` 聚类一致）。
+  - **微基准**：200 000 轮 × 15 段（中文正文/多级列表/日期/居中标题/ASCII 项目符号/空白），旧 236.4 ms → 新 **134.6 ms，0.569x（快 1.76 倍）**；同时累计的返回值校验和两边完全相同（2 226 684），证明加速不是靠改结果换来的。
+- 验证：`npx vue-tsc -p tsconfig.json --noEmit` 0 错误；`npm run lint` 通过；`npm run build` 与 `npm run build:lib` 通过；`npm test` 59 文件 / **1334 项**通过。
+- 指标：主包 gzip 108.62 → **108.75 kB（+0.13 kB）**。4 个计数函数 + 22 个提升常量比被删掉的字符串操作略大 —— 与 round 87–89、94 相同的"以小体积换分配"取舍；收益落在逐段落路径上（1 万段的文档，仅 `detectAlignment` 就省掉 6 万次整串分配）。
+- 踩坑：`leadingIndentWidth` 的 JSDoc 里我写了原正则 `/^[\s\u3000\t]*/`，其中的 `*/` **提前终止了块注释**，导致后续注释文本被当代码解析、`vue-tsc` 报 47 个 `TS1127/TS1160`。块注释内不要出现 `*/`（改用 `//` 行注释或改写措辞）。
+- 发布：版本 `0.7.38 → 0.7.39`，双包已发布。
+- 下一轮：`paragraphFilter.ts`（逐段落正则字面量与 `trim()` 临时值）、`detectParagraphFormat`（函数体内仍有一次 `trim()` 与多个 `.test()` 字面量）、以及 `docParser.ts` 编排层是否有段落级结果被重复计算而非缓存。
