@@ -23,6 +23,7 @@
 
 import type { CharacterFormat, ParagraphFormat } from './docFormat'
 import { parseChpxGrpprlWithFont, parsePapxGrpprl } from './formatParser'
+import { readUint16 } from './binaryReader'
 
 export interface StyleDefinition {
   istd: number
@@ -112,11 +113,6 @@ export const BUILTIN_STYLES: Record<number, { name: string; type: string }> = {
   107: { name: 'Default Paragraph Font', type: 'character' },
   126: { name: 'Subtitle', type: 'paragraph' },
   127: { name: 'Title', type: 'paragraph' },
-}
-
-function readUint16(data: Uint8Array, offset: number): number {
-  if (offset < 0 || offset + 2 > data.length) return 0
-  return data[offset] | (data[offset + 1] << 8)
 }
 
 function readUtf16leString(data: Uint8Array, offset: number, byteLength: number): string {

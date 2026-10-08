@@ -8,10 +8,7 @@
  * Reference: MS-DOC §2.7.9 (FFN structure)
  */
 
-function readUint16(data: Uint8Array, offset: number): number {
-  if (offset < 0 || offset + 2 > data.length) return 0
-  return data[offset] | (data[offset + 1] << 8)
-}
+import { readUint16 } from './binaryReader'
 
 function readUtf16leString(data: Uint8Array, offset: number, maxLen: number): string {
   const charCodes: number[] = []

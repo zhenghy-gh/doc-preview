@@ -1,5 +1,6 @@
 import { logger } from './logger'
 import { DirectoryEntry, StreamData } from './oleParser'
+import { readUint16, readUint32 } from './binaryReader'
 
 export interface EquationInfo {
   id: number
@@ -11,16 +12,6 @@ export interface EquationInfo {
 }
 
 const EQUATION_NAME_PATTERN = /^Equation\.\d+/
-
-function readUint16(data: Uint8Array, offset: number): number {
-  if (offset + 2 > data.length) return 0
-  return (data[offset + 1] << 8) | data[offset]
-}
-
-function readUint32(data: Uint8Array, offset: number): number {
-  if (offset + 4 > data.length) return 0
-  return (data[offset + 3] << 24) | (data[offset + 2] << 16) | (data[offset + 1] << 8) | data[offset]
-}
 
 function decodeUtf16Le(data: Uint8Array, offset: number, length: number): string {
   const chars: string[] = []

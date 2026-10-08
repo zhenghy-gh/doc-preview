@@ -7,6 +7,8 @@
  * Reference: MS-OLEPS §2.20 (PropertySetStream), §2.21 (PropertySet)
  */
 
+import { readUint16, readUint32, readInt32 } from './binaryReader'
+
 /** Document properties extracted from SummaryInformation stream. */
 export interface DocumentProperties {
   /** Document title. */
@@ -125,20 +127,6 @@ const VT_LPSTR = 0x001E // LPSTR (ANSI string)
 const VT_LPWSTR = 0x001F // LPWSTR (Unicode string)
 const VT_FILETIME = 0x0040 // Windows FILETIME (64-bit)
 const VT_BLOB = 0x0041 // Binary blob
-
-function readUint16(data: Uint8Array, offset: number): number {
-  return (data[offset] | (data[offset + 1] << 8)) & 0xFFFF
-}
-
-function readUint32(data: Uint8Array, offset: number): number {
-  return (data[offset] | (data[offset + 1] << 8) |
-          (data[offset + 2] << 16) | (data[offset + 3] << 24)) >>> 0
-}
-
-function readInt32(data: Uint8Array, offset: number): number {
-  return data[offset] | (data[offset + 1] << 8) |
-         (data[offset + 2] << 16) | (data[offset + 3] << 24)
-}
 
 function readUint64(data: Uint8Array, offset: number): bigint {
   const low = BigInt(readUint32(data, offset))

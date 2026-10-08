@@ -622,3 +622,24 @@
 - 指标：主包 gzip 109.22 → **109.27 kB（+0.05 kB）**（去重收益部分抵消了新增计数函数）。
 - 发布：版本 `0.7.33 → 0.7.34`，双包已发布。
 - 下一轮：继续寻找**去重/删减**类优化（重复实现、死代码），目标是让包体回落；同时继续审计热路径分配。
+
+## Round 91/100 — 2026-10-08
+- 目标：兑现上一轮的"去重让包体回落"方向 —— 收敛跨模块重复的二进制读取原语。
+- 发现（全仓同名函数扫描）：`readUint16` **10 份**、`readUint32` **9 份**、`readInt16` 2 份、`readInt32` 2 份，共 **23 份**本地定义，散落在 11 个解析器里。
+- 改动：
+  - 新增 `src/utils/binaryReader.ts`，唯一实现 4 个函数，并在文件头固化边界契约（越界含负偏移一律返回 0，不抛异常）。
+  - 11 个文件改为 import：`revisionParser` / `equationParser` / `formatParser` / `fontParser` / `propertyParser` / `styleParser` / `listParser` / `shapeParser` / `pictureParser` / `fieldParser` / `docparser/clxReader`。
+  - `docparser/clxReader.ts` 保留 `readUint16`/`readUint32` 的**再导出**，使 `docParser.ts` 既有的 `readUint16 as clxReadUint16` 导入契约零改动。
+- 等价性要点（为何可合并）：23 份里只有 2 份与"规范版"不同 —— `equationParser` 缺 `offset < 0` 检查且 `readUint32` 没有 `>>> 0`（返回有符号值）；`propertyParser` 完全无边界检查。差异**仅在不可达分支**：
+  - 正偏移越界时，`Uint8Array` 读出 `undefined`，`undefined` 在位运算下转 0，故无守卫版与有守卫版同样返回 0；
+  - 唯一会分叉的是**负偏移**，而所有调用点传入的偏移均 ≥ 0（循环下标、已校验的表偏移、字面量 0/24/44）；
+  - `equationParser.readUint32(data, 0)` 的结果只用于 `length > 0 && length < data.length`：当 `data[3] >= 0x80` 时有符号值为负（第一个条件失败）、无符号值 ≥ 2^31（第二个条件失败，`Uint8Array` 长度不可能那么大），两个分支行为一致。
+  - `clxReader.readUint16` 里的 `& 0xFFFF` 是冗余的（两个字节项上限即 0xFFFF）。
+- 明确**未动**的东西（避免误判为遗漏）：
+  - `src/utils/docparser/formatRecovery.ts`（991 行）—— 全仓无 `src` 引用，`BENCH.md` 标注"未接线 WIP"，`docs/wip-parking/` 存有快照；属**被刻意停放的半成品**，非优化目标，且不可达故已被 tree-shake，删除不会减小包体。
+  - `src/components/DocStatsPanel.vue` —— `docs/ui-kit/` 记为"死组件，待裁决：恢复挂载 or 移除"，属产品裁决，同样不影响包体。
+  - `imageExtractor.ts` 与 `pictureParser.ts` 的 `bytesEqual`/`findPngEnd`/`findJpegEnd`/`findGifEnd`/`findBmpEnd` **仅同名**：后者带 `maxLen` 钳制、其 `findJpegEnd` 无 SOS/熵编码段处理，合并会改变行为，故保留。
+- 验证：`npm test` 59 文件 / **1334 项**通过；`npm run lint` 通过；`npm run build` 与 `npm run build:lib` 均通过。
+- 指标：**口径修正** —— 本项目历史记录的"主包 gzip"取自**应用形态 `npm run build` 的 `dist/assets/main-*.js`**（见 `docs/ACCEPTANCE_BASELINE.md`），而非库形态 `build:lib`。本轮按正确口径：主包 gzip 109.27 → **109.08 kB（−0.19 kB）**，连续多轮微增后**首次回落**。库形态 `doc-preview.js` 原始体积 360.8 → 350.72 kB。
+- 发布：版本 `0.7.34 → 0.7.35`，双包已发布。
+- 下一轮：继续去重/删减（`readDwordAt`、`twipsToPt`、`readUtf16leString` 各 2–3 份；以及 `escapeHtml` 两份），并复核是否存在可安全合并的同名实现。

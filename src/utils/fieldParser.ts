@@ -10,6 +10,8 @@
  * Reference: MS-DOC §2.8.19 (PlcfFld), §2.8.20 (FLD)
  */
 
+import { readUint32 } from './binaryReader'
+
 export interface FieldRange {
   /** Start CP of field (including 0x13). */
   cpStart: number
@@ -196,12 +198,6 @@ const FLD_PRINTEDATE = 16
 const FLD_DATE = 29
 const FLD_TIME = 30
 const FLD_REVNUM = 42
-
-function readUint32(data: Uint8Array, offset: number): number {
-  if (offset < 0 || offset + 4 > data.length) return 0
-  return (data[offset] | (data[offset + 1] << 8) |
-          (data[offset + 2] << 16) | (data[offset + 3] << 24)) >>> 0
-}
 
 /**
  * Parse PlcfFld (field position table) from the table stream.

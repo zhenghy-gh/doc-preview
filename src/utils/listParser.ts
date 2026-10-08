@@ -10,6 +10,7 @@
  */
 
 import { getSprmOperandSize } from './formatParser'
+import { readUint16, readUint32, readInt16 } from './binaryReader'
 
 /** Numbering format type (mappings from MS-DOC §2.8.5 lvlf.nfc) */
 export type NumberingFormat =
@@ -58,23 +59,6 @@ export interface ListEntry {
   fSimpleList: boolean
   /** Per-level format data. */
   levels: ListLevel[]
-}
-
-function readUint16(data: Uint8Array, offset: number): number {
-  // 防御：调用方均以 endBound（≤ data.length）预检偏移，越界正常不可达
-  if (offset < 0 || offset + 2 > data.length) return 0
-  return data[offset] | (data[offset + 1] << 8)
-}
-
-function readUint32(data: Uint8Array, offset: number): number {
-  // 防御：调用方均以 endBound（≤ data.length）预检偏移，越界正常不可达
-  if (offset < 0 || offset + 4 > data.length) return 0
-  return (data[offset] | (data[offset + 1] << 8) | (data[offset + 2] << 16) | (data[offset + 3] << 24)) >>> 0
-}
-
-function readInt16(data: Uint8Array, offset: number): number {
-  const v = readUint16(data, offset)
-  return v > 0x7FFF ? v - 0x10000 : v
 }
 
 /** Map MS-DOC nfc value to CSS list-style-type. */

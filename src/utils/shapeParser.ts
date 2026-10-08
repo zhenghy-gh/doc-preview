@@ -33,6 +33,8 @@
  *     Client data (contains textbox text, field info, etc.)
  */
 
+import { readUint16, readUint32, readInt32 } from './binaryReader'
+
 export type ShapeType =
   | 'rectangle'
   | 'ellipse'
@@ -91,33 +93,6 @@ const OFFICE_ART_CLIENT_DATA = 0x0010
 const OFFICE_ART_FILL_PICTURE = 0x0016
 const OFFICE_ART_LINE_PICTURE = 0x0017
 const OFFICE_ART_BLK_PICTURE = 0x0018
-
-function readUint16(data: Uint8Array, offset: number): number {
-  if (offset < 0 || offset + 2 > data.length) return 0
-  return data[offset] | (data[offset + 1] << 8)
-}
-
-function readUint32(data: Uint8Array, offset: number): number {
-  if (offset < 0 || offset + 4 > data.length) return 0
-  return (
-    (data[offset] |
-      (data[offset + 1] << 8) |
-      (data[offset + 2] << 16) |
-      (data[offset + 3] << 24)) >>>
-    0
-  )
-}
-
-function readInt32(data: Uint8Array, offset: number): number {
-  // 防御：调用方 parseXfrm 已保证 offset+60 在界内，此守卫正常不可达
-  if (offset < 0 || offset + 4 > data.length) return 0
-  const raw =
-    data[offset] |
-    (data[offset + 1] << 8) |
-    (data[offset + 2] << 16) |
-    (data[offset + 3] << 24)
-  return raw
-}
 
 interface OfficeArtRecordHeader {
   recVer: number

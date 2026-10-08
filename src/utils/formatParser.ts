@@ -13,6 +13,7 @@
  */
 
 import type { CharacterFormat, ParagraphFormat, TableInfo, TableCellInfo, TableBorders, TableBorderStyle, TableJustification, RevisionType } from './docFormat'
+import { readUint16, readUint32, readInt16 } from './binaryReader'
 
 // ---- SPRM operation codes (MS-DOC §2.6.1/§2.6.2/§2.6.3 — Word 97+ spec codes) ----
 //
@@ -114,23 +115,6 @@ const SHD_COLOR_MAP: Record<number, string> = {
 }
 
 // ---- Helpers ----
-
-function readUint16(data: Uint8Array, offset: number): number {
-  if (offset < 0 || offset + 2 > data.length) return 0
-  return data[offset] | (data[offset + 1] << 8)
-}
-
-function readInt16(data: Uint8Array, offset: number): number {
-  if (offset < 0 || offset + 2 > data.length) return 0
-  const val = data[offset] | (data[offset + 1] << 8)
-  return val > 0x7FFF ? val - 0x10000 : val
-}
-
-function readUint32(data: Uint8Array, offset: number): number {
-  if (offset < 0 || offset + 4 > data.length) return 0
-  return (data[offset] | (data[offset + 1] << 8) |
-          (data[offset + 2] << 16) | (data[offset + 3] << 24)) >>> 0
-}
 
 // ---- SPRM operand size calculator ----
 

@@ -16,19 +16,14 @@ import { logger } from '../logger'
 import type { OleParser, DirectoryEntry } from '../oleParser'
 import type { FibData } from '../fibParser'
 import { parseClxPieces, type ClxBasicCtx } from './pieceTable'
+import { readUint16, readUint32 } from '../binaryReader'
 
 
 export const MAX_TOTAL_CHARS = 10 * 1024 * 1024
 
-export function readUint32(data: Uint8Array, offset: number): number {
-    if (offset < 0 || offset + 4 > data.length) return 0
-    return (data[offset] | (data[offset + 1] << 8) | (data[offset + 2] << 16) | (data[offset + 3] << 24)) >>> 0
-}
-
-export function readUint16(data: Uint8Array, offset: number): number {
-    if (offset < 0 || offset + 2 > data.length) return 0
-    return (data[offset] | (data[offset + 1] << 8)) & 0xFFFF
-}
+// readUint16 / readUint32 的实现已统一到 ../binaryReader（原为各解析器各存一份）。
+// 此处按原符号名再导出，保持 docParser.ts 的既有导入契约不变。
+export { readUint16, readUint32 }
 
   export function isValidPrintableChar(charCode: number): boolean {
     if (charCode < 0x20) return false

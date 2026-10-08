@@ -31,6 +31,7 @@
  */
 
 import { extractImagesFromStream, imageFormatMime, type ImageFormat } from './imageExtractor'
+import { readUint16, readUint32 } from './binaryReader'
 
 export type PictureType =
   | 'jpeg'
@@ -62,24 +63,6 @@ const MM_EMF = 0x0004
 const MM_WMF = 0x0002
 
 const PICF_HEADER_SIZE = 68
-
-function readUint16(data: Uint8Array, offset: number): number {
-  // 防御：调用方（parsePicfAt/findPrecedingPicf/findBmpEnd）均已做边界预检，越界正常不可达
-  if (offset < 0 || offset + 2 > data.length) return 0
-  return data[offset] | (data[offset + 1] << 8)
-}
-
-function readUint32(data: Uint8Array, offset: number): number {
-  // 防御：调用方均已做边界预检，越界正常不可达
-  if (offset < 0 || offset + 4 > data.length) return 0
-  return (
-    (data[offset] |
-      (data[offset + 1] << 8) |
-      (data[offset + 2] << 16) |
-      (data[offset + 3] << 24)) >>>
-    0
-  )
-}
 
 function mmToPictureType(mm: number): PictureType {
   switch (mm) {

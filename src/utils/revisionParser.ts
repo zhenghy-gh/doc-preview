@@ -15,16 +15,7 @@
  * §2.9.300 (STTB), §2.4.6 (revision SPRMs).
  */
 
-function readUint16(data: Uint8Array, offset: number): number {
-  if (offset < 0 || offset + 2 > data.length) return 0
-  return data[offset] | (data[offset + 1] << 8)
-}
-
-function readUint32(data: Uint8Array, offset: number): number {
-  if (offset < 0 || offset + 4 > data.length) return 0
-  return (data[offset] | (data[offset + 1] << 8) |
-          (data[offset + 2] << 16) | (data[offset + 3] << 24)) >>> 0
-}
+import { readUint16, readUint32 } from './binaryReader'
 
 function readUtf16leString(data: Uint8Array, offset: number, charCount: number): string {
   const chars: string[] = []
