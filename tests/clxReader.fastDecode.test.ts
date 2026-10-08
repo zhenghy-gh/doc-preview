@@ -274,6 +274,56 @@ describe('round 101 — 真实语料差分', () => {
   })
 })
 
+describe('round 102 — TextDecoder 路径的前提', () => {
+  it('参照实现产出的字符里没有代理项', () => {
+    // 快速路径用 TextDecoder('utf-16le') 转字符串，它会把**孤立代理项**替换成
+    // U+FFFD；参照实现的 String.fromCharCode 原样保留。所以「这个输入空间上
+    // 不会产出代理项」是快路径成立的前提。
+    //
+    // 这里必须从**参照实现**收集，不能从快路径的输出收集：快路径的输出已经
+    // 被 TextDecoder 净化过，代理项早就变成 U+FFFD 了，从那里收集永远看不到
+    // 代理项——那样的断言是**空的**。这一点是阴性对照 D 抓出来的：
+    // 往 LOW_CODES 里塞 0xD800 后，差分测试报出 82 处差异，而「从输出收集」
+    // 版本的断言一个都没触发。
+    //
+    // 职责划分：本条覆盖两个实现**共用**的纯函数（HIGH_BYTE_MAP /
+    // isValidPrintableChar）；快路径私有的两张表由上面的穷尽差分覆盖——
+    // 代理项一旦进入快路径，TextDecoder 会把它变成 U+FFFD 而参照实现不会，
+    // 必然产生差异。
+    const seen = new Set<number>()
+    const collect = (s: string) => {
+      for (let i = 0; i < s.length; i++) seen.add(s.charCodeAt(i))
+    }
+    // 压缩分支：256 个字节值单独出现 + 依次出现
+    for (let b = 0; b < 256; b++) collect(referenceDecode(new Uint8Array([b]), 0, 1, true, false))
+    const seq = Uint8Array.from({ length: 256 }, (_, i) => i)
+    collect(referenceDecode(seq, 0, seq.length, true, false))
+    // 非压缩分支：65536 个码元单独出现
+    const two = new Uint8Array(2)
+    for (let c = 0; c < 0x10000; c++) {
+      two[0] = c & 0xff
+      two[1] = (c >> 8) & 0xff
+      collect(referenceDecode(two, 0, 2, false, false))
+    }
+    // 先确认真的收集到了东西（否则「没有代理项」是空转结论）
+    expect(seen.size, '收集到的不同码元数').toBeGreaterThan(100)
+    const surrogates = [...seen].filter((c) => c >= 0xd800 && c <= 0xdfff)
+    expect(
+      surrogates.map((c) => `0x${c.toString(16)}`),
+      '参照实现产出了代理项 —— TextDecoder 会把它换成 U+FFFD，快路径不再等价',
+    ).toEqual([])
+  })
+
+  it('开头的 U+FEFF 原样保留', () => {
+    // TextDecoder 默认会把**开头的** U+FEFF 当 BOM 吃掉（"\uFEFFA" → "A"）。
+    // 非压缩分支的 isValidPrintableChar 对 0xFEFF 返回 true，所以它完全可能
+    // 出现在真实文本里；这一条正是穷尽测试抓出来的（charCode=0xfeff 不一致）。
+    const buf = new Uint8Array([0xff, 0xfe, 0x41, 0x00, 0x42, 0x00]) // U+FEFF, 'A', 'B'
+    expect(referenceDecode(buf, 0, buf.length, false, false)).toBe('\uFEFFAB')
+    expect(newExtract(buf, 0, buf.length, false, false)).toBe('\uFEFFAB')
+  })
+})
+
 describe('round 101 — 表与 if 链的构造前提', () => {
   it('HIGH_BYTE_MAP 的每个非 null 项都是单个 UTF-16 码元', () => {
     // 快速路径用 `charCodeAt(0)` 取值；若某项是多个字符就会静默丢数据

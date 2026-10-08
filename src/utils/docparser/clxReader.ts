@@ -145,25 +145,46 @@ const LOW_CODES = (() => {
   return t
 })()
 
-/** `String.fromCharCode.apply` 的分块大小（与 `bytesToBase64DataUrl` 同值）。 */
-const CODES_CHUNK = 0x8000
+/**
+ * 码元缓冲 → 字符串：原生 `TextDecoder('utf-16le')`。
+ *
+ * 把 `Uint16Array` 的内存直接当 UTF-16LE 字节读，比原来的逐块
+ * `String.fromCharCode.apply` 快 **3.01x**（真实区间 140 段 / 1.61 M 码元，
+ * 单看转换 3.67 → 1.22 ms；含解码循环整体 6.48 → 3.89 ms，1.67x）。
+ *
+ * ── 三个前提，都不是「实际不会发生」这种话 ──────────────────────────────
+ *
+ * 1. **字节序**。`new Uint8Array(codes.buffer, …)` 读的是平台字节序，只有小端
+ *    才等于 UTF-16LE。`LITTLE_ENDIAN` 是启动时算一次的常量；非小端时把码元
+ *    **就地翻字节序**再解码（保持行为完全一致，代价只是慢）。
+ *
+ * 2. **必须传 `ignoreBOM: true`**。`TextDecoder` 默认会把**开头的** U+FEFF
+ *    当成 BOM 吃掉（`"\uFEFF"` → `""`、`"\uFEFFA"` → `"A"`），而
+ *    `String.fromCharCode` 原样保留。非压缩分支的 `isValidPrintableChar`
+ *    对 0xFEFF 返回 true，所以 U+FEFF 完全可能出现在真实文本里——
+ *    这一条是穷尽测试抓出来的（`charCode=0xfeff 不一致`），不是我预想到的。
+ *    加了 `ignoreBOM: true` 之后逐字等价。
+ *
+ * 3. **不能出现孤立代理项**。`TextDecoder` 默认把未配对的代理项替换成
+ *    U+FFFD，而 `String.fromCharCode` 原样保留——两者**只在出现了代理项时**
+ *    才有差别。当前两个分支都不可能产出代理项：非压缩分支的
+ *    `isValidPrintableChar` 显式拒绝 0xD800–0xDFFF，压缩分支的两张表也不含
+ *    代理项。
+ *
+ *    这条前提由**穷尽差分**守住，不需要额外的断言：代理项一旦进入快路径，
+ *    `TextDecoder` 会把它变成 U+FFFD 而参照实现不会，必然产生差异。
+ *    阴性对照 D（往 `LOW_CODES` 里塞 0xD800）实测报出 82 处差异。
+ *    `tests/clxReader.fastDecode.test.ts` 另有一条针对**共用**纯函数
+ *    （`HIGH_BYTE_MAP` / `isValidPrintableChar`）的域断言，对照 G 实测触发
+ *    2048 个代理项。
+ *
+ * 复用同一个 `TextDecoder` 实例是安全的：`decode()` 不带 `{stream: true}`
+ * 时每次调用都重置内部状态，且解码过程中没有回调（不可能重入）。
+ */
+const TEXT_DECODER = new TextDecoder('utf-16le', { ignoreBOM: true })
 
-function codesToString(codes: Uint16Array, n: number): string {
-  if (n === 0) return ''
-  if (n <= CODES_CHUNK) {
-    return String.fromCharCode.apply(null, codes.subarray(0, n) as unknown as number[])
-  }
-  const parts: string[] = []
-  for (let i = 0; i < n; i += CODES_CHUNK) {
-    parts.push(
-      String.fromCharCode.apply(
-        null,
-        codes.subarray(i, Math.min(i + CODES_CHUNK, n)) as unknown as number[],
-      ),
-    )
-  }
-  return parts.join('')
-}
+/** 平台是否小端。`Uint16Array([0x0100])` 在小端下首字节是 0x00。 */
+const LITTLE_ENDIAN = new Uint8Array(new Uint16Array([0x0100]).buffer)[0] === 0x00
 
 /** `guardBinary === false` 时的快速解码路径。与带护栏版本逐字符等价。 */
 function decodeRangeWithoutGuard(
@@ -195,7 +216,14 @@ function decodeRangeWithoutGuard(
       }
     }
   }
-  return codesToString(codes, k)
+  if (k === 0) return ''
+  /* v8 ignore start */
+  // 非小端平台（当前不存在任何实际运行时）：就地翻成小端字节序再解码。
+  if (!LITTLE_ENDIAN) {
+    for (let i = 0; i < k; i++) codes[i] = ((codes[i] & 0xff) << 8) | (codes[i] >>> 8)
+  }
+  /* v8 ignore stop */
+  return TEXT_DECODER.decode(new Uint8Array(codes.buffer, 0, k * 2))
 }
 
 /** B 域会话上下文：原类实例/静态依赖的显式注入面 */
