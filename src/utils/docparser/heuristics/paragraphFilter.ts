@@ -36,6 +36,63 @@ const HYPERLINK_BARE_RE = /\bHYPERLINK\s+\S+[\s\u0001]*/g
 const OTHER_FIELD_CODE_RE = /\b(?:EMBED|LIBREOFFICE|INCLUDEPICTURE|INCLUDETEXT)\s+\S+/g
 const PIC_PLACEHOLDER_RE = /\u0001/g
 
+// ---- applyStructuralFormats 用的模式（原先散落在逐段落循环体内）----
+// `/\u0001/g` 那处原为字面量，直接复用上面的 PIC_PLACEHOLDER_RE。
+const HEADING_LIKE_RE = /^[A-Z][a-z].*[.!?]?$/
+
+// ---- splitMultiRowTables 用的模式 ----
+const CELL_MARK_RUN_RE = /\u0007{2,}/
+const CELL_MARK_EDGE_RE = /^\u0007+|\u0007+$/g
+const CELL_MARK_TRAIL_RE = /\u0007+$/g
+
+// ---- cleanWordFieldCodes 用的模式 ----
+// 原先 `pagePattern` 与下面这个 30 元素的数组都在**函数体内**构造，
+// 而该函数经 `filterParagraphsWithGenericLogic` 的 map 逐段落调用 ——
+// 等于每个段落都新建 30 个 RegExp 对象。全部提升到模块作用域。
+// 所有模式均带 `g`（或 `gi`）且只喂给 `String.prototype.replace`，
+// 而 replace 会在开始时重置 lastIndex，故跨调用共享实例是安全的。
+const PAGE_OF_PAGES_RE = /第\s*PAGE\s*(\d+)\s*页\s*共\s*NUMPAGES\s*(\d+)\s*页/gi
+const FIELD_CODE_PATTERNS: readonly RegExp[] = [
+  /\bPAGE\b/gi, /\bNUMPAGES\b/gi, /\bDATE\b/gi, /\bTIME\b/gi, /\bSECTION\b/gi,
+  /\bSECTIONPAGES\b/gi, /\bFILENAME\b/gi, /\bAUTHOR\b/gi, /\bTITLE\b/gi,
+  /\bSUBJECT\b/gi, /\bKEYWORDS\b/gi, /\bCOMMENTS\b/gi, /\bCREATEDATE\b/gi,
+  /\bSAVEDATE\b/gi, /\bPRINTDATE\b/gi, /\bEDITTIME\b/gi, /\bNUMWORDS\b/gi,
+  /\bNUMCHARS\b/gi, /\bDOCPROPERTY\b/gi, /\bMERGEFIELD\b/gi, /\bREF\b/gi,
+  /\bHYPERLINK\b/gi, /\bINCLUDEPICTURE\b/gi, /\bINCLUDETEXT\b/gi, /\bSEQ\b/gi,
+  /\bTOC\b/gi, /\bTOC\s+o\s+"1-9"\b/gi, /\bTOC\s+o\s+"1-3"\b/gi,
+  /\bEMBED\b/gi, /\bLIBREOFFICE\b/gi,
+]
+const QUOTED_URL_RE = /"\s*https?:\/\/[^"]+\s*"/g
+// 注意与上面的 HYPERLINK_QUOTED_RE 不同：后者尾随类为 `[\s\u0001]*`（用于
+// applyStructuralFormats 的预清洗），这里是 `\s*` 且替换目标不同，不可合并。
+const HYPERLINK_QUOTED_PIC_RE = /\bHYPERLINK\s+"[^"]*"\s*\u0001/g
+const HYPERLINK_QUOTED_TRAIL_RE = /\bHYPERLINK\s+"[^"]*"\s*/g
+const HYPERLINK_BARE_PIC_RE = /\bHYPERLINK\s+\S+\s+\u0001/g
+const HYPERLINK_BARE_TRAIL_RE = /\bHYPERLINK\s+\S+\s+/g
+const PIC_CLASSNAME_RE = /\u0001(?:[A-Z][a-z]+){2,}[A-Z]?/g
+const MULTI_SPACE_RE = / {2,}/g
+const DUP_COMMA_RE = /，\s*，/g
+const DUP_PERIOD_RE = /。\s*。/g
+const DUP_COLON_RE = /：\s*：/g
+
+/**
+ * 统计 `re` 在 `text` 中的匹配个数。
+ *
+ * 原实现是 `text.match(re) || []`，会一次性分配**全部匹配项**的数组 ——
+ * 而调用方多数只要一个计数或一个阈值判断。`RegExp.prototype.test` 在带 `g`
+ * 时只推进 `lastIndex`、**不分配匹配数组**，因此这里的循环是零分配的。
+ *
+ * 调用方传入的模式最短匹配长度均 ≥ 1，不会出现零长度匹配导致的死循环；
+ * 函数自身重置 `lastIndex`，因此可以安全共享模块级 RegExp 实例。
+ * `limit` 用于"只关心是否达到某阈值"的场景（达到即提前返回）。
+ */
+function countMatches(re: RegExp, text: string, limit = Infinity): number {
+  re.lastIndex = 0
+  let count = 0
+  while (count < limit && re.test(text)) count++
+  return count
+}
+
 /**
  * ⚠️ 语义重建实现（P0 事故恢复）：原函数体在 C2 施工脚手架事故中丢失且无盘上快照。
  * 依据 PERF-T3 测试契约（tests/perf-t3-dedup.test.ts「坍缩到与旧算法一致的
@@ -68,7 +125,12 @@ export function collapseWholeBlockRepeats(text: string): string {
 export const REMOVE_DUP_EXACT_MAX_LEN = 2048
 
 export function cleanParagraph(p: string): string {
-    return p.trim().replace(JUNK_PREFIX_RE, '').trim()
+    // 原为 `p.trim().replace(JUNK_PREFIX_RE, '').trim()`：两次 trim 分配。
+    // 替换为 no-op 时（绝大多数段落）第二次 trim 的结果必然等于第一次的结果
+    // —— trim 是幂等的，且此时 stripped === t —— 故直接返回 t，省掉一次分配。
+    const t = p.trim()
+    const stripped = t.replace(JUNK_PREFIX_RE, '')
+    return stripped === t ? t : stripped.trim()
   }
 
 export function hasSignificantContent(text: string): boolean {
@@ -85,13 +147,16 @@ export function hasSignificantContent(text: string): boolean {
     const chineseRatio = chineseChars / text.length
     if (chineseChars >= 2 && chineseRatio > 0.3) return true
 
-    const words = text.match(ENGLISH_WORD_RE)
-    if (words) {
-      let englishWords = 0
-      for (let i = 0; i < words.length; i++) {
-        if (VOWEL_RE.test(words[i])) englishWords++
+    // 原先 `text.match(ENGLISH_WORD_RE)` 会一次性分配**全部**英文单词的数组；
+    // 判定条件只是"含元音的词 ≥ 2"，故改为 exec 流式扫描并提前退出。
+    // 循环内重置 lastIndex，共享模块级实例安全。
+    let englishWords = 0
+    ENGLISH_WORD_RE.lastIndex = 0
+    let wordMatch: RegExpExecArray | null
+    while ((wordMatch = ENGLISH_WORD_RE.exec(text)) !== null) {
+      if (VOWEL_RE.test(wordMatch[0])) {
+        if (++englishWords >= 2) return true
       }
-      if (englishWords >= 2) return true
     }
 
     const hasCommonPunctuation = COMMON_PUNCT_RE.test(text)
@@ -109,10 +174,12 @@ export function shouldSkipParagraph(text: string): boolean {
   }
 
 export function hasTooManyJunkChars(text: string): boolean {
-    const junkMatches = text.match(JUNK_ANY_RE) || []
-    if (junkMatches.length > 0) {
+    // 判定只需要"垃圾字符个数"，不需要匹配内容；上限取 3 是因为
+    // `> 2` 是第一个短路条件，达到 3 即可确定返回 true。
+    const junkCount = countMatches(JUNK_ANY_RE, text, 3)
+    if (junkCount > 0) {
       const totalLength = text.trim().length
-      if (junkMatches.length > 2 || (totalLength > 0 && junkMatches.length / totalLength > 0.2)) return true
+      if (junkCount > 2 || (totalLength > 0 && junkCount / totalLength > 0.2)) return true
     }
     return false
   }
@@ -168,7 +235,8 @@ export function hasTooManyJunkChars(text: string): boolean {
     })
     filtered = filtered.filter(p => {
       if (p.text && p.text.length === 1 && p.text.charCodeAt(0) === 1) return true
-      const weird = (p.text.match(WEIRD_CHAR_RE) || []).length
+      // 原为 `(p.text.match(WEIRD_CHAR_RE) || []).length`：只要计数，不需要匹配内容。
+      const weird = countMatches(WEIRD_CHAR_RE, p.text)
       return weird / p.text.length < 0.5
     })
     filtered = filtered.map(p => {
@@ -286,7 +354,7 @@ export function hasTooManyJunkChars(text: string): boolean {
       // A paragraph may contain an embedded image placeholder mixed with other text
       // (e.g., a caption after a HYPERLINK field). We treat the visible text length
       // as the basis for list/title detection.
-      const textToCheck = text.replace(/\u0001/g, '')
+      const textToCheck = text.replace(PIC_PLACEHOLDER_RE, '')
       const len = textToCheck.length
       visibleTextLengths[i] = len
       const isShort = len >= LIST_ITEM_MIN_LEN && len <= LIST_ITEM_MAX_LEN
@@ -431,7 +499,7 @@ export function hasTooManyJunkChars(text: string): boolean {
       if (titleFound && !paragraphs[i].paraFormat?.listType) {
         if (len > 0 && len < 150) {
           const text = paragraphs[i].text.trim()
-          const looksLikeHeading = /^[A-Z][a-z].*[.!?]?$/.test(text) && len >= 20
+          const looksLikeHeading = HEADING_LIKE_RE.test(text) && len >= 20
           
           if (looksLikeHeading && subtitleLines.length === 0) {
             // First short paragraph after title that looks like a heading
@@ -645,8 +713,8 @@ export function hasTooManyJunkChars(text: string): boolean {
         continue
       }
       // Split by runs of 2+ consecutive \u0007 to separate rows
-      const rows = text.split(/\u0007{2,}/)
-        .map((r: string) => r.replace(/^\u0007+|\u0007+$/g, ''))
+      const rows = text.split(CELL_MARK_RUN_RE)
+        .map((r: string) => r.replace(CELL_MARK_EDGE_RE, ''))
         .filter((r: string) => r.length > 0)
       if (rows.length >= 2) {
         for (const row of rows) {
@@ -654,7 +722,7 @@ export function hasTooManyJunkChars(text: string): boolean {
         }
       } else {
         // Fallback: treat as single paragraph but clean trailing cell marks
-        result.push({ ...para, text: text.replace(/\u0007+$/g, '') })
+        result.push({ ...para, text: text.replace(CELL_MARK_TRAIL_RE, '') })
       }
     }
     return result
@@ -682,43 +750,32 @@ export function hasTooManyJunkChars(text: string): boolean {
   export function cleanWordFieldCodes(para: ParserParagraph): ParserParagraph {
     let text = para.text
 
-    const pagePattern = /第\s*PAGE\s*(\d+)\s*页\s*共\s*NUMPAGES\s*(\d+)\s*页/gi
-    const replaced = text.replace(pagePattern, '第 $1 页 共 $2 页')
+    const replaced = text.replace(PAGE_OF_PAGES_RE, '第 $1 页 共 $2 页')
 
     if (replaced === text) {
-      const fieldPatterns = [
-        /\bPAGE\b/gi, /\bNUMPAGES\b/gi, /\bDATE\b/gi, /\bTIME\b/gi, /\bSECTION\b/gi,
-        /\bSECTIONPAGES\b/gi, /\bFILENAME\b/gi, /\bAUTHOR\b/gi, /\bTITLE\b/gi,
-        /\bSUBJECT\b/gi, /\bKEYWORDS\b/gi, /\bCOMMENTS\b/gi, /\bCREATEDATE\b/gi,
-        /\bSAVEDATE\b/gi, /\bPRINTDATE\b/gi, /\bEDITTIME\b/gi, /\bNUMWORDS\b/gi,
-        /\bNUMCHARS\b/gi, /\bDOCPROPERTY\b/gi, /\bMERGEFIELD\b/gi, /\bREF\b/gi,
-        /\bHYPERLINK\b/gi, /\bINCLUDEPICTURE\b/gi, /\bINCLUDETEXT\b/gi, /\bSEQ\b/gi,
-        /\bTOC\b/gi, /\bTOC\s+o\s+"1-9"\b/gi, /\bTOC\s+o\s+"1-3"\b/gi,
-        /\bEMBED\b/gi, /\bLIBREOFFICE\b/gi,
-      ]
       let cleaned = text
-      for (const pattern of fieldPatterns) cleaned = cleaned.replace(pattern, '')
+      for (const pattern of FIELD_CODE_PATTERNS) cleaned = cleaned.replace(pattern, '')
       // Remove quoted URLs left over from HYPERLINK field codes, leaving display text
-      cleaned = cleaned.replace(/"\s*https?:\/\/[^"]+\s*"/g, ' ')
+      cleaned = cleaned.replace(QUOTED_URL_RE, ' ')
       // Remove HYPERLINK field codes that contain picture placeholders,
       // e.g. 'HYPERLINK "url"\u0001Mauris...' — the 0x13/0x14/0x15 field
       // markers are stripped, so HYPERLINK + URL + placeholder concatenate.
-      cleaned = cleaned.replace(/\bHYPERLINK\s+"[^"]*"\s*\u0001/g, '\u0001')
-      cleaned = cleaned.replace(/\bHYPERLINK\s+"[^"]*"\s*/g, '')
+      cleaned = cleaned.replace(HYPERLINK_QUOTED_PIC_RE, '\u0001')
+      cleaned = cleaned.replace(HYPERLINK_QUOTED_TRAIL_RE, '')
       // Also handle HYPERLINK without quotes (malformed)
-      cleaned = cleaned.replace(/\bHYPERLINK\s+\S+\s+\u0001/g, '\u0001')
-      cleaned = cleaned.replace(/\bHYPERLINK\s+\S+\s+/g, '')
+      cleaned = cleaned.replace(HYPERLINK_BARE_PIC_RE, '\u0001')
+      cleaned = cleaned.replace(HYPERLINK_BARE_TRAIL_RE, '')
       // Remove EMBED field class names after picture placeholders (e.g., "\u0001ChartDocumentMauris...")
       // The pattern: \u0001 followed by CamelCaseWords (class name) before actual content
       // Only match if there are at least 2 consecutive CamelCase words with no space between them
       // This avoids eating the first word of actual text content
-      cleaned = cleaned.replace(/\u0001(?:[A-Z][a-z]+){2,}[A-Z]?/g, '\u0001')
+      cleaned = cleaned.replace(PIC_CLASSNAME_RE, '\u0001')
       text = cleaned
     } else {
       text = replaced
     }
 
-    const cleaned = text.replace(/ {2,}/g, ' ').replace(/，\s*，/g, '，').replace(/。\s*。/g, '。').replace(/：\s*：/g, '：').trim()
+    const cleaned = text.replace(MULTI_SPACE_RE, ' ').replace(DUP_COMMA_RE, '，').replace(DUP_PERIOD_RE, '。').replace(DUP_COLON_RE, '：').trim()
 
     if (cleaned !== text || text !== para.text) {
       const newCharFormat = { ...para.charFormat }

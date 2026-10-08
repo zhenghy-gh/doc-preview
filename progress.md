@@ -714,3 +714,33 @@
 - 踩坑：`leadingIndentWidth` 的 JSDoc 里我写了原正则 `/^[\s\u3000\t]*/`，其中的 `*/` **提前终止了块注释**，导致后续注释文本被当代码解析、`vue-tsc` 报 47 个 `TS1127/TS1160`。块注释内不要出现 `*/`（改用 `//` 行注释或改写措辞）。
 - 发布：版本 `0.7.38 → 0.7.39`，双包已发布。
 - 下一轮：`paragraphFilter.ts`（逐段落正则字面量与 `trim()` 临时值）、`detectParagraphFormat`（函数体内仍有一次 `trim()` 与多个 `.test()` 字面量）、以及 `docParser.ts` 编排层是否有段落级结果被重复计算而非缓存。
+
+## Round 96/100 — 2026-10-08
+- 目标：收尾 Round 87 开头的 `paragraphFilter.ts` 正则提升工作 —— 该轮只处理了文件顶部的常量，漏掉了三处**逐段落**执行位置；顺带消掉三处"只想要计数却分配了整个匹配数组"的 `match()`。
+- 改动（`paragraphFilter.ts`）：
+  1. **补全正则提升**：`cleanWordFieldCodes` 里的 `pagePattern`（1 个）+ `fieldPatterns`（**30 个 `gi` 正则的数组**）、`applyStructuralFormats` 里的 `/\u0001/g` 与 `/^[A-Z][a-z].*[.!?]?$/`、`splitMultiRowTables` 里的三个 `\u0007` 字面量 —— 全部提到模块作用域。`applyStructuralFormats` 那处直接复用已有的 `PIC_PLACEHOLDER_RE`。均带 `g`/`gi` 且只喂 `String.replace`（会在开始时重置 `lastIndex`），共享安全；已注明 `HYPERLINK_QUOTED_PIC_RE`（`\s*` 尾、替换为 `\u0001`）与既有 `HYPERLINK_QUOTED_RE`（`[\s\u0001]*` 尾、替换为 `''`）**不可合并**。
+  2. **新增 `countMatches(re, text, limit)`**：`RegExp.prototype.test` 在带 `g` 时只推进 `lastIndex`、**不分配匹配数组**（`exec` 每次分配一个，`match` 分配整张数组）。用于 `hasTooManyJunkChars`（`match(JUNK_ANY_RE) || []` → 上限 3，因为 `> 2` 是第一个短路条件）与 `filterParagraphsWithGenericLogic`（`match(WEIRD_CHAR_RE)` 计数；此处**保持精确计数不提前退出**，因为结果要参与 `weird/len < 0.5` 的浮点比较）。
+  3. **`hasSignificantContent` 流式扫描英文单词**：判定只是"含元音的词 ≥ 2"，原实现却先 `match(ENGLISH_WORD_RE)` 收集**全部**单词再遍历。改为 `exec` 循环，找到第 2 个即返回。**这是本轮主要收益点**，且该函数几乎每段落都调用、在 `filterAndEnhanceParagraphs` 里每段落调用**两次**。
+  4. **`cleanParagraph` 去掉一次 `trim()`**：`stripped === t` 时（绝大多数段落）第二次 `trim()` 结果必然等于第一次（trim 幂等），直接返回 `t`。
+- **等价性证据（三重）**：
+  - **全函数差分**：`git show HEAD:…` 抽出旧版并排导入，**40 000 条种子化模糊串 + ~100 条定向用例**（junk 前缀、全部域代码关键字、页码模式、HYPERLINK 带引号/裸形式、图片占位符与 CamelCase 类名、`\u0007` 单元格标记串、二/三段重复、超长病态串）+ **400 份伪随机 `ParserParagraph[]` 文档**；`cleanParagraph`/`hasSignificantContent`/`shouldSkipParagraph`/`hasTooManyJunkChars`/`removeInternalDuplicates`/`collapseWholeBlockRepeats`/`cleanWordFieldCodes`/`splitMultiRowTables`/`filterParagraphsWithGenericLogic`/`filterAndEnhanceParagraphs`/`applyStructuralFormats`（原地变更后整数组深比对）/`normalizeParagraphCpAxis`/`replacePageFieldsInText` **差异全 0**。
+  - **阴性对照 3 项**（每类改动各一）：① 给 `DUP_PERIOD_RE` 漏写 `g` → 捕获；② 英文单词阈值从 2 改成 3 → 捕获；③ `cleanParagraph` 快路径跳过 junk 前缀剥离 → 捕获。**对照 ① 是真事**：本轮首次编辑时确实漏写了 `g`，类型检查与 lint 都没报，是我复查常量块时发现的。
+  - **端到端逐位一致**：`bench-diff.mjs` 报告除 `cycle`/`timestamp` 外全部字段逐位相同（median 0.9502433994244857、min 0.8115474418758475，含 13 个 failures 样本各自相似度）。
+- **微基准（稳健法：每函数隔离 + 4 轮预热 + 7 轮交替取中位数，N=300 000）**：
+  ```
+  hasSignificantContent            OLD   94.2 ms | NEW   48.3 ms | 1.950x
+  hasTooManyJunkChars              OLD   13.3 ms | NEW   10.9 ms | 1.214x
+  filterParagraphsWithGenericLogic OLD 1295.1 ms | NEW 1201.7 ms | 1.078x
+  cleanWordFieldCodes              OLD  411.6 ms | NEW  386.1 ms | 1.066x
+  splitMultiRowTables              OLD   19.1 ms | NEW   18.5 ms | 1.032x
+  cleanParagraph                   OLD   10.4 ms | NEW   10.3 ms | 1.015x
+  removeInternalDuplicates         OLD  967.0 ms | NEW  970.4 ms | 0.997x（代码未改动 = 噪声底）
+  ```
+- **重要发现（已写入记忆，避免后续轮次重复踩）**：**在 V8 里把正则字面量从函数体提升到模块级几乎不带来性能收益**。`cleanWordFieldCodes` 每次调用构造 30 个正则、基准里累计 2160 万次分配，提升后也只有 **1.066x** —— 因为该数组不逃逸出函数，V8 的逃逸分析直接消除了它，正则字面量本身还会复用已编译的模式。Round 87–89 的"体积涨了、耗时几乎没动"就是这个原因。**结论：正则提升是"可读性 + 跨引擎"收益，不是 V8 收益**；V8 上的收益来自（a）不再分配 `match()` 结果数组、（b）用计数替代整串临时值 —— 这正是 Round 94–96 在做的事。
+- 验证：`npx vue-tsc -p tsconfig.json --noEmit` 0 错误；`npm run lint` 通过；`npm run build` 与 `npm run build:lib` 通过；`npm test` 59 文件 / **1334 项**通过（见下方测试稳定性修复）。
+- 指标：主包 gzip 108.75 → **108.91 kB（+0.16 kB）**。体积大于 Round 87–89（+0.16/+0.02/+0.06），代价在于命名常量与 `hasSignificantContent` 的 exec 循环比原 `match` + `for` 更长；换来该函数 1.95x。
+- **测试稳定性修复（两次提交 `8f895e1` → `9a55955`）**：本轮全量测试**连续三次各失败在不同文件**（`locale.test.ts` → `useI18n.test.ts` → `chartRenderer.test.ts`），但都是各自文件里**第一个执行动态 `import()` 的用例**、都是 5000ms 超时、单跑分别只需 0.7–1.2s。套件 `environment` 阶段实测 1704–1914s（Round 95 为 1474s），属并行争用。
+  - 第一次修复只针对 4 个用 `vi.resetModules()` 的文件，结果第三次失败落在 **`chartRenderer.test.ts`** —— 它根本没用 `resetModules`，只是在第 177 行 `await import('../src/utils/locale')`。说明真正的触发条件是**"文件里第一次按需 `import()` 要现场转换并求值整张模块图"**，全仓恰好 5 个测试文件如此。
+  - 最终把预算放回它该在的地方：`vitest.config.ts` 设 `testTimeout: 30000`，并撤掉第一次的 5 处逐文件 `vi.setConfig`。断言与用例语义均未改动。`locale.ts` 只 import `vue` 与 `./safeStorage`，与 `paragraphFilter` 无依赖路径。
+- 发布：版本 `0.7.39 → 0.7.40`，双包已发布。
+- 下一轮：`detectParagraphFormat`（函数体内仍有一次 `trim()` 与多个 `.test()` 字面量）、`docParser.ts` 编排层是否有段落级结果被重复计算而非缓存；另 `removeInternalDuplicates` 现在是 `filterParagraphsWithGenericLogic` 里最大的单项开销（短段落约 3.2 µs/次），值得 profile 看外层 `len` 扫描的起点能否收紧。
