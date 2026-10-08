@@ -1,6 +1,7 @@
 import { logger } from './logger'
 import type { SectionInfo, SectionBreakType } from './docFormat'
 import { readUint16, readUint32 } from './binaryReader'
+import { getSprmOperandSizeBySpra } from './formatParser'
 
 // ==================== Section SPRM 定义 ====================
 // MS-DOC §2.4.10 Section SPRM 列表。
@@ -47,30 +48,6 @@ const SECTION_BREAK_TYPES: SectionBreakType[] = ['nextPage', 'evenPage', 'oddPag
 /** twips → 磅：1 磅 = 20 twips */
 function twipsToPt(twips: number): number {
   return twips / 20
-}
-
-/**
- * 根据 SPRM 高字节确定操作数长度（与 formatParser.getSprmOperandSize 一致）。
- * 仅依赖 spra (bits 15-13)，不依赖 sgc，因为项目约定的 SPRM 值已编码正确长度。
- */
-function getSectionSprmOperandSize(sprm: number, data: Uint8Array, operandOffset: number): number {
-  const spra = (sprm >> 13) & 0x7
-  switch (spra) {
-    case 0: return 1  // Toggle
-    case 1: return 1  // 1-byte
-    case 2: return 2  // 2-byte
-    case 3: return 4  // 4-byte
-    case 4: return 2  // 2-byte signed
-    case 5: return 2  // 2-byte unsigned
-    case 7: return 3  // 3-byte
-    case 6: {
-      // Variable length: first byte is length of the rest
-      if (operandOffset >= data.length) return 0
-      return 1 + data[operandOffset]
-    }
-    // 防御：spra 为 3 位（0-7），所有取值均有 case，default 正常不可达
-    default: return 0
-  }
 }
 
 /**
@@ -177,7 +154,7 @@ function parseSepx(
     // 防御：循环条件保证 offset+2 <= grpprlEnd，故 offset 不会超过 grpprlEnd
     if (offset > grpprlEnd) break
 
-    const operandSize = getSectionSprmOperandSize(sprm, wordDocData, offset)
+    const operandSize = getSprmOperandSizeBySpra(sprm, wordDocData, offset)
     if (operandSize === 0 || offset + operandSize > grpprlEnd) break
 
     switch (sprm) {

@@ -1,4 +1,5 @@
 import type { TableInfo, TableCellInfo, TableBorders, TableJustification, ParagraphFormat, RenderParagraph, TableBlockResult } from './docFormat'
+import { WORD_COLOR_PALETTE } from './wordPalette'
 
 /**
  * Cell delimiter used by Word 97-2003 binary format (.doc) inside table
@@ -380,25 +381,7 @@ function borderTypeToCss(type?: number): string {
 }
 
 function colorIndexToCss(idx?: number): string {
-  switch (idx) {
-    case 1: return '#000000'
-    case 2: return '#0000FF'
-    case 3: return '#00FFFF'
-    case 4: return '#00FF00'
-    case 5: return '#FF00FF'
-    case 6: return '#FF0000'
-    case 7: return '#FFFF00'
-    case 8: return '#FFFFFF'
-    case 9: return '#000080'
-    case 10: return '#008080'
-    case 11: return '#008000'
-    case 12: return '#800080'
-    case 13: return '#800000'
-    case 14: return '#808000'
-    case 15: return '#808080'
-    case 16: return '#C0C0C0'
-    default: return '#000000'
-  }
+  return (idx !== undefined && WORD_COLOR_PALETTE[idx]) || '#000000'
 }
 
 function escapeHtml(text: string): string {

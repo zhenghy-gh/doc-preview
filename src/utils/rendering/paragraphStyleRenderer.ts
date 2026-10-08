@@ -13,6 +13,7 @@
  */
 import { escapeHtml, applyTabStops } from '../textRender'
 import type { CharacterFormat, ParagraphFormat, CharStyleSegment, FontResolver, ParagraphBorder, ParagraphBorders } from '../docFormat'
+import { WORD_COLOR_PALETTE } from '../wordPalette'
 
 /** formatTextWithCharacterStyles 的选项（原组件接口 + showHiddenText/fontResolver 注入字段） */
 export interface CharStyleOptions {
@@ -51,24 +52,12 @@ export function getTextAlignment(paraFormat: ParagraphFormat, _charFormat: Chara
   return 'justify'
 }
 
-export const BORDER_COLOR_MAP: Record<number, string> = {
-  1: '#000000',  // Black
-  2: '#0000FF',  // Blue
-  3: '#00FFFF',  // Cyan
-  4: '#00FF00',  // Green
-  5: '#FF00FF',  // Magenta
-  6: '#FF0000',  // Red
-  7: '#FFFF00',  // Yellow
-  8: '#FFFFFF',  // White
-  9: '#000080',  // Dark Blue
-  10: '#008080', // Dark Cyan
-  11: '#008000', // Dark Green
-  12: '#800080', // Dark Magenta
-  13: '#800000', // Dark Red
-  14: '#808000', // Dark Yellow (Olive)
-  15: '#808080', // Dark Gray
-  16: '#C0C0C0', // Light Gray
-}
+/**
+ * 表格边框色索引 → CSS 颜色。
+ * 与 formatParser 的段落底纹（SHD_COLOR_MAP）、tableText 的单元格底色
+ * （colorIndexToCss）共用同一张 Word 16 色索引表，见 wordPalette.ts。
+ */
+export const BORDER_COLOR_MAP: Record<number, string> = WORD_COLOR_PALETTE
 
 export const BORDER_TYPE_MAP: Record<number, string> = {
   0: 'none',

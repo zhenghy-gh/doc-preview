@@ -14,6 +14,7 @@
 
 import type { CharacterFormat, ParagraphFormat, TableInfo, TableCellInfo, TableBorders, TableBorderStyle, TableJustification, RevisionType } from './docFormat'
 import { readUint16, readUint32, readInt16 } from './binaryReader'
+import { WORD_COLOR_PALETTE } from './wordPalette'
 
 // ---- SPRM operation codes (MS-DOC §2.6.1/§2.6.2/§2.6.3 — Word 97+ spec codes) ----
 //
@@ -94,29 +95,43 @@ const SPRM_T_DEF_TABLE_SHD = 0xD609 // sprmTDefTableShd80: cell shading (consume
 /**
  * Shd color index to CSS color mapping.
  * Word uses a 16-color palette (indices 1-16).
+ * 表体已统一到 wordPalette.ts（与 BORDER_COLOR_MAP / colorIndexToCss 共用同一份）。
  */
-const SHD_COLOR_MAP: Record<number, string> = {
-  1: '#000000',  // Black
-  2: '#0000FF',  // Blue
-  3: '#00FFFF',  // Cyan
-  4: '#00FF00',  // Green
-  5: '#FF00FF',  // Magenta
-  6: '#FF0000',  // Red
-  7: '#FFFF00',  // Yellow
-  8: '#FFFFFF',  // White
-  9: '#000080',  // Dark Blue
-  10: '#008080', // Dark Cyan
-  11: '#008000', // Dark Green
-  12: '#800080', // Dark Magenta
-  13: '#800000', // Dark Red
-  14: '#808000', // Dark Yellow (Olive)
-  15: '#808080', // Dark Gray
-  16: '#C0C0C0', // Light Gray
-}
+const SHD_COLOR_MAP = WORD_COLOR_PALETTE
 
 // ---- Helpers ----
 
 // ---- SPRM operand size calculator ----
+
+/**
+ * 仅按 spra (sprm bits 13-15) 推导操作数长度，**不含** sprmTDefTable (0xD608) /
+ * sprmPTableDepth (0x4410) 两个特例。
+ *
+ * 单列出来是因为 `sectionParser.ts` 原先复制了同一段 `switch (spra)`（其注释即
+ * 写明"与 formatParser.getSprmOperandSize 一致"）。section 的 SPRM 取值域
+ * （0xB0xx / 0x30xx / 0x50xx / 0x90xx 等）不含上述两个特例码，它走的正是这段
+ * 纯 spra 逻辑；抽成独立函数后两侧共享同一实现，同时各自保留原有的特例处理，
+ * 因此是逐分支等价的搬移而非语义合并。
+ */
+export function getSprmOperandSizeBySpra(sprm: number, data: Uint8Array, operandOffset: number): number {
+  const spra = (sprm >> 13) & 0x7
+  switch (spra) {
+    case 0: return 1  // ToggleOperand
+    case 1: return 1  // 1-byte unsigned
+    case 2: return 2  // 2-byte unsigned
+    case 3: return 4  // 4-byte unsigned
+    case 4: return 2  // 2-byte signed
+    case 5: return 2  // 2-byte unsigned
+    case 7: return 3  // 3-byte
+    case 6: {
+      // Variable length: first byte is the length of the rest.
+      if (operandOffset >= data.length) return 0
+      return 1 + data[operandOffset]
+    }
+    // 防御：spra 为 3 位（0-7），所有取值均有 case，default 正常不可达
+    default: return 0
+  }
+}
 
 /**
  * Returns the size (in bytes) of the operand that follows a 2-byte SPRM.
@@ -147,22 +162,7 @@ export function getSprmOperandSize(sprm: number, data: Uint8Array, operandOffset
     return 1
   }
 
-  const spra = (sprm >> 13) & 0x7
-  switch (spra) {
-    case 0: return 1  // ToggleOperand
-    case 1: return 1  // 1-byte unsigned
-    case 2: return 2  // 2-byte unsigned
-    case 3: return 4  // 4-byte unsigned
-    case 4: return 2  // 2-byte signed
-    case 5: return 2  // 2-byte unsigned
-    case 7: return 3  // 3-byte
-    case 6: {
-      // Variable length: first byte is the length of the rest.
-      if (operandOffset >= data.length) return 0
-      return 1 + data[operandOffset]
-    }
-    default: return 0
-  }
+  return getSprmOperandSizeBySpra(sprm, data, operandOffset)
 }
 
 // ---- CHPX parsing ----

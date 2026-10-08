@@ -664,3 +664,17 @@
 - 指标：主包 gzip 109.08 → **108.76 kB（−0.32 kB）**，连续第二轮回落。
 - 发布：版本 `0.7.35 → 0.7.36`，双包已发布。
 - 下一轮：继续找可安全合并的重复；剩余同名重复已全部判定为"语义不同"，后续可转向**重复字面量/常量表**与**未使用的导出**两类目标。
+
+## Round 93/100 — 2026-10-08
+- 目标：按上一轮方向转向**重复常量表**，并补全上一轮只看前 16 条的重复块清单。
+- 方法：新增两个扫描器 ——（a）按**值**（而非名字）分组模块级 `const NAME = <数组|对象字面量>`，可捕获改过名的副本；（b）全量列出 ≥8 行的跨文件重复块。**踩坑**：扫描器初版未剥离行尾 `//` 注释，导致所有带注释的常量（`GIF_SIGNATURE_87`、`BMP_SIG` 等）被静默漏掉，修正后重扫。
+- 改动（3 组，均为**运行时**代码）：
+  1. **Word 16 色索引调色板有 3 份**：`formatParser.SHD_COLOR_MAP`（对象字面量，段落底纹）、`rendering/paragraphStyleRenderer.BORDER_COLOR_MAP`（对象字面量，表格边框）、`tableText.colorIndexToCss()`（16 个 `case` 的 switch）。三者取值与顺序逐项一致。新建 `src/utils/wordPalette.ts` 导出 `WORD_COLOR_PALETTE`，三处共用；`colorIndexToCss` 改为 `(idx !== undefined && WORD_COLOR_PALETTE[idx]) || '#000000'`（`undefined`/越界仍回落黑色，语义不变）。
+     - **刻意未并**：`formatParser.highlightColor()`（`sprmCHighlight` 高亮色）是**另一张表**，索引顺序完全不同（1=黄、2=亮绿…15=黑，默认黄）。已在新模块注释中写明，防止后续轮次"顺手"合并。
+  2. **`sectionParser.getSectionSprmOperandSize` 复制了 `getSprmOperandSize` 的 spra switch**（18 行，其注释自述"与 formatParser.getSprmOperandSize 一致"）。它**少了** `sprmTDefTable`(0xD608) 与 `sprmPTableDepth`(0x4410) 两个特例；这两个码虽不在 section 的 SPRM 域内，但畸形 `grpprl` 可含任意两字节（0xD608 的 spra=6、0x4410 的 spra=2），**盲目委托会改变畸形文件行为**。故不做函数级合并，而是把纯 spra 分支**搬移**为 `formatParser.getSprmOperandSizeBySpra`：`getSprmOperandSize` 保留特例后委托它，`sectionParser` 直接调它 —— 逐分支等价的搬移，两侧各自原有语义不变。
+  3. **图片魔数签名各写一份**：`PNG_SIGNATURE`/`JPEG_SOI`/`GIF_SIGNATURE_87`/`GIF_SIGNATURE_89` 在 `imageExtractor.ts` 与 `pictureParser.ts` 各存一份（后者命名为 `GIF87`/`GIF89`）。现由 `imageExtractor.ts` 统一导出（并新增 `BMP_SIGNATURE`），`pictureParser.ts` 导入。`imageExtractor` 里内联的 BMP 判断 `data[i] === 0x42 && data[i+1] === 0x4D` 改为 `bytesEqual(data, i, BMP_SIGNATURE)` —— 含越界情形在内均等价。
+- **刻意未动**：round 92 已判定的 4 组语义不同重复（`escapeHtml`、`findXxxEnd`、`readUtf16leString`、`twipsToPt`）；以及剩余**纯类型**重复（`shapeParser` vs `docFormat` 的 `ShapeType`/`ShapeAnchorType`、`docParser` vs `pieceTable` 的 `Piece`、`docParser` vs `storySplitter` 的 `DocumentStories`、`fieldParser` vs `docFormat` 的 `PageFieldInfo`/`CrossReferenceInfo`/`DocumentProperties` 字段块）—— 类型在构建期即被擦除，**不可能影响包体**，留待专门的类型整理轮次。
+- 验证：`npm run lint` 通过；`npm run build`（vue-tsc + Vite）通过；`npm test` 59 文件 / **1334 项**通过。
+- 指标：主包 gzip 108.76 → **108.56 kB（−0.20 kB）**，连续第三轮回落。
+- 发布：版本 `0.7.36 → 0.7.37`，双包已发布。
+- 下一轮：运行时层面的"重复实现"已基本收敛干净；建议转向**热路径分配审计**（回到项目最初的优化主线）或**类型重复的专项整理**。

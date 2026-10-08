@@ -30,7 +30,17 @@
  * the image is still visible.
  */
 
-import { extractImagesFromStream, imageFormatMime, bytesEqual, type ImageFormat } from './imageExtractor'
+import {
+  extractImagesFromStream,
+  imageFormatMime,
+  bytesEqual,
+  PNG_SIGNATURE,
+  JPEG_SOI,
+  GIF_SIGNATURE_87,
+  GIF_SIGNATURE_89,
+  BMP_SIGNATURE,
+  type ImageFormat,
+} from './imageExtractor'
 import { readUint16, readUint32 } from './binaryReader'
 
 export type PictureType =
@@ -90,12 +100,6 @@ function pictureTypeToFormat(type: PictureType): ImageFormat | 'unknown' {
   return 'unknown'
 }
 
-const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
-const JPEG_SOI = [0xff, 0xd8]
-const GIF87 = [0x47, 0x49, 0x46, 0x38, 0x37, 0x61]
-const GIF89 = [0x47, 0x49, 0x46, 0x38, 0x39, 0x61]
-const BMP_SIG = [0x42, 0x4d] // 'BM'
-
 function detectImageFormat(data: Uint8Array, offset: number): ImageFormat | null {
   if (bytesEqual(data, offset, PNG_SIGNATURE)) return 'png'
   if (
@@ -104,8 +108,8 @@ function detectImageFormat(data: Uint8Array, offset: number): ImageFormat | null
     data[offset + 2] === 0xff
   )
     return 'jpeg'
-  if (bytesEqual(data, offset, GIF87) || bytesEqual(data, offset, GIF89)) return 'gif'
-  if (bytesEqual(data, offset, BMP_SIG)) return 'bmp'
+  if (bytesEqual(data, offset, GIF_SIGNATURE_87) || bytesEqual(data, offset, GIF_SIGNATURE_89)) return 'gif'
+  if (bytesEqual(data, offset, BMP_SIGNATURE)) return 'bmp'
   return null
 }
 

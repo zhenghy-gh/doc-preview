@@ -28,10 +28,13 @@ export interface ExtractedImage {
   data: Uint8Array
 }
 
-const PNG_SIGNATURE = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
-const JPEG_SOI = [0xFF, 0xD8]
-const GIF_SIGNATURE_87 = [0x47, 0x49, 0x46, 0x38, 0x37, 0x61] // GIF87a
-const GIF_SIGNATURE_89 = [0x47, 0x49, 0x46, 0x38, 0x39, 0x61] // GIF89a
+// 图片魔数签名。原先 imageExtractor 与 pictureParser 各存一份（后者还用了
+// GIF87/GIF89/BMP_SIG 等不同名字），现以此为唯一来源由两处共用。
+export const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
+export const JPEG_SOI = [0xff, 0xd8]
+export const GIF_SIGNATURE_87 = [0x47, 0x49, 0x46, 0x38, 0x37, 0x61] // GIF87a
+export const GIF_SIGNATURE_89 = [0x47, 0x49, 0x46, 0x38, 0x39, 0x61] // GIF89a
+export const BMP_SIGNATURE = [0x42, 0x4d] // 'BM'
 
 export function bytesEqual(data: Uint8Array, offset: number, signature: number[]): boolean {
   if (offset + signature.length > data.length) return false
@@ -285,7 +288,7 @@ export function extractImagesFromStream(data: Uint8Array): ExtractedImage[] {
       }
     }
     // BMP
-    if (data[i] === 0x42 && data[i + 1] === 0x4D) {
+    if (bytesEqual(data, i, BMP_SIGNATURE)) {
       const end = findBmpEnd(data, i)
       if (end > i) {
         images.push({ format: 'bmp', data: data.subarray(i, end) })
