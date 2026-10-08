@@ -689,6 +689,17 @@ const storySections = computed<StorySection[]>(() => {
 /**
  * 非正文 story 文本 → HTML：保留段首缩进、压缩连续空段；软换行(\v)→<br>、分页符(\f)与单元格标记(\u0007)→提示 span。特殊字符在 escapeHtml 之前以占位替换，避免被转义破坏结构。
  */
+// 每行都会用到的正则：提到行循环之外（setup 作用域），避免为每一行重新
+// 构造——原先在循环体内 `new RegExp(...)`，每次都会重新编译模式。
+// 全局标志仅配合 `String.replace` 使用，后者会重置并忽略 lastIndex，
+// 因此跨行共享同一个正则实例是安全的。
+const STORY_TRAILING_WS_RE = /\s+$/
+const STORY_SOFT_BR_RE = /\u000b/g
+const STORY_PAGE_BR_RE = /\u000c/g
+const STORY_CELL_MARK_RE = /\u0007/g
+const STORY_PAGE_BR_HTML = '<span style="display:inline-block;padding:0 4px;color:#999;font-size:0.85em">[分页]</span>'
+const STORY_CELL_MARK_HTML = '<span style="display:inline-block;padding:0 4px;color:#999;font-size:0.85em">│</span>'
+
 function formatStoryText(text: string): string {
   // Split by single newline to preserve paragraph structure.
   // Empty paragraphs become spacing, but consecutive empties are collapsed.
@@ -697,7 +708,7 @@ function formatStoryText(text: string): string {
   let prevEmpty = false
   for (const raw of lines) {
     // Trim trailing whitespace only; keep leading spaces (indentation).
-    const line = raw.replace(/\s+$/, '')
+    const line = raw.replace(STORY_TRAILING_WS_RE, '')
     if (line.length === 0) {
       if (!prevEmpty && htmlParts.length > 0) {
         htmlParts.push('<p style="margin:0 0 6px 0">&nbsp;</p>')
@@ -711,13 +722,10 @@ function formatStoryText(text: string): string {
     //   \f (form feed / page break) → page-break marker placeholder
     //   \u0007 (table cell mark) → cell separator placeholder
     // Use placeholders to avoid interference with escapeHtml.
-    const SOFT_BR = '\u000b'
-    const PAGE_BR = '\u000c'
-    const CELL_MARK = '\u0007'
     const escaped = escapeHtml(line)
-      .replace(new RegExp(SOFT_BR, 'g'), '<br>')
-      .replace(new RegExp(PAGE_BR, 'g'), '<span style="display:inline-block;padding:0 4px;color:#999;font-size:0.85em">[分页]</span>')
-      .replace(new RegExp(CELL_MARK, 'g'), '<span style="display:inline-block;padding:0 4px;color:#999;font-size:0.85em">│</span>')
+      .replace(STORY_SOFT_BR_RE, '<br>')
+      .replace(STORY_PAGE_BR_RE, STORY_PAGE_BR_HTML)
+      .replace(STORY_CELL_MARK_RE, STORY_CELL_MARK_HTML)
     htmlParts.push(`<p style="margin:0 0 6px 0">${escaped}</p>`)
   }
   return htmlParts.join('')

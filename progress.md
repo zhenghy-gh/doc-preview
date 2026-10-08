@@ -585,3 +585,16 @@
 - 发布：版本 `0.7.4 → 0.7.31`，双包（`@zhenghy/doc-preview`、`doc-preview`）已发布。
 - 流程变更：本轮起工作流为「优化 → 全量验证 → 提交 → 发布」，版本号按 `0.7.3N` 递增（本轮 0.7.31，下轮 0.7.32）。
 - 下一轮：继续在热路径（`docparser/`、`rendering/`）中寻找可证明等价的分配/重复扫描优化。
+
+## Round 88/100 — 2026-10-08
+- 目标：消除 `formatStoryText` 行循环内逐行构造正则的开销。
+- 改动（`src/components/DocPreview.vue`）：
+  - `formatStoryText` 由模板直接调用（`v-html="formatStoryText(section.text)"`），每个 story 每次重渲染都会重跑；其行循环内原先每行执行 3 次 `new RegExp(SOFT_BR|PAGE_BR|CELL_MARK, 'g')`，另有每行 `/\s+$/` 字面量。
+  - 4 个正则提升到循环外的 setup 作用域（`STORY_TRAILING_WS_RE` / `STORY_SOFT_BR_RE` / `STORY_PAGE_BR_RE` / `STORY_CELL_MARK_RE`）。
+  - 两段较长的内联替换 HTML 提升为常量（`STORY_PAGE_BR_HTML` / `STORY_CELL_MARK_HTML`），不再逐行重建。
+  - 循环体其余部分逐字不变（三次替换顺序、`<p style="margin:0 0 6px 0">` 包裹、连续空段压缩）。
+- 等价性要点：三个模式均为单字面控制字符，原先经 `new RegExp(str,'g')` 每次重新编译；`g` 正则仅用于 `String.replace`（会重置并忽略 `lastIndex`），跨行共享安全；局部常量 `SOFT_BR/PAGE_BR/CELL_MARK` 无其他使用者，已随提升移除。
+- 验证：`npm test` 59 文件 / **1334 项**通过；`npm run lint` 与 `npm run build` 通过。
+- 指标：主包 gzip 109.14 → **109.16 kB（+0.02 kB）**，基本持平。
+- 发布：版本 `0.7.31 → 0.7.32`，双包已发布。
+- 下一轮：继续在 `rendering/` 与 `docparser/` 热路径中寻找可证明等价的优化。
