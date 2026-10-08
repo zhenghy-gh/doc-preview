@@ -18,6 +18,30 @@ import type { PageFieldInfo } from '../../fieldParser'
 import type { ParserParagraph } from '../../docFormat'
 import { isTableRowText } from '../../tableText'
 
+// 热路径正则/常量：原先在函数体内逐次构造（`new RegExp` 会重新编译，
+// 正则字面量也会每次求值新建对象）。这些模式全部依赖模块级静态常量，
+// 提到模块作用域后行为不变，且省掉每个段落的构造开销。
+// 注意：全局标志的正则仅用于 `String.prototype.match/replace`（两者都不
+// 依赖 lastIndex），因此共享实例是安全的。
+const JUNK_PREFIX_RE = new RegExp(`^[${JUNK_CHAR_CLASS}]+`)
+const JUNK_ANY_RE = new RegExp(`[${JUNK_CHAR_CLASS}${EXTRA_JUNK_CHARS}]`, 'g')
+const ENGLISH_WORD_RE = /[A-Za-z]{3,}/g
+const VOWEL_RE = /[aeiouyAEIOUY]/
+const COMMON_PUNCT_RE = /[，。、；：""''【】《》]/
+const CHINESE_RUN_RE = /[\u4e00-\u9fff]{2,}/
+const NON_PRINTABLE_RE = /[\s\p{P}]/gu
+const WEIRD_CHAR_RE = /[^\u4e00-\u9fff\u3400-\u4dbf\w\s,.!?，。！？；：""''（）【】、]/g
+const HYPERLINK_QUOTED_RE = /\bHYPERLINK\s+"[^"]*"[\s\u0001]*/g
+const HYPERLINK_BARE_RE = /\bHYPERLINK\s+\S+[\s\u0001]*/g
+const OTHER_FIELD_CODE_RE = /\b(?:EMBED|LIBREOFFICE|INCLUDEPICTURE|INCLUDETEXT)\s+\S+/g
+const PIC_PLACEHOLDER_RE = /\u0001/g
+
+/** 伪正文关键词：短段落命中即丢弃（避免为每个段落重建数组）。 */
+const SKIP_KEYWORDS = [
+  'ROOT', 'SUMMARY', 'DOCUMENT', 'WORD', 'WPS', 'MICROSOFT', 'PROPERTY',
+  'STORAGE', 'STREAM', 'TABLE', 'FORMAT', 'XMLDATA', 'BASE64', 'TEMPLATE', 'REGISTRY',
+]
+
 /**
  * ⚠️ 语义重建实现（P0 事故恢复）：原函数体在 C2 施工脚手架事故中丢失且无盘上快照。
  * 依据 PERF-T3 测试契约（tests/perf-t3-dedup.test.ts「坍缩到与旧算法一致的
@@ -50,27 +74,37 @@ export function collapseWholeBlockRepeats(text: string): string {
 export const REMOVE_DUP_EXACT_MAX_LEN = 2048
 
 export function cleanParagraph(p: string): string {
-    let cleaned = p.trim()
-    const junkChars = new RegExp(`^[${JUNK_CHAR_CLASS}]+`)
-    cleaned = cleaned.replace(junkChars, '')
-    return cleaned.trim()
+    return p.trim().replace(JUNK_PREFIX_RE, '').trim()
   }
 
 export function hasSignificantContent(text: string): boolean {
     if (text.length < 2) return false
     if (isTableRowText(text)) return true
-    const chineseChars = (text.match(/[\u4e00-\u9fff]/g) || []).length
+
+    // 直接按 UTF-16 码元计数，避免 match(/…/g) 分配整个匹配数组
+    // （CJK 文档下该数组可能很大）。
+    let chineseChars = 0
+    for (let i = 0; i < text.length; i++) {
+      const code = text.charCodeAt(i)
+      if (code >= 0x4e00 && code <= 0x9fff) chineseChars++
+    }
     const chineseRatio = chineseChars / text.length
     if (chineseChars >= 2 && chineseRatio > 0.3) return true
 
-    const englishWords = (text.match(/[A-Za-z]{3,}/g) || []).filter(w => /[aeiouyAEIOUY]/.test(w)).length
-    if (englishWords >= 2) return true
+    const words = text.match(ENGLISH_WORD_RE)
+    if (words) {
+      let englishWords = 0
+      for (let i = 0; i < words.length; i++) {
+        if (VOWEL_RE.test(words[i])) englishWords++
+      }
+      if (englishWords >= 2) return true
+    }
 
-    const hasCommonPunctuation = /[，。、；：""''【】《》]/.test(text)
-    const hasContent = /[\u4e00-\u9fff]{2,}/.test(text)
+    const hasCommonPunctuation = COMMON_PUNCT_RE.test(text)
+    const hasContent = CHINESE_RUN_RE.test(text)
     if (hasCommonPunctuation && hasContent) return true
 
-    const printableChars = text.replace(/[\s\p{P}]/gu, '').length
+    const printableChars = text.replace(NON_PRINTABLE_RE, '').length
     if (printableChars >= 3 && chineseChars >= 1) return true
 
     return false
@@ -81,8 +115,7 @@ export function shouldSkipParagraph(text: string): boolean {
   }
 
 export function hasTooManyJunkChars(text: string): boolean {
-    const junkPattern = new RegExp(`[${JUNK_CHAR_CLASS}${EXTRA_JUNK_CHARS}]`, 'g')
-    const junkMatches = text.match(junkPattern) || []
+    const junkMatches = text.match(JUNK_ANY_RE) || []
     if (junkMatches.length > 0) {
       const totalLength = text.trim().length
       if (junkMatches.length > 2 || (totalLength > 0 && junkMatches.length / totalLength > 0.2)) return true
@@ -98,8 +131,7 @@ export function hasTooManyJunkChars(text: string): boolean {
       if (!hasSignificantContent(p.text)) return false
       if (p.text.length < 80) {
         const upper = p.text.toUpperCase()
-        const skip = ['ROOT', 'SUMMARY', 'DOCUMENT', 'WORD', 'WPS', 'MICROSOFT', 'PROPERTY', 'STORAGE', 'STREAM', 'TABLE', 'FORMAT', 'XMLDATA', 'BASE64', 'TEMPLATE', 'REGISTRY']
-        for (const s of skip) { if (upper.includes(s)) return false }
+        for (const s of SKIP_KEYWORDS) { if (upper.includes(s)) return false }
       }
       return true
     })
@@ -142,7 +174,7 @@ export function hasTooManyJunkChars(text: string): boolean {
     })
     filtered = filtered.filter(p => {
       if (p.text && p.text.length === 1 && p.text.charCodeAt(0) === 1) return true
-      const weird = (p.text.match(/[^\u4e00-\u9fff\u3400-\u4dbf\w\s,.!?，。！？；：""''（）【】、]/g) || []).length
+      const weird = (p.text.match(WEIRD_CHAR_RE) || []).length
       return weird / p.text.length < 0.5
     })
     filtered = filtered.map(p => {
@@ -204,10 +236,10 @@ export function hasTooManyJunkChars(text: string): boolean {
       if (para.text && typeof para.text === 'string') {
         let cleanedText = para.text
         // Remove HYPERLINK field codes + trailing \u0001 field-result marker
-        cleanedText = cleanedText.replace(/\bHYPERLINK\s+"[^"]*"[\s\u0001]*/g, '')
-        cleanedText = cleanedText.replace(/\bHYPERLINK\s+\S+[\s\u0001]*/g, '')
+        cleanedText = cleanedText.replace(HYPERLINK_QUOTED_RE, '')
+        cleanedText = cleanedText.replace(HYPERLINK_BARE_RE, '')
         // Remove other common field codes
-        cleanedText = cleanedText.replace(/\b(?:EMBED|LIBREOFFICE|INCLUDEPICTURE|INCLUDETEXT)\s+\S+/g, '')
+        cleanedText = cleanedText.replace(OTHER_FIELD_CODE_RE, '')
         if (cleanedText !== para.text) {
           para.text = cleanedText
         }
@@ -220,7 +252,7 @@ export function hasTooManyJunkChars(text: string): boolean {
     for (const para of paragraphs) {
       const text = para.text || ''
       if (text.includes('\u0001')) {
-        const textWithoutPic = text.replace(/\u0001/g, '')
+        const textWithoutPic = text.replace(PIC_PLACEHOLDER_RE, '')
         const hasNonPicContent = textWithoutPic.trim().length > 0
         if (hasNonPicContent) {
           // Mixed content: keep the placeholder in the text but flag the paragraph
@@ -579,7 +611,7 @@ export function hasTooManyJunkChars(text: string): boolean {
       const para = paragraphs[i]
       const text = para.text || ''
       if (text.includes('\u0001') && para.__hasEmbeddedPic) {
-        const textWithoutPic = text.replace(/\u0001/g, '')
+        const textWithoutPic = text.replace(PIC_PLACEHOLDER_RE, '')
         const picPara: ParserParagraph = {
           text: '\u0001',
           charFormat: para.charFormat ? { ...para.charFormat, fontSize: 0 } : { fontSize: 0 },

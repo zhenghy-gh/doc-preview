@@ -569,3 +569,19 @@
   - 重写 `README.md` / `README.en.md` 为精简实用版；修正两处真实文档错误：CDN 路径应为发布白名单内的 `dist-lib/...`（原 `dist/...` 会 404），以及 `parseDocFileWithFormat(file, debug?)` 第二参数并非 `onProgress` 选项。
   - **已发布 0.7.4**：`@zhenghy/doc-preview@0.7.4` 与 `doc-preview@0.7.4` 均已上线官方 registry（`doc-preview` 由 0.5.0 直接对齐到 0.7.4）。发布脚本强制指定 `https://registry.npmjs.org`，规避本机 `~/.npmrc` 指向的只读镜像 `registry.npmmirror.com`；`package.json` 新增 `publishConfig`。版本用 `npm version patch --no-git-tag-version` 升号，未创建 git commit/tag。
 - 下一轮：继续审计干净且有测试覆盖的渲染/解析路径；优先选择规模收益明确、可用现有契约验证的候选。
+
+## Round 87/100 — 2026-10-08
+- 目标：消除段落过滤热路径上的逐次正则构造与临时数组分配。
+- 改动（`src/utils/docparser/heuristics/paragraphFilter.ts`）：
+  - `cleanParagraph` 原先每次调用都 `new RegExp('^[junk]+')`（重新编译），与 `hasTooManyJunkChars` 的 `g` 模式一并提升为模块级 `JUNK_PREFIX_RE` / `JUNK_ANY_RE`。
+  - `hasSignificantContent`：5 个正则字面量提升为模块常量；中文计数改为直接扫描 UTF-16 码元（不再 `match(/…/g)` 分配整个匹配数组）；英文单词计数去掉 `.filter()` 数组。
+  - `filterParagraphsWithGenericLogic`：15 项 `skip` 关键词数组提升为 `SKIP_KEYWORDS`（原先每个短段落重建一次）；“怪字符”正则提升为 `WEIRD_CHAR_RE`。
+  - `applyStructuralFormats`：HYPERLINK 两条域码正则、`EMBED|LIBREOFFICE|…` 正则、`\u0001` 占位符正则提升为模块常量。
+- 等价性要点：
+  - 共享的 `g` 正则仅用于 `String.match/replace`（二者都会重置并忽略 `lastIndex`），未用于 `.exec()`/`.test()`，不存在跨调用状态泄漏。
+  - `LIBREOFFICE` 按原文逐字保留（草稿曾误拼 `LIBEROFFICE`，会改变域码剥离行为）；HYPERLINK 等正则刻意不带 `u` 标志，避免改变转义与代理项处理。
+- 验证：定向 `perf-t3-dedup` / `enc-def-err` / `field-cp-gov` 26 项通过；`npm test` 59 文件 / **1334 项**通过；`npm run lint` 与 `npm run build` 通过。
+- 指标：主包 gzip 108.98 → **109.14 kB（+0.16 kB）**，worker 块 127.10 → 127.23 kB。体积增长来自把紧凑的 `match().length`/`filter().length` 换成显式计数循环；净收益是消除每段落的 `new RegExp` 编译，并减少 CJK 文档下每段落两次数组分配，故接受该权衡。
+- 发布：版本 `0.7.4 → 0.7.31`，双包（`@zhenghy/doc-preview`、`doc-preview`）已发布。
+- 流程变更：本轮起工作流为「优化 → 全量验证 → 提交 → 发布」，版本号按 `0.7.3N` 递增（本轮 0.7.31，下轮 0.7.32）。
+- 下一轮：继续在热路径（`docparser/`、`rendering/`）中寻找可证明等价的分配/重复扫描优化。
