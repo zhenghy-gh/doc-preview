@@ -1,0 +1,348 @@
+{
+  "doc-100kb.doc": [],
+  "doc-101.doc": [],
+  "doc-161.doc": [],
+  "doc-1mb.doc": [
+    {
+      "id": 1,
+      "name": "WordArt 1",
+      "text": " ",
+      "effects": [
+        "fill"
+      ],
+      "hasPicture": false
+    }
+  ],
+  "doc-261.doc": [],
+  "doc-321.doc": [],
+  "doc-500kb.doc": [
+    {
+      "id": 1,
+      "name": "WordArt 1",
+      "text": "h0TB(!bH*kk:zUs|0]&x8<ooZsO?jDm^?@O-@O%S:*|BY??8&_V{Y>]C)WN>y|e;pZe 9}gzY.u^%{^_GN_+.>_`/xz1>ro:=YK|=(1:nt<S{N>wl9UL.}K=|zyN\\.7y%VZ|})`!`,KbjFM}msCNBp`",
+      "effects": [
+        "fill"
+      ],
+      "hasPicture": false
+    },
+    {
+      "id": 2,
+      "name": "WordArt 2",
+      "text": " ",
+      "effects": [
+        "fill"
+      ],
+      "colors": [
+        "#fffffe",
+        "#ffffff"
+      ],
+      "hasPicture": false
+    }
+  ],
+  "fsample1.doc": [],
+  "fsample3.doc": [],
+  "fsample4.doc": [
+    {
+      "id": 1,
+      "name": "WordArt 1",
+      "text": " ",
+      "effects": [
+        "fill"
+      ],
+      "hasPicture": false
+    }
+  ],
+  "ftd-1.35mb.doc": [
+    {
+      "id": 1,
+      "name": "WordArt 1",
+      "text": "}",
+      "effects": [
+        "fill"
+      ],
+      "hasPicture": false
+    },
+    {
+      "id": 2,
+      "name": "WordArt 2",
+      "text": " ",
+      "effects": [
+        "fill"
+      ],
+      "colors": [
+        "#fffffe",
+        "#ffffff"
+      ],
+      "hasPicture": false
+    }
+  ],
+  "openstd-n961.doc": [],
+  "unicode-01022.doc": [],
+  "unicode-01351-N2376.doc": [
+    {
+      "id": 1,
+      "name": "WordArt 1",
+      "text": " ",
+      "effects": [
+        "fill"
+      ],
+      "hasPicture": false
+    }
+  ],
+  "unicode-02006-zia.doc": [
+    {
+      "id": 1,
+      "name": "WordArt 1",
+      "text": "IENDB`",
+      "effects": [
+        "fill"
+      ],
+      "colors": [
+        "#d4ab57"
+      ],
+      "hasPicture": false
+    },
+    {
+      "id": 2,
+      "name": "WordArt 2",
+      "text": " ",
+      "effects": [
+        "fill"
+      ],
+      "colors": [
+        "#fffffe",
+        "#fffffd",
+        "#ffffff"
+      ],
+      "hasPicture": false
+    }
+  ],
+  "unicode-02086-n2398.doc": [
+    {
+      "id": 1,
+      "name": "WordArt 1",
+      "text": "B",
+      "effects": [
+        "fill"
+      ],
+      "colors": [
+        "#000000"
+      ],
+      "hasPicture": false
+    }
+  ],
+  "unicode-03042-voting.doc": [
+    {
+      "id": 1,
+      "name": "WordArt 1",
+      "text": "!v:",
+      "effects": [
+        "fill"
+      ],
+      "hasPicture": false
+    },
+    {
+      "id": 2,
+      "name": "WordArt 2",
+      "text": "0x",
+      "effects": [
+        "fill"
+      ],
+      "hasPicture": false
+    },
+    {
+      "id": 3,
+      "name": "WordArt 3",
+      "text": " ",
+      "effects": [
+        "fill"
+      ],
+      "colors": [
+        "#fffffe",
+        "#fffffd",
+        "#ffffff"
+      ],
+      "hasPicture": false
+    }
+  ],
+  "unicode-form.doc": [
+    {
+      "id": 1,
+      "name": "WordArt 1",
+      "text": " ",
+      "effects": [
+        "fill"
+      ],
+      "colors": [
+        "#fffffe",
+        "#fffffd",
+        "#ffffff"
+      ],
+      "hasPicture": false
+    }
+  ],
+  "unicode-n1750w97.doc": [
+    {
+      "id": 1,
+      "name": "WordArt 1",
+      "text": "D",
+      "effects": [
+        "fill"
+      ],
+      "hasPicture": false
+    }
+  ],
+  "unicode-n2298.doc": [
+    {
+      "id": 1,
+      "name": "WordArt 1",
+      "text": "CCIDitl",
+      "effects": [
+        "fill"
+      ],
+      "hasPicture": false
+    }
+  ],
+  "unicode-n2532.doc": [],
+  "unicode-n4100.doc": [
+    {
+      "id": 1,
+      "name": "WordArt 1",
+      "text": "#",
+      "effects": [
+        "fill"
+      ],
+      "hasPicture": false
+    },
+    {
+      "id": 2,
+      "name": "WordArt 2",
+      "text": " ",
+      "effects": [
+        "fill"
+      ],
+      "colors": [
+        "#fffffe",
+        "#fffffd",
+        "#ffffff"
+      ],
+      "hasPicture": false
+    }
+  ],
+  "unicode-n4250.doc": [
+    {
+      "id": 1,
+      "name": "WordArt 1",
+      "text": "\"",
+      "effects": [
+        "3d"
+      ],
+      "hasPicture": false
+    },
+    {
+      "id": 2,
+      "name": "WordArt 2",
+      "text": " ",
+      "effects": [
+        "fill"
+      ],
+      "colors": [
+        "#fffffe",
+        "#fffffd",
+        "#ffffff"
+      ],
+      "hasPicture": false
+    }
+  ],
+  "unicode-n4350.doc": [
+    {
+      "id": 1,
+      "name": "WordArt 1",
+      "text": "F{",
+      "effects": [
+        "fill"
+      ],
+      "colors": [
+        "#000000"
+      ],
+      "hasPicture": false
+    },
+    {
+      "id": 2,
+      "name": "WordArt 2",
+      "text": " ",
+      "effects": [
+        "fill"
+      ],
+      "colors": [
+        "#945813",
+        "#145813",
+        "#ffffff"
+      ],
+      "hasPicture": false
+    },
+    {
+      "id": 3,
+      "name": "WordArt 3",
+      "text": "ti",
+      "effects": [
+        "gradient"
+      ],
+      "hasPicture": false
+    },
+    {
+      "id": 4,
+      "name": "WordArt 4",
+      "text": "?",
+      "effects": [
+        "fill"
+      ],
+      "hasPicture": false
+    },
+    {
+      "id": 5,
+      "name": "WordArt 5",
+      "text": " ",
+      "effects": [
+        "fill"
+      ],
+      "colors": [
+        "#fffffe",
+        "#fffffd",
+        "#ffffff"
+      ],
+      "hasPicture": false
+    }
+  ],
+  "unicode-n4400.doc": [
+    {
+      "id": 1,
+      "name": "WordArt 1",
+      "text": "W",
+      "effects": [
+        "fill"
+      ],
+      "colors": [
+        "#945813",
+        "#145813"
+      ],
+      "hasPicture": false
+    },
+    {
+      "id": 2,
+      "name": "WordArt 2",
+      "text": " ",
+      "effects": [
+        "fill"
+      ],
+      "colors": [
+        "#fffffe",
+        "#fffffd",
+        "#ffffff"
+      ],
+      "hasPicture": false
+    }
+  ],
+  "uow-bio.doc": [],
+  "uow-cfp.doc": []
+}

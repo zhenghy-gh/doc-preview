@@ -783,3 +783,32 @@
 - **踩坑**：第一版差分测试传 `fdgRecLen: 0xffffffff`，而构造器让 recLen 参与 `new Uint8Array(8 + recLen)` → 申请 4 GB，整个 vitest worker 被 OOM 杀掉（exit 137、无任何输出）。修法：让 recLen 只影响**头部字段**，缓冲区长度由独立的 `bufSize` 控制。
 - 发布：版本 `0.7.41 → 0.7.42`，双包已发布。
 - 下一轮（按 profile）：`createParagraphsWithRealFormats`（9.83%）现为最大单项，但它是段落装配层、不是叶级扫描，需要另一套分析方式；`extractWordArtFromDrawingData`（5.25%）是同族里最清晰的下一个 —— 它在每个偏移跑**四轮内层循环 + `match` 标志**比对四字节标记，另有**八轮内层循环**找零串，还每次调用 `new Uint8Array` 两次，压平成直接字节比较的收益应当大于 `extractShapes`；`extractEquationsFromWordDocumentStream`（3.78%）与 `extractChartsFromWordDocumentStream`（0.48%）与 `extractShapes` **各自独立扫描同一个 WordDocument 流**，四趟全扫是结构性冗余，但合并是高风险重构，先测量再动；`bytesToBase64DataUrl`（1.73%）；`(garbage collector)` 12.76% 仍是症状，堆剖析还没指向库内某个主导分配者。
+
+## Round 99/100 — 2026-10-08
+- 目标：`extractWordArtFromDrawingData`（profile 剔除沙箱噪声后 **5.25%**，叶级扫描家族里每偏移开销最重的一个）。与 Round 98 不同，这个函数在真实语料上**确有产出**（整份 `.doc` 输入下 27 份样本产出 **27 个 WordArt**，分布在 15 份里；端到端只喂 WordDocument 流时是 5 个），所以差分测试在真实数据上有鉴别力。
+- **实测字节密度（7.65 MB）**：`0xE0` **10 681 次 / 1 in 751（0.133%）**（WordArt 标记首字节）、`0x00` 3 081 729 次 / 1 in 3（**38.426%**）、`0x10` 1/331、`0x4B` 1/258、`0x4C` 1/766。
+- 改动（`src/utils/wordArtParser.ts`）三处，同一个循环里：
+  1. **压平标记比较**：`new Uint8Array([0xE0,0,0,0])` + 4 轮内层循环 + `match` 标志 → `data[offset] !== WORDART_MARKER_LEAD` 再加三个尾字节的直接比较。
+  2. **跳过非首字节的长串**：首字节不匹配时用 `data.indexOf(WORDART_MARKER_LEAD, offset + 1)` 直接跳到下一个候选。
+  3. **压平终止位置搜索**：8 轮内层循环 → `isZeroRun(data, offset)` 辅助函数，顺带消掉每次调用的两个 `new Uint8Array` 分配。
+  - `for` 改成 `while`，把 `offset++` 移进各分支，好让「首字节不匹配」这一支整段跳过。覆盖的偏移集合与原 `for` 完全相同（`{0 … data.length - 101}`）；原 `offset = endOffset + 8` 之后还有 `for` 的 `offset++`，所以现在写 `endOffset + 9`。
+- **关键设计：跳跃必须是条件式的**。三实现实测（左：7.65 MB 真实语料 / 右：1 MB 全 `0xE0`）：
+  ```
+  纯逐字节    11.9 ms /  1.8 ms
+  每次都跳     2.9 ms / 10.2 ms   ← 全 0xE0 时退化 5.5x（每个字节一次原生调用）
+  仅不匹配时跳  2.9 ms /  1.3 ms   ← 两边都拿到
+  ```
+  把跳跃限制在 `data[offset] !== WORDART_MARKER_LEAD` 这一支，退化场景根本不会进入该分支、退化为纯逐字节扫描；稀疏场景则是每 751 字节才跳一次。**这是本轮相对 Round 98 的核心进步：不是二选一，而是同时拿到两端。**
+- **纠正 Round 98 的实质错误（已写进 changelog 与记忆）**：Round 98 把 `indexOf` 跳跃的失败归因于「`0x00` 密度 0.39%」，**这个数字是错的 —— 实测是 38.426%**。在那个密度下 `indexOf` 每 3 个字节就命中一次，几乎每个字节都在付原生调用开销，所以那个结果**完全不能说明低密度下跳跃会输**。本轮在密度 0.133% 的字节上重测，跳跃赢 **5.3x**。修正后的教训窄得多：**`indexOf` 跳跃在搜索字节很密时会输，密度必须实测、不能假设**。Round 98 的 changelog 已加更正说明。
+- **等价性证据（四重）**：
+  1. **差分测试**：`git show HEAD:…` 抽旧版并排导入。覆盖：标记放置的每一个关心位置（含最后一个合法偏移 `data.length - 101` 与第一个非法偏移 `data.length - 100`）；标记四个字节的**每一种单字节偏差**（首字节 4 种 × 尾字节各 2 种，都必须不产出）；终止距离 100/101/110/5099/5100/5101/无（无零串时 `endOffset` 停在 `offset + 5000`）；被缓冲区末尾截断的零串（tail 0–8，不得当作匹配）；跳进路径（`endOffset + 9`）与「第二个标记落在第一个候选的 artData 内部 / 之后」；每 4 字节一个标记、全零、全 `0xE0`、每个偏移都是标记；**3000 条种子化模糊串**（200–6200 字节 + 随机注入标记与零串）；退化填充（`0x00/0xE0/0xFF/0x10/0x4B/0x4C/0x20/0x89`）与长度 0–200；**80 份真实样本变体**（27 份 `.doc` + 4KB/64KB/256KB 前缀，**27 个 WordArt 逐字段比对**）。另比对了同模块未改动的 `extractWordArtFromDirectory`（含 `null` 流与抛异常的读取器）与 `getEffectLabel`。差异 **0**。
+  2. **阴性对照 ×5**（整份复制旧模块、只把谓词改错：只比首字节 / 起点偏移一位 / 终止只找 4 个零）—— **三种失误都在真实语料上被捕获**，这正是 Round 98 做不到的。其中一个对照最初失败，原因很有价值：**纯 `0xE0` 填充的合成样本不能区分「只比首字节」的失误** —— 因为候选要被收录需满足 `text || effects.length > 1 || colors.length > 0`，而纯 `0xE0` 三者都不满足，错版同样返回空。改用 `0xFF` 填充 + 裸 `0xE0`（`extractColorsFromData` 会认出 `#ffffff`，假候选得以存活）才有效；并把那个无鉴别力的样本单独留成一条断言，把陷阱记录下来而不只是绕开。
+  3. **端到端逐位一致**：`bench-diff.mjs` cycle-990 与 cycle-980 除 `cycle`/`timestamp` 外**全部字段逐位相同**。
+  4. **稳健微基准**（esbuild 独立脚本、4 轮预热 + 5 轮交替取中位数）：真实语料 27 份 / 7.65 MB `13.9 → 2.6 ms`（**5.34x**）、前缀组 5.76x、1 MB 稀疏随机 5.29x、1 MB 全 0xFF 6.76x、**1 MB 全 0xE0 1.89x（不退化）**、1 MB 全 0x00 6.97x、1 MB 每 16B 真标记 1.03x、1 MB 每 16B 假 `0xE0` 2.46x、256 KB 每 4B 标记 1.02x。**无任何场景退化**；两个接近 1.0 的用例由本轮未改动的逐候选工作（`detectDataEffectMask` / `extractTextFromData` / `extractColorsFromData`）主导。
+- **顺带发现一个既有的最坏情况（本轮不修）**：「256 KB 每 4 字节一个标记」这一用例**新旧版本都要 2.6 秒**。成因是结构性的：终止搜索从每个候选向后最多扫 5000 字节，而跳进只在候选**被收录**时才发生；因此「密集 `E0 00 00 00` 但全都不满足收录条件」的缓冲区代价是 O(n/4 × 5000)（256 KB → 3.28 亿次内层迭代），1 MB WordDocument 流约 11 秒。真实文档不会触发（标记要四个特定字节，`0xE0` 只占 0.133%，全部 7.65 MB 里只有 42 个候选偏移），但这是对公开导出函数的健壮性隐患。修法是把终止搜索做成摊还（搜索窗口关于 `offset` 单调，用一个只前进的零串指针即可），属**新的算法结构**而非局部改写，故只记录不动手。
+- **新增常驻测试** `tests/wordArtParser.golden.test.ts`（5 项）：① **真实样本 golden 快照** —— `tests/fixtures/wordArtParser-golden.json` 记录 27 份样本的全部 27 个 WordArt（逐字段），由**改动前**的实现生成（差分测试已证明两版逐位一致），是防止跳跃漏掉或错位候选的常驻防线；② **复杂度护栏** —— 1 MB 均匀填充（含首字节最密的全 `0xE0`）、每 16B 真标记、每 16B 假 `0xE0`、无任何候选，均须在 5000 ms 内完成（实测 1–17 ms，两到三个数量级余量）。
+- 验证：`npx vue-tsc -p tsconfig.json --noEmit` 0 错误；`npm run lint` 干净（修掉 golden 测试里两个未使用导入）；`npm run build`（主包 gzip **108.95 kB**）与 `npm run build:lib` 通过；`npm test` **62 文件 / 1350 项**通过（较 Round 98 的 61/1345 +1 文件 +5 项）。
+- 指标：主包 gzip 108.94 → **108.95 kB（+0.01 kB，基本中性）**。
+- 清理的临时产物：`src/utils/_oldWordArtParser.ts`、`src/utils/_ctlWordArtParser.ts`、`src/utils/_idxWordArtParser.ts`、`tests/round99equiv.test.ts`、`tests/round99ctl.test.ts`、`.bench99.ts`、`.probe99d.mjs`、`.gen-golden99.ts`。
+- 发布：版本 `0.7.42 → 0.7.43`，双包已发布。
+- 下一轮：`createParagraphsWithRealFormats`（9.83%）为最大单项，但属装配层、需要另一套分析方式；`extractEquationsFromWordDocumentStream`（3.78%）在 27 份样本上产出**零**个公式，与 Round 98 的 shapes 完全同类 —— **先查它的筛子是不是同样过严**，再考虑优化；`extractShapes` / `extractWordArtFromDrawingData` / `extractEquationsFromWordDocumentStream` / `extractChartsFromWordDocumentStream` **各自对同一个 WordDocument 流做一次全扫**（四趟冗余），合并能省掉三趟但属高风险重构，先测量合并成本；`bytesToBase64DataUrl`（1.73%）；GC 12.76% 仍是症状。

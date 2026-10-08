@@ -106,9 +106,7 @@ writeRecHeader(buffer, off, 3, 0x00C0, 0xF000, fdgLen)
 ### Rejected: `indexOf` jumping
 
 The first variant to be measured jumped between candidate offsets with
-`Uint8Array#indexOf(0x00, …)`. `0x00` has a density of 0.39 % in the corpus —
-well under the ~2 % threshold that made `indexOf` jumping lose in round 97 — so
-it looked promising. It is not:
+`Uint8Array#indexOf(0x00, …)`. It lost badly:
 
 ```
                            OLD        NEW        IDX
@@ -120,11 +118,20 @@ real corpus, 7.65 MB      18.6 ms    13.9 ms    30.3 ms
                            —          1.19x      0.34x
 ```
 
-The `indexOf` variant is **faster than the old code on nothing that resembles
-real data** — 0.61x on the corpus, 0.34x on dense headers — and only looks
+> **Correction (added during round 99).** This section originally attributed the
+> loss to a claimed `0x00` density of 0.39 %. That figure was wrong: `0x00` is
+> **38.4 %** of the corpus (3 081 729 of 8 019 968 bytes). At that density
+> `indexOf` finds a hit every third byte, so the variant was paying native call
+> overhead on almost every byte — the result says nothing about jumping at low
+> density. Round 99 re-measured jumping on a byte with 0.133 % density and found
+> it wins **5.3x** on the same corpus. The lesson from this round is narrower
+> than first written: *`indexOf` jumping loses when the searched byte is dense*,
+> and the density has to be measured, not assumed.
+
+The `indexOf` variant is faster than the old code on nothing that resembles real
+data here — 0.61x on the corpus, 0.34x on dense headers — and only looks
 spectacular on uniform fills, where a single native call can skip the whole
-buffer. Same lesson as round 97, one round later: *the headline number of a
-jump-based scan comes from the inputs it is worst at.* Rejected.
+buffer. Rejected on its measurements, not on a general rule.
 
 ## Equivalence evidence
 
