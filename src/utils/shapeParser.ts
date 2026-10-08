@@ -277,8 +277,10 @@ function extractShapes(data: Uint8Array): ShapeInfo[] {
 
   const shapes: ShapeInfo[] = []
   const seenSpid = new Set<number>()
+  const limit = data.length - 8
+  let offset = 0
 
-  for (let offset = 0; offset < data.length - 8; offset++) {
+  while (offset < limit) {
     // 前置筛：recType 为 OFFICE_ART_FDG 时第 3/4 字节必为 0x00/0xF0。这是下方
     // `header.recType === OFFICE_ART_FDG` 的**必要条件**，因此加在这里只改变
     // 「谁被挡在记录头解析之前」，不改变任何一个偏移的去留（等价性由此可证）。
@@ -290,23 +292,46 @@ function extractShapes(data: Uint8Array): ShapeInfo[] {
     // 注意掩码 `(readUint16(data, offset) & 0xC000) === 0xC000` **不是** FDG 的
     // 必要条件（它约束的是 recInstance 低字节的高 2 位），它是历史遗留的额外
     // 筛选，不能删——删掉会让大量本来被拒的候选进入 parseFdg，输出随之改变。
-    if (data[offset + 2] !== FDG_TYPE_LO || data[offset + 3] !== FDG_TYPE_HI) continue
+    if (data[offset + 2] !== FDG_TYPE_LO || data[offset + 3] !== FDG_TYPE_HI) {
+      // 条件式跳跃：本筛要求 `data[offset + 3] === FDG_TYPE_HI`，所以把
+      // 「下一个 data[p] === FDG_TYPE_HI」映射回 `p - 3` 就得到下一个**可能**
+      // 通过的偏移。落在 [offset+1, p-3) 之间的偏移其 o+3 处都不是 0xF0，
+      // 本筛必然失败，跳过它们不会漏掉任何候选。
+      //
+      // 锚点选 FDG_TYPE_HI（0xF0）而不是 FDG_TYPE_LO（0x00）：0x00 在真实语料
+      // 里占 31.4%（每 3.2 字节一次），拿它当锚点必然退化。0xF0 实测 0.1171%。
+      //
+      // 「锚点紧邻就不跳」这一层是必需的：`indexOf` 即使立刻命中也要付一次
+      // 原生调用，而锚点铺满时每次只前进 1 字节，就变成「每字节一次调用」。
+      // 实测 1 MB 全 0xF0（同一进程内三个版本对比）：
+      //   旧（逐字节）1.45 ms / 无守卫 9.10 ms（0.16x）/ 有守卫 2.03 ms（0.72x）
+      // 守卫把 6.3 倍的退化收回成 1.4 倍，代价在真实语料上可忽略
+      // （6.48x → 6.40x，约 1.2% 的相对损失）。
+      if (data[offset + 4] === FDG_TYPE_HI) {
+        offset++
+        continue
+      }
+      const p = data.indexOf(FDG_TYPE_HI, offset + 4)
+      if (p < 0) break
+      offset = p - 3
+      continue
+    }
 
     const magic = readUint16(data, offset)
-    if ((magic & 0xC000) !== 0xC000) continue
-
-    const header = parseOfficeArtRecordHeader(data, offset)
-    if (!header) continue
-
-    if (header.recType === OFFICE_ART_FDG) {
-      const found = parseFdg(data, offset)
-      for (const shape of found) {
-        if (!seenSpid.has(shape.spid)) {
-          seenSpid.add(shape.spid)
-          shapes.push(shape)
+    if ((magic & 0xC000) === 0xC000) {
+      const header = parseOfficeArtRecordHeader(data, offset)
+      if (header && header.recType === OFFICE_ART_FDG) {
+        const found = parseFdg(data, offset)
+        for (const shape of found) {
+          if (!seenSpid.has(shape.spid)) {
+            seenSpid.add(shape.spid)
+            shapes.push(shape)
+          }
         }
       }
     }
+    // 原 `for` 的 `offset++`；跳跃路径在自己的分支里 `continue`，不走这里。
+    offset++
   }
 
   return shapes

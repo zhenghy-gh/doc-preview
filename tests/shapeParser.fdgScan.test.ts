@@ -1,4 +1,7 @@
 import { describe, it, expect } from 'vitest'
+import { readFileSync, readdirSync, existsSync } from 'fs'
+import { fileURLToPath } from 'url'
+import { dirname, resolve } from 'path'
 import { extractShapesFromDataStream } from '../src/utils/shapeParser'
 
 /**
@@ -108,6 +111,87 @@ describe('extractShapesFromDataStream — FDG 前置筛选的既有契约', () =
   })
 })
 
+describe('extractShapesFromDataStream — 跳跃路径不得漏掉候选', () => {
+  // 扫描循环在「前置筛失败」时会用 `indexOf(FDG_TYPE_HI, offset + 4)` 跳到下一个
+  // 0xF0 并回退 3 字节。回退量或起点写错都会**静默**漏掉真链——结果数组变空，
+  // 而不是报错。下面几组用例从不同方向压这个边界。
+  it('前面垫满 0xF0（锚点最密）时真链仍被提取', () => {
+    const c = buildChain(0x00c0)
+    for (const padLen of [0, 1, 2, 3, 5, 8, 17, 64, 137, 300]) {
+      const buf = new Uint8Array(padLen + c.length + 64).fill(0xf0)
+      buf.set(c, padLen)
+      // 链尾之后换成 0x41，避免尾部填充与链本身混在一起
+      for (let i = padLen + c.length; i < buf.length; i++) buf[i] = 0x41
+      const shapes = extractShapesFromDataStream(buf)
+      expect(shapes.length, `padLen=${padLen}`).toBe(1)
+      expect(shapes[0].spid).toBe(0x50000001)
+    }
+  })
+
+  it('前面垫满 0x00（前置筛的另一个字节最密）时真链仍被提取', () => {
+    const c = buildChain(0x00c0)
+    for (const padLen of [0, 1, 4, 9, 64, 257]) {
+      const buf = new Uint8Array(padLen + c.length + 64)
+      buf.set(c, padLen)
+      const shapes = extractShapesFromDataStream(buf)
+      expect(shapes.length, `padLen=${padLen}`).toBe(1)
+    }
+  })
+
+  it('不会越过「前置筛通过但掩码拒绝」的假候选', () => {
+    const c = buildChain(0x00c0)
+    const padLen = 32
+    const buf = new Uint8Array(padLen + c.length + 64).fill(0x41)
+    buf.set(c, padLen)
+    // 偏移 16 处：data[18]=0x00、data[19]=0xF0（前置筛通过），
+    // 但 readUint16(16)=0x0000 的高 2 位不是 11（掩码拒绝）
+    buf[16] = 0x00
+    buf[17] = 0x00
+    buf[18] = 0x00
+    buf[19] = 0xf0
+    const shapes = extractShapesFromDataStream(buf)
+    expect(shapes.length).toBe(1)
+    expect(shapes[0].spid).toBe(0x50000001)
+  })
+
+  it('被 0xF0 长串隔开的两条链都被提取', () => {
+    const a = buildChain(0x00c0, 0x50000011)
+    const b = buildChain(0x00c0, 0x50000022)
+    const gap = 211
+    const buf = new Uint8Array(24 + a.length + gap + b.length + 24)
+    buf.fill(0xf0)
+    buf.set(a, 24)
+    buf.set(b, 24 + a.length + gap)
+    for (let i = 24 + a.length; i < 24 + a.length + gap; i++) buf[i] = 0xf0
+    for (let i = 24 + a.length + gap + b.length; i < buf.length; i++) buf[i] = 0x41
+    const shapes = extractShapesFromDataStream(buf)
+    expect(shapes.map((s) => s.spid).sort()).toEqual([0x50000011, 0x50000022])
+  })
+})
+
+describe('extractShapesFromDataStream — 真实样本快照', () => {
+  const here = dirname(fileURLToPath(import.meta.url))
+  const docsDir = resolve(here, '../docs')
+
+  it('docs/ 下每份样本都扫描过、且不产生任何假阳性', () => {
+    const files = existsSync(docsDir)
+      ? readdirSync(docsDir).filter((f) => f.endsWith('.doc')).sort()
+      : []
+    expect(files.length, '样本数').toBeGreaterThan(20)
+
+    let scanned = 0
+    let shapes = 0
+    for (const f of files) {
+      const buf = new Uint8Array(readFileSync(resolve(docsDir, f)))
+      scanned += buf.length
+      shapes += extractShapesFromDataStream(buf).length
+    }
+    // 没有这条断言的话，「一个样本都没读到」也会让下面的 0 通过
+    expect(scanned, '实际扫描的字节数').toBeGreaterThan(5 * 1024 * 1024)
+    expect(shapes, '真实语料上的形状数（已知为 0，见下方「已知局限」）').toBe(0)
+  })
+})
+
 describe('extractShapesFromDataStream — 复杂度护栏', () => {
   // 1 MB 输入的 O(n) 扫描约 2–3 ms；上限 5000 ms 有约三个数量级余量，
   // 不会因并行测试的机器争用而误报，但能拦住任何超线性退化。
@@ -152,5 +236,26 @@ describe('extractShapesFromDataStream — 复杂度护栏', () => {
     expect(extractShapesFromDataStream(new Uint8Array(0))).toEqual([])
     expect(extractShapesFromDataStream(new Uint8Array(63))).toEqual([])
     expect(extractShapesFromDataStream(new Uint8Array(64))).toEqual([])
+  })
+
+  it('锚点 0xF0 每 4 字节一个但前置筛的 0x00 从不匹配的 1MB 缓冲区在线性时间内完成', () => {
+    // 每次前置筛都失败、每次跳跃都命中紧邻的 0xF0 —— 跳跃路径最坏的一类输入。
+    const buf = new Uint8Array(N).fill(0x41)
+    for (let o = 0; o + 4 <= buf.length; o += 4) buf[o + 3] = 0xf0
+    const t = performance.now()
+    const shapes = extractShapesFromDataStream(buf)
+    const ms = performance.now() - t
+    expect(shapes).toEqual([])
+    expect(ms, `密集锚点耗时 ${ms.toFixed(0)} ms`).toBeLessThan(5000)
+  })
+
+  it('锚点 0xF0 每 64 字节一个（稀疏，跳跃全程生效）的 1MB 缓冲区在线性时间内完成', () => {
+    const buf = new Uint8Array(N).fill(0x41)
+    for (let o = 0; o + 4 <= buf.length; o += 64) buf[o + 3] = 0xf0
+    const t = performance.now()
+    const shapes = extractShapesFromDataStream(buf)
+    const ms = performance.now() - t
+    expect(shapes).toEqual([])
+    expect(ms, `稀疏锚点耗时 ${ms.toFixed(0)} ms`).toBeLessThan(5000)
   })
 })
