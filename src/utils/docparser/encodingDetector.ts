@@ -49,6 +49,45 @@ export interface EncodingDetectorContext {
 
 export const JUNK_CHAR_CLASS = '伀倀藠俹醫蠀耀頀琀餀栀儀騀甀攀爀愀氀攀漀漀渀'
 export const EXTRA_JUNK_CHARS = '伇倈俼俿儀儜厬唀唕嘀噀圀堀嬀崀崜帀幀弰彀戀戀'
+
+/**
+ * 伪正文关键词：短段落命中即丢弃。
+ * 原先在 encodingDetector 与 heuristics/paragraphFilter 各写一份、且在每个段落
+ * 上重建一次数组；现统一在此导出，两处共用同一份只读常量。
+ */
+export const SKIP_KEYWORDS = [
+  'ROOT', 'SUMMARY', 'DOCUMENT', 'WORD', 'WPS', 'MICROSOFT', 'PROPERTY',
+  'STORAGE', 'STREAM', 'TABLE', 'FORMAT', 'XMLDATA', 'BASE64', 'TEMPLATE', 'REGISTRY',
+]
+
+/**
+ * JUNK_CHAR_CLASS 的**码点**集合。刻意存 number 而不是字符：逐字符判定时用
+ * `charCodeAt` 取值，避免 `text[i]` 每轮新建单字符字符串再哈希的开销。
+ */
+const JUNK_CODE_SET = (() => {
+  const set = new Set<number>()
+  for (let i = 0; i < JUNK_CHAR_CLASS.length; i++) set.add(JUNK_CHAR_CLASS.charCodeAt(i))
+  return set
+})()
+
+/** 统计 CJK 统一表意文字（U+4E00–U+9FFF）个数，避免 match(/…/g) 的数组分配。 */
+function countChineseChars(text: string): number {
+  let count = 0
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i)
+    if (code >= 0x4e00 && code <= 0x9fff) count++
+  }
+  return count
+}
+
+/** 统计垃圾字符个数（JUNK_CHAR_CLASS 码点集合），避免 match(/…/g) 的数组分配。 */
+function countJunkChars(text: string): number {
+  let count = 0
+  for (let i = 0; i < text.length; i++) {
+    if (JUNK_CODE_SET.has(text.charCodeAt(i))) count++
+  }
+  return count
+}
 /** ENC-04：非文本符号占比超过该阈值视为“符号汤”误解码，触发跨编码兜底重试。 */
 export const ENC04_SYMBOL_RATIO_THRESHOLD = 0.35
 
@@ -266,8 +305,6 @@ function extractRawParagraphs(
 
 /** 过滤管线（C 块语义）：起点定位/跳过规则/显著内容/内置 skip 表。 */
 function filterRawParagraphs(paragraphs: string[], ctx: EncodingDetectorContext): string[] {
-    const junkPattern = new RegExp(`[${JUNK_CHAR_CLASS}]`, 'g')
-
     let foundStart = false
     const filteredStart: string[] = []
 
@@ -275,8 +312,8 @@ function filterRawParagraphs(paragraphs: string[], ctx: EncodingDetectorContext)
       if (!foundStart) {
         const cp = ctx.cleanParagraph(p)
         if (cp.length > 5) {
-          const chineseCount = (cp.match(/[\u4e00-\u9fff]/g) || []).length
-          const junkCount = (cp.match(junkPattern) || []).length
+          const chineseCount = countChineseChars(cp)
+          const junkCount = countJunkChars(cp)
           if (chineseCount >= 3 && junkCount < chineseCount) { foundStart = true; filteredStart.push(cp); continue }
         }
       } else {
@@ -294,8 +331,7 @@ function filterRawParagraphs(paragraphs: string[], ctx: EncodingDetectorContext)
       if (ctx.shouldSkipParagraph(p)) return false
       if (!ctx.hasSignificantContent(p)) return false
       const upper = p.toUpperCase()
-      const skip = ['ROOT', 'SUMMARY', 'DOCUMENT', 'WORD', 'WPS', 'MICROSOFT', 'PROPERTY', 'STORAGE', 'STREAM', 'TABLE', 'FORMAT', 'XMLDATA', 'BASE64', 'TEMPLATE', 'REGISTRY']
-      for (const s of skip) { if (upper.includes(s)) return false }
+      for (const s of SKIP_KEYWORDS) { if (upper.includes(s)) return false }
       return true
     })
 

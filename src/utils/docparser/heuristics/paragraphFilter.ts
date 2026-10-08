@@ -12,7 +12,7 @@
  * 规格文档 docs/changelog/2026-08-26-field-cp-gov-parser-spec.md 为必读参照。
  * 纯度：禁 import vue/.vue、禁反向 import ../docParser（契约 §2.2 规则 2）。
  */
-import { JUNK_CHAR_CLASS, EXTRA_JUNK_CHARS, stripBinaryPrefix as encStripBinaryPrefix } from '../encodingDetector'
+import { JUNK_CHAR_CLASS, EXTRA_JUNK_CHARS, SKIP_KEYWORDS, stripBinaryPrefix as encStripBinaryPrefix } from '../encodingDetector'
 import { logger } from '../../logger'
 import type { PageFieldInfo } from '../../fieldParser'
 import type { ParserParagraph } from '../../docFormat'
@@ -35,12 +35,6 @@ const HYPERLINK_QUOTED_RE = /\bHYPERLINK\s+"[^"]*"[\s\u0001]*/g
 const HYPERLINK_BARE_RE = /\bHYPERLINK\s+\S+[\s\u0001]*/g
 const OTHER_FIELD_CODE_RE = /\b(?:EMBED|LIBREOFFICE|INCLUDEPICTURE|INCLUDETEXT)\s+\S+/g
 const PIC_PLACEHOLDER_RE = /\u0001/g
-
-/** 伪正文关键词：短段落命中即丢弃（避免为每个段落重建数组）。 */
-const SKIP_KEYWORDS = [
-  'ROOT', 'SUMMARY', 'DOCUMENT', 'WORD', 'WPS', 'MICROSOFT', 'PROPERTY',
-  'STORAGE', 'STREAM', 'TABLE', 'FORMAT', 'XMLDATA', 'BASE64', 'TEMPLATE', 'REGISTRY',
-]
 
 /**
  * ⚠️ 语义重建实现（P0 事故恢复）：原函数体在 C2 施工脚手架事故中丢失且无盘上快照。

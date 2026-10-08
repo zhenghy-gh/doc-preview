@@ -9,6 +9,9 @@ const docsDir = resolve(here, '../docs')
 
 describe('real doc quality audit', () => {
   const files = ['doc-101.doc','doc-161.doc','doc-261.doc','doc-321.doc','doc-500kb.doc','doc-100kb.doc','doc-1mb.doc','file-sample_100kB.doc','fsample1.doc','fsample3.doc','fsample4.doc','ftd-1.35mb.doc','openstd-n961.doc','uow-bio.doc','uow-cfp.doc','unicode-01022.doc','unicode-01351-N2376.doc','unicode-02006-zia.doc','unicode-02086-n2398.doc','unicode-03042-voting.doc','unicode-form.doc','unicode-n1750w97.doc','unicode-n2298.doc','unicode-n2532.doc','unicode-n4100.doc','unicode-n4250.doc','unicode-n4350.doc','unicode-n4400.doc']
+  // 本用例在单次调用里解析全部 28 个样本（含 1.35 MB 文档），隔离运行时约 1s，
+  // 但 59 个测试文件并行时环境争用会让它超过 vitest 默认的 5000ms 而假失败。
+  // 断言内容不变，仅放宽该用例的超时预算。
   it('parse every fixture doc successfully', () => {
     for (const f of files) {
       const path = resolve(docsDir, f)
@@ -28,5 +31,5 @@ describe('real doc quality audit', () => {
       ].filter(Boolean).join(',')
       console.log(`${f.padEnd(28)} ${String(ms).padStart(4)}ms paras=${String(paras).padStart(6)} text=${String(textLen).padStart(7)} ${flags}`)
     }
-  })
+  }, 30000)
 })
