@@ -13,6 +13,42 @@
 
 import type { CharacterFormat, ParagraphFormat, CharStyle, CharStyleSegment } from '../../docFormat'
 
+/**
+ * 与 JS `\s` 等价的码点判定（WhiteSpace + LineTerminator）。
+ *
+ * `detectCharacterStyles` 原先在**逐字符循环内**写 `/\s/.test(text[i])`：
+ * 正则字面量每次求值都会新建 RegExp 对象，且 `text[i]` 还要额外分配一个单字符
+ * 字符串。改成对已有的 `charCodeAt` 结果做区间判断后，这两项分配都消失。
+ *
+ * 覆盖范围与 `\s` 完全一致：TAB(09) LF(0A) VT(0B) FF(0C) CR(0D)、SP(20)、
+ * NBSP(A0)、ZWNBSP(FEFF)、Zs 类的 1680 / 2000–200A / 202F / 205F / 3000、
+ * 以及 LS(2028) / PS(2029)。
+ */
+function isWhitespaceCode(code: number): boolean {
+  return (
+    (code >= 0x09 && code <= 0x0d) ||
+    code === 0x20 ||
+    code === 0xa0 ||
+    code === 0x1680 ||
+    (code >= 0x2000 && code <= 0x200a) ||
+    code === 0x2028 ||
+    code === 0x2029 ||
+    code === 0x202f ||
+    code === 0x205f ||
+    code === 0x3000 ||
+    code === 0xfeff
+  )
+}
+
+/**
+ * `shouldHaveUnderline` 用的三个模式。该函数在每个数字字符上被调用，
+ * 原先三个正则都是函数体内的字面量（每次求值新建 RegExp 对象），现提升到模块级。
+ * 三者均非全局（无 `g`），不涉及 `lastIndex`，跨调用共享安全。
+ */
+const DATE_COLON_BEFORE_RE = /[：:]\s*$/
+const DATE_UNIT_RE = /[年日月时分秒]/
+const DATE_TIME_RE = /[0-9]{2,4}[年月日时分秒]/
+
 export function guessCharFormat(text: string, _paragraphIndex?: number): CharacterFormat {
     const charFormat: CharacterFormat = { styles: [] }
     const chineseCount = (text.match(/[\u4e00-\u9fff]/g) || []).length
@@ -76,13 +112,12 @@ export function detectCharacterStyles(text: string): CharStyleSegment[] {
     let chineseSoFar = 0
 
     for (let i = 0; i < text.length; i++) {
-      const char = text[i]
       const code = text.charCodeAt(i)
       const isDigit = code >= 0x30 && code <= 0x39
       const isChinese = code >= 0x4e00 && code <= 0x9fff
       const isUpperCase = code >= 0x41 && code <= 0x5a
       const isLowerCase = code >= 0x61 && code <= 0x7a
-      const isWhitespace = /\s/.test(char)
+      const isWhitespace = isWhitespaceCode(code)
 
       let charStyle: CharStyle | null = null
       if (isWhitespace) charStyle = { underline: false }
@@ -99,8 +134,9 @@ export function detectCharacterStyles(text: string): CharStyleSegment[] {
 
       if (isChinese) chineseSoFar++
 
-      if (currentStyle && isSameStyle(currentStyle, charStyle)) continue
-      if (currentStyle && !isSameStyle(currentStyle, charStyle)) {
+      // isSameStyle 是纯函数：原来在同一个分支里连调两次，这里只算一次。
+      if (currentStyle) {
+        if (isSameStyle(currentStyle, charStyle)) continue
         styles.push({ start: styleStart, end: i, style: currentStyle })
       }
       currentStyle = charStyle
@@ -109,21 +145,33 @@ export function detectCharacterStyles(text: string): CharStyleSegment[] {
 
     if (currentStyle) styles.push({ start: styleStart, end: text.length, style: currentStyle })
 
+    // 逐字符找冒号：改用 charCodeAt 避免每字符分配单字符字符串
+    // （'：' = U+FF1A，':' = U+003A）。
     const colonPositions: number[] = []
     for (let i = 0; i < text.length; i++) {
-      if (text[i] === '：' || text[i] === ':') colonPositions.push(i)
+      const code = text.charCodeAt(i)
+      if (code === 0xff1a || code === 0x3a) colonPositions.push(i)
     }
     if (colonPositions.length > 0) {
-      const shouldUL = new Array(text.length).fill(false)
+      // 原实现为每个段落分配并填充一个 text.length 长的布尔数组 shouldUL，
+      // 再把每个 style 段与它求交计数。这里直接按区间求交集长度：
+      // colonPositions 升序，且各标记区间互不重叠（start_ci = colon[ci] + 1，
+      // end_ci = colon[ci+1] - 4 < start_{ci+1}），因此逐段累加交集长度与
+      // 原「逐位置查表」的计数完全一致，省掉一次 O(n) 分配 + 填充。
+      const underlineRanges: Array<{ start: number; end: number }> = []
       for (let ci = 0; ci < colonPositions.length; ci++) {
         const start = colonPositions[ci] + 1
         const end = ci + 1 < colonPositions.length ? colonPositions[ci + 1] - 4 : text.length
-        for (let j = start; j < end; j++) shouldUL[j] = true
+        if (end > start) underlineRanges.push({ start, end })
       }
       for (const seg of styles) {
         if (!seg.style) continue
         let count = 0
-        for (let j = seg.start; j < seg.end; j++) { if (shouldUL[j]) count++ }
+        for (const range of underlineRanges) {
+          const lo = seg.start > range.start ? seg.start : range.start
+          const hi = seg.end < range.end ? seg.end : range.end
+          if (hi > lo) count += hi - lo
+        }
         if (count > (seg.end - seg.start) * 0.4) seg.style.underline = true
       }
     }
@@ -131,13 +179,15 @@ export function detectCharacterStyles(text: string): CharStyleSegment[] {
   }
 
 export function shouldHaveUnderline(text: string, index: number): boolean {
-    const char = text[index]
-    if (!/[0-9]/.test(char)) return false
+    // 原为 text[index] + /[0-9]/ 测试；本函数在每个数字字符上都会被调用，
+    // 改用码点判断可省掉一次单字符字符串分配与一次正则求值。
+    const code = text.charCodeAt(index)
+    if (!(code >= 0x30 && code <= 0x39)) return false
     const before = text.substring(Math.max(0, index - 30), index)
     const after = text.substring(index, Math.min(text.length, index + 30))
-    const hasColonBefore = /[：:]\s*$/.test(before)
-    const hasDatePattern = /[年日月时分秒]/.test(after) || /[年日月时分秒]/.test(before)
-    const hasTimePattern = /[0-9]{2,4}[年月日时分秒]/.test(after) || /[0-9]{2,4}[年月日时分秒]/.test(before)
+    const hasColonBefore = DATE_COLON_BEFORE_RE.test(before)
+    const hasDatePattern = DATE_UNIT_RE.test(after) || DATE_UNIT_RE.test(before)
+    const hasTimePattern = DATE_TIME_RE.test(after) || DATE_TIME_RE.test(before)
     return hasColonBefore || hasDatePattern || hasTimePattern
   }
 

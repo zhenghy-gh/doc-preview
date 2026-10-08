@@ -678,3 +678,20 @@
 - 指标：主包 gzip 108.76 → **108.56 kB（−0.20 kB）**，连续第三轮回落。
 - 发布：版本 `0.7.36 → 0.7.37`，双包已发布。
 - 下一轮：运行时层面的"重复实现"已基本收敛干净；建议转向**热路径分配审计**（回到项目最初的优化主线）或**类型重复的专项整理**。
+
+## Round 94/100 — 2026-10-08
+- 目标：回到项目最初的优化主线 —— **热路径分配审计**。`docparser/heuristics/textHeuristics.ts` 是逐段落调用，其中 `detectCharacterStyles` 更是**逐字符**遍历每个段落。
+- 改动（`textHeuristics.ts`，5 处）：
+  1. **逐字符循环内的正则字面量**：`const isWhitespace = /\s/.test(text[i])` —— 正则字面量每次求值都新建 RegExp（每字符一次），且 `text[i]` 还要分配单字符字符串。改为 `isWhitespaceCode(code)`（用循环里**本就算好**的 `charCodeAt` 结果），两项分配同时消除。该函数逐项复刻 ECMAScript `\s` 集合：`09–0D`、`20`、`A0`、`FEFF`、`1680`、`2000–200A`、`202F`、`205F`、`3000`、`2028`、`2029`。
+  2. **冒号扫描** `text[i] === '：' || text[i] === ':'` —— 该循环必然扫完整段文本，每字符分配一个单字符字符串；改为 `charCodeAt(i)` 与 `0xFF1A`/`0x003A` 比较。
+  3. **每段落一个 `text.length` 长的布尔数组**（有冒号时）：原实现把冒号区间展开成 `new Array(text.length).fill(false)` 再逐位置回查。因冒号位置升序且各标记区间**互不重叠且有序**（`start_ci = colon[ci]+1`，`end_ci = colon[ci+1]-4 < start_{ci+1}`），改为逐段与区间求交集长度 `max(0, min(segEnd,rEnd) - max(segStart,rStart))`，省掉 O(n) 分配 + 填充，计数复杂度也从"段长"降为"区间个数"（通常 1–2）。
+  4. **`shouldHaveUnderline`**（每个数字字符调用）：`text[index]` + `/[0-9]/` 改为 `charCodeAt` 区间判断；函数体内三个正则字面量提升为模块常量（均非全局，跨调用共享安全）。
+  5. **冗余的 `isSameStyle` 调用**：原为 `if (currentStyle && isSame(...)) continue` + `if (currentStyle && !isSame(...))` 连调两次；`isSameStyle` 是纯函数，合并为一次求值。
+- **等价性证据（双重）**：
+  - **解析输出逐位一致**：用 `bench-diff.mjs`（解析 27 个样本 `.doc`，与 `textutil` 基线比对文本相似度）在改动前后各跑一次，`total/parseSuccess/parseFail/median/p10/p25/min/max` 及 `topIssues` 聚类**全部完全相同**（median 0.9502433994244857、min 0.8115474418758475）。
+  - **函数输出一致**：独立微基准把新旧 `detectCharacterStyles` 并排跑 10 个样本（中文/英文/中英混排/冒号密集/含制表符·全角空格·NBSP·ZWNBSP/500 字长串/列表标记），`JSON.stringify` 结果 **10/10 完全一致**。
+- 微基准（20 000 轮 × 10 样本 = 200 000 次调用）：旧 1627.3 ms → 新 **904.2 ms，0.556x（快 1.8 倍）**。
+- 验证：`npm run lint` 通过；`npm run build` 与 `npm run build:lib` 通过；`npm test` 59 文件 / **1334 项**通过。
+- 指标：主包 gzip 108.56 → **108.62 kB（+0.06 kB）**。区间列表与 `isWhitespaceCode` 的体积略大于被删掉的数组填充 —— 与 round 87–89 相同的"以小体积换分配"取舍。
+- 发布：版本 `0.7.37 → 0.7.38`，双包已发布。
+- 下一轮：`textHeuristics.ts` 仍有**逐段落**级别的冗余分配可清（`guessCharFormat` 的 `match(/…/g)` + `replace(/\s/g,'')` + `trim()`；`detectAlignment` 一次调用就要 `trim()`/`trimStart()`/`trimEnd()`/`replace()` 四次字符串分配；`detectListInfo` 的 `match` + 两次 `replace`），以及把这些函数体内的正则字面量提升到模块级。
