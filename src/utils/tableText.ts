@@ -1,4 +1,4 @@
-import type { TableInfo, TableCellInfo, ParagraphFormat, RenderParagraph, TableBlockResult } from './docFormat'
+import type { TableInfo, TableCellInfo, TableBorders, TableJustification, ParagraphFormat, RenderParagraph, TableBlockResult } from './docFormat'
 
 /**
  * Cell delimiter used by Word 97-2003 binary format (.doc) inside table
@@ -8,6 +8,16 @@ import type { TableInfo, TableCellInfo, ParagraphFormat, RenderParagraph, TableB
  * full PAP/TAP structures.
  */
 const CELL_MARK = '\u0007'
+
+/** Count non-empty cells without allocating a filtered intermediate array. */
+function countNonEmptyCells(cells: string[]): number {
+  let count = 0
+  for (let i = 0; i < cells.length; i++) {
+    const cell = cells[i]
+    if (cell && cell.length > 0) count++
+  }
+  return count
+}
 
 /**
  * Split a paragraph into table cells.
@@ -68,19 +78,36 @@ export function renderTableHtml(rows: string[][], rowsTableInfo?: TableInfo[], h
   if (!rows || rows.length === 0) return ''
 
   const columnCount = rows.reduce((max, row) => Math.max(max, row.length), 0)
-  const hasCellInfo = rowsTableInfo && rowsTableInfo.length > 0 &&
-    rowsTableInfo.some(t => t && t.cells && t.cells.length > 0)
-  const hasTableBorders = rowsTableInfo?.some(t => t && t.borders)
-  const useDefaultBorders = !hasTableBorders
 
-  const tableBorders = rowsTableInfo?.find(t => t && t.borders)?.borders
-  const tableJustification = rowsTableInfo?.find(t => t && t.justification)?.justification
-  const tableIndent = rowsTableInfo?.find(t => t && t.indentTwips !== undefined)?.indentTwips
+  // Collect everything the table-level style needs in a single pass over
+  // rowsTableInfo. The previous implementation walked the array five times
+  // (two `some` + three `find`); the five selections are independent, so we
+  // keep first-match-wins semantics per field but scan the array only once.
+  let hasCellInfo = false
+  let hasTableBorders = false
+  let tableBorders: TableBorders | undefined
+  let tableJustification: TableJustification | undefined
+  let tableIndent: number | undefined
+  if (rowsTableInfo && rowsTableInfo.length > 0) {
+    for (let i = 0; i < rowsTableInfo.length; i++) {
+      const info = rowsTableInfo[i]
+      if (!info) continue
+      if (!hasCellInfo && info.cells && info.cells.length > 0) hasCellInfo = true
+      if (!hasTableBorders && info.borders) {
+        hasTableBorders = true
+        tableBorders = info.borders
+      }
+      if (tableJustification === undefined && info.justification) tableJustification = info.justification
+      if (tableIndent === undefined && info.indentTwips !== undefined) tableIndent = info.indentTwips
+      if (hasCellInfo && hasTableBorders && tableJustification !== undefined && tableIndent !== undefined) break
+    }
+  }
+  const useDefaultBorders = !hasTableBorders
   const tableStyle = buildTableBorderStyle(tableBorders, tableJustification, tableIndent, useDefaultBorders)
 
   const renderRow = (row: string[], info: TableInfo | undefined, isHeader: boolean, r: number) => {
     const cellsHtml: string[] = []
-    const nonEmptyCount = !hasCellInfo && isHeader ? row.filter(cell => cell && cell.length > 0).length : 0
+    const nonEmptyCount = !hasCellInfo && isHeader ? countNonEmptyCells(row) : 0
     const singleNonEmptyHeader = !hasCellInfo && isHeader && nonEmptyCount === 1
     let lastNonEmptyHeaderCell = -1
     if (!hasCellInfo && isHeader && nonEmptyCount < columnCount) {
@@ -423,7 +450,7 @@ export function collectTableBlock(paragraphs: RenderParagraph[], startIndex: num
         if (cells.length > 0 && cells[cells.length - 1] === '') {
           cells.pop()
         }
-        const nonEmptyCount = cells.filter(c => c.length > 0).length
+        const nonEmptyCount = countNonEmptyCells(cells)
         if (nonEmptyCount >= 1) {
           parsedRows.push(cells)
         }
@@ -474,11 +501,11 @@ export function collectTableBlock(paragraphs: RenderParagraph[], startIndex: num
   const columnCount = rows.reduce((max, row) => Math.max(max, row.length), 0)
   if (rows.length >= 2 && columnCount >= 2) {
     const firstRow = rows[0]
-    const firstRowNonEmpty = firstRow.filter(c => c && c.length > 0).length
+    const firstRowNonEmpty = countNonEmptyCells(firstRow)
     if (firstRowNonEmpty === 1 && firstRowNonEmpty < columnCount) {
       headerRowCount = 1
     } else if (firstRowNonEmpty > 0 && firstRowNonEmpty < columnCount) {
-      const secondRowNonEmpty = rows[1].filter(c => c && c.length > 0).length
+      const secondRowNonEmpty = countNonEmptyCells(rows[1])
       if (secondRowNonEmpty === columnCount) {
         headerRowCount = 1
       }

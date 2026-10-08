@@ -316,7 +316,7 @@ export function parsePicfAt(
 
   const picfEnd = fcPic + 4 + lcb
 
-  let imgStart = picfStart + PICF_HEADER_SIZE
+  const imgStart = picfStart + PICF_HEADER_SIZE
   let imgEnd = picfEnd
 
   let format: ImageFormat | 'unknown' = pictureTypeToFormat(type)

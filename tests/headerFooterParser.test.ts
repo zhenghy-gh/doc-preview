@@ -166,6 +166,21 @@ describe('headerFooterParser', () => {
       expect(result!.oddFooter!.images).toBeUndefined()
     })
 
+    it('should preserve image bytes across multiple conversion chunks', () => {
+      const data = Uint8Array.from({ length: 0x8001 }, (_, i) => i % 256)
+      const result = splitHeaderTextWithImages(
+        'HelloWorld',
+        split,
+        [makePic({ dataOffset: 1, data })],
+      )
+
+      let expectedBinary = ''
+      for (const byte of data) expectedBinary += String.fromCharCode(byte)
+      expect(result!.oddHeader!.images![0].dataUrl).toBe(
+        `data:image/png;base64,${btoa(expectedBinary)}`,
+      )
+    })
+
     it('should produce correct data URL mime types per format', () => {
       const pics = [
         makePic({ dataOffset: 1, format: 'jpeg' }),

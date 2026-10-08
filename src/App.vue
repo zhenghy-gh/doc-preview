@@ -1,14 +1,21 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref } from 'vue'
 import DocPreview from './components/DocPreview.vue'
-import { currentLocale, setLocale, t } from './utils/locale'
+import { useDarkMode } from './composables/useDarkMode'
+// I18N-SWEEP-T1②：文案消费统一收敛 useI18n()（COMPOSABLES-E 契约）。
+// setLocale 含 safeStorage 持久化 + locale.ts 单例顶层启动恢复，接线即得全链路。
+import { useI18n } from './composables/useI18n'
+import { safeStorage } from './utils/safeStorage'
+
+const { locale: currentLocale, setLocale, t } = useI18n()
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024 // 50MB limit
 
 const selectedFile = ref<File | null>(null)
 const urlInput = ref('')
 const previewSource = ref<File | string | null>(null)
-const errorMessage = ref('')
+const fileError = ref('')
+const urlError = ref('')
 const isDragOver = ref(false)
 
 const isValidFile = (file: File): boolean => {
@@ -23,9 +30,9 @@ const getFileExt = (file: File): string => {
 const formatErrorMessage = (file: File): string => {
   const ext = getFileExt(file)
   if (ext === 'docx') {
-    return '.docx 格式暂不支持。\n此工具为旧版 .doc (OLE2) 格式设计，\n.docx 文件需使用 Microsoft Word 或其他兼容工具打开。'
+    return t('app.upload.error.docx')
   }
-  return `不支持的文件格式 ".${ext}"，请选择 .doc 或 .dot 文件`
+  return t('app.upload.error.format', { ext })
 }
 
 const isValidFileSize = (file: File): boolean => {
@@ -38,26 +45,31 @@ const formatFileSize = (bytes: number): string => {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-const handleFileChange = (event: Event) => {
-  const target = event.target as HTMLInputElement
-  const files = target.files
-  if (!files || files.length === 0) return
-
-  const file = files[0]
-  errorMessage.value = ''
+const processFile = (file: File) => {
+  fileError.value = ''
+  urlError.value = ''
 
   if (!isValidFile(file)) {
-    errorMessage.value = formatErrorMessage(file)
-    return
+    fileError.value = formatErrorMessage(file)
+    return false
   }
 
   if (!isValidFileSize(file)) {
-    errorMessage.value = `文件过大 (${formatFileSize(file.size)})，最大支持 ${formatFileSize(MAX_FILE_SIZE)}`
-    return
+    fileError.value = t('app.upload.error.size', { size: formatFileSize(file.size), max: formatFileSize(MAX_FILE_SIZE) })
+    return false
   }
 
   selectedFile.value = file
   previewSource.value = file
+  return true
+}
+
+const handleFileChange = (event: Event) => {
+  const target = event.target as HTMLInputElement
+  const file = target.files?.[0]
+  if (file) processFile(file)
+  // 允许再次选择同一个文件，避免 change 事件因 value 未变化而不触发。
+  target.value = ''
 }
 
 const handleDrop = (event: DragEvent) => {
@@ -65,22 +77,7 @@ const handleDrop = (event: DragEvent) => {
   isDragOver.value = false
 
   const file = event.dataTransfer?.files?.[0]
-  if (!file) return
-
-  errorMessage.value = ''
-
-  if (!isValidFile(file)) {
-    errorMessage.value = formatErrorMessage(file)
-    return
-  }
-
-  if (!isValidFileSize(file)) {
-    errorMessage.value = `文件过大 (${formatFileSize(file.size)})，最大支持 ${formatFileSize(MAX_FILE_SIZE)}`
-    return
-  }
-
-  selectedFile.value = file
-  previewSource.value = file
+  if (file) processFile(file)
 }
 
 const handleDragOver = (event: DragEvent) => {
@@ -94,9 +91,24 @@ const handleDragLeave = () => {
 
 const loadFromUrl = () => {
   const url = urlInput.value.trim()
-  if (!url) return
-  errorMessage.value = ''
-  previewSource.value = url
+  urlError.value = ''
+  fileError.value = ''
+  if (!url) {
+    urlError.value = t('app.upload.url.empty')
+    return
+  }
+  let parsedUrl: URL
+  try {
+    parsedUrl = new URL(url)
+  } catch {
+    urlError.value = t('app.upload.url.invalid')
+    return
+  }
+  if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+    urlError.value = t('app.upload.url.invalid')
+    return
+  }
+  previewSource.value = parsedUrl.toString()
   selectedFile.value = null
 }
 
@@ -104,7 +116,8 @@ const resetFile = () => {
   selectedFile.value = null
   previewSource.value = null
   urlInput.value = ''
-  errorMessage.value = ''
+  fileError.value = ''
+  urlError.value = ''
 }
 
 // --- Reader mode ---
@@ -115,29 +128,18 @@ function toggleReaderMode() {
 }
 
 // --- Dark mode ---
-const darkMode = ref(localStorage.getItem('dark-mode') === 'true')
-
-function toggleDarkMode() {
-  darkMode.value = !darkMode.value
-  localStorage.setItem('dark-mode', String(darkMode.value))
-}
+// W1-C: 暗黑模式单一数据源 —— 状态/class 挂载/localStorage 持久化收敛到
+// composables/useDarkMode.ts（与 DocPreview.vue 共享同一 ref），本组件只消费。
+const { darkMode, toggleDarkMode } = useDarkMode()
 
 // --- Web Font ---
-const useWebFont = ref(localStorage.getItem('use-webfont') === 'true')
+const WEB_FONT_STORAGE_KEY = 'use-webfont'
+const useWebFont = ref(safeStorage.getItem(WEB_FONT_STORAGE_KEY) === 'true')
 
 function toggleWebFont() {
   useWebFont.value = !useWebFont.value
-  localStorage.setItem('use-webfont', String(useWebFont.value))
+  safeStorage.setItem(WEB_FONT_STORAGE_KEY, String(useWebFont.value))
 }
-
-// Sync dark class on mount and changes
-if (darkMode.value) {
-  document.documentElement.classList.add('dark')
-}
-
-watch(darkMode, (val) => {
-  document.documentElement.classList.toggle('dark', val)
-})
 </script>
 
 <template>
@@ -145,10 +147,10 @@ watch(darkMode, (val) => {
     <header class="header">
       <div class="header-top">
         <h1>{{ t('app.title') }}</h1>
-        <button class="theme-btn" @click="toggleDarkMode" :title="darkMode ? t('app.theme.light') : t('app.theme.dark')">
+        <button type="button" class="theme-btn" @click="toggleDarkMode" :title="darkMode ? t('app.theme.light') : t('app.theme.dark')" :aria-label="darkMode ? t('app.theme.light') : t('app.theme.dark')">
           {{ darkMode ? '☀️' : '🌙' }}
         </button>
-        <button class="theme-btn lang-switch" @click="setLocale(currentLocale === 'zh-CN' ? 'en' : 'zh-CN')" :title="t('app.lang.switch')">
+        <button type="button" class="theme-btn lang-switch" @click="setLocale(currentLocale === 'zh-CN' ? 'en' : 'zh-CN')" :title="t('app.lang.switch')" :aria-label="t('app.lang.switch')">
           {{ currentLocale === 'zh-CN' ? 'EN' : '中文' }}
         </button>
       </div>
@@ -164,20 +166,21 @@ watch(darkMode, (val) => {
           @dragover="handleDragOver"
           @dragleave="handleDragLeave"
         >
-          <div class="upload-icon">{{ isDragOver ? '📂' : '📄' }}</div>
+          <div class="upload-icon" aria-hidden="true">{{ isDragOver ? '📂' : '📄' }}</div>
           <h2>{{ isDragOver ? t('app.upload.area.title.drag') : t('app.upload.area.title') }}</h2>
-          <p>{{ t('app.upload.area.hint') }}</p>
+          <p id="upload-hint">{{ t('app.upload.area.hint') }}</p>
 
-          <div v-if="errorMessage" class="error-banner">
-            {{ errorMessage }}
+          <div v-if="fileError || urlError" id="upload-error" class="error-banner" role="alert" aria-live="assertive">
+            {{ fileError || urlError }}
           </div>
 
-          <label class="upload-btn">
+          <label class="upload-btn" :aria-label="t('app.upload.btn')">
             <input
               type="file"
               accept=".doc,.dot"
               @change="handleFileChange"
               class="file-input"
+              :aria-describedby="fileError ? 'upload-hint upload-error' : 'upload-hint'"
             />
             <span>{{ t('app.upload.btn') }}</span>
           </label>
@@ -186,13 +189,18 @@ watch(darkMode, (val) => {
             <div class="divider"><span>{{ t('app.upload.or') }}</span></div>
             <div class="url-input-row">
               <input
-                type="text"
+                type="url"
                 v-model="urlInput"
                 :placeholder="t('app.upload.url.placeholder')"
                 class="url-input"
+                autocomplete="url"
+                spellcheck="false"
+                :aria-label="t('app.upload.url.placeholder')"
+                :aria-invalid="Boolean(urlError)"
+                :aria-describedby="urlError ? 'upload-error' : undefined"
                 @keyup.enter="loadFromUrl"
               />
-              <button class="url-btn" @click="loadFromUrl">{{ t('app.upload.url.btn') }}</button>
+              <button class="url-btn" type="button" @click="loadFromUrl">{{ t('app.upload.url.btn') }}</button>
             </div>
           </div>
         </div>
@@ -203,17 +211,19 @@ watch(darkMode, (val) => {
           <span class="file-name">{{ typeof previewSource === 'string' ? previewSource.split('/').pop() : selectedFile?.name || t('app.title') }}</span>
           <div class="header-actions">
             <button
+              type="button"
               class="header-btn"
               @click="toggleWebFont"
               :class="{ active: useWebFont }"
               :title="useWebFont ? t('app.font.on') : t('app.font.off')"
+              :aria-label="useWebFont ? t('app.font.on') : t('app.font.off')"
             >
               🔤
             </button>
-            <button class="header-btn" @click="toggleReaderMode" :title="readerMode ? t('app.reader.on') : t('app.reader.off')">
+            <button type="button" class="header-btn" @click="toggleReaderMode" :title="readerMode ? t('app.reader.on') : t('app.reader.off')" :aria-label="readerMode ? t('app.reader.on') : t('app.reader.off')">
               {{ readerMode ? '⊟' : '⊞' }}
             </button>
-            <button class="back-btn" @click="resetFile">
+            <button type="button" class="back-btn" @click="resetFile">
               {{ t('app.back') }}
             </button>
           </div>
@@ -228,7 +238,7 @@ watch(darkMode, (val) => {
 .app-container {
   width: 100%;
   min-height: 100vh;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, var(--accent-gradient-from) 0%, var(--accent-gradient-to) 100%);
 }
 
 .header {
@@ -284,31 +294,31 @@ watch(darkMode, (val) => {
 }
 
 .upload-area {
-  background: white;
+  background: var(--bg-secondary);
   border-radius: 16px;
   padding: 60px 40px;
   text-align: center;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
-  border: 3px dashed #ddd;
+  box-shadow: var(--shadow);
+  border: 3px dashed var(--border-color);
   transition: all 0.3s ease;
 }
 
 .upload-area:hover {
-  border-color: #667eea;
+  border-color: var(--accent);
   box-shadow: 0 25px 70px rgba(0, 0, 0, 0.2);
 }
 
 .upload-area.drag-over {
-  border-color: #667eea;
-  background: #f0f4ff;
+  border-color: var(--accent);
+  background: var(--accent-light);
   box-shadow: 0 25px 70px rgba(102, 126, 234, 0.3);
   transform: scale(1.02);
 }
 
 .error-banner {
-  background: #fff0f0;
-  color: #d63031;
-  border: 1px solid #ffcccc;
+  background: var(--error-bg);
+  color: var(--error-text);
+  border: 1px solid var(--error-border);
   border-radius: 8px;
   padding: 10px 16px;
   margin: 16px auto;
@@ -324,12 +334,12 @@ watch(darkMode, (val) => {
 
 .upload-area h2 {
   font-size: 1.8rem;
-  color: #333;
+  color: var(--text-primary);
   margin-bottom: 10px;
 }
 
 .upload-area p {
-  color: #666;
+  color: var(--text-secondary);
   margin-bottom: 10px;
 }
 
@@ -339,8 +349,8 @@ watch(darkMode, (val) => {
 
 .tip {
   font-size: 0.9rem;
-  color: #888;
-  background: #f8f9fa;
+  color: var(--text-muted);
+  background: var(--bg-tertiary);
   padding: 8px 16px;
   border-radius: 20px;
 }
@@ -348,7 +358,7 @@ watch(darkMode, (val) => {
 .upload-btn {
   display: inline-block;
   padding: 14px 40px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, var(--accent-gradient-from) 0%, var(--accent-gradient-to) 100%);
   color: white;
   border-radius: 30px;
   font-size: 1.1rem;
@@ -363,7 +373,15 @@ watch(darkMode, (val) => {
 }
 
 .file-input {
-  display: none;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .url-section {
@@ -374,7 +392,7 @@ watch(darkMode, (val) => {
   display: flex;
   align-items: center;
   margin-bottom: 16px;
-  color: #999;
+  color: var(--text-muted);
   font-size: 0.85rem;
 }
 
@@ -382,7 +400,7 @@ watch(darkMode, (val) => {
 .divider::after {
   content: '';
   flex: 1;
-  border-top: 1px solid #e0e0e0;
+  border-top: 1px solid var(--border-color);
 }
 
 .divider span {
@@ -397,20 +415,22 @@ watch(darkMode, (val) => {
 .url-input {
   flex: 1;
   padding: 12px 16px;
-  border: 2px solid #e0e0e0;
+  border: 2px solid var(--border-color);
   border-radius: 8px;
   font-size: 0.95rem;
   outline: none;
   transition: border-color 0.2s;
+  background: var(--bg-primary);
+  color: var(--text-primary);
 }
 
 .url-input:focus {
-  border-color: #667eea;
+  border-color: var(--accent);
 }
 
 .url-btn {
   padding: 12px 24px;
-  background: #667eea;
+  background: var(--accent);
   color: white;
   border: none;
   border-radius: 8px;
@@ -421,11 +441,21 @@ watch(darkMode, (val) => {
 }
 
 .url-btn:hover {
-  background: #5a6fd6;
+  background: var(--accent-hover);
+}
+
+.url-btn:focus-visible,
+.url-input:focus-visible,
+.upload-btn:focus-within,
+.theme-btn:focus-visible,
+.header-btn:focus-visible,
+.back-btn:focus-visible {
+  outline: 3px solid var(--accent-light);
+  outline-offset: 2px;
 }
 
 .preview-header {
-  background: white;
+  background: var(--bg-secondary);
   border-radius: 16px 16px 0 0;
   padding: 20px 30px;
   display: flex;
@@ -437,7 +467,7 @@ watch(darkMode, (val) => {
 .file-name {
   font-size: 1.1rem;
   font-weight: 600;
-  color: #333;
+  color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -446,7 +476,7 @@ watch(darkMode, (val) => {
 
 .back-btn {
   padding: 8px 20px;
-  background: #f0f0f0;
+  background: var(--bg-tertiary);
   border: none;
   border-radius: 8px;
   font-size: 0.95rem;
@@ -455,7 +485,7 @@ watch(darkMode, (val) => {
 }
 
 .back-btn:hover {
-  background: #e0e0e0;
+  background: var(--border-color);
 }
 
 .header-actions {
@@ -466,7 +496,7 @@ watch(darkMode, (val) => {
 
 .header-btn {
   padding: 8px 14px;
-  background: #f0f0f0;
+  background: var(--bg-tertiary);
   border: none;
   border-radius: 8px;
   font-size: 1.1rem;
@@ -476,11 +506,11 @@ watch(darkMode, (val) => {
 }
 
 .header-btn:hover {
-  background: #e0e0e0;
+  background: var(--border-color);
 }
 
 .header-btn.active {
-  background: #667eea;
+  background: var(--accent);
   color: white;
 }
 

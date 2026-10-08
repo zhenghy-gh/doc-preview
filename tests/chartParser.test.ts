@@ -270,6 +270,14 @@ describe('chartParser', () => {
       expect(charts.length).toBe(0)
     })
 
+    it('should skip large streams without complete magic patterns', () => {
+      const data = new Uint8Array(12000).fill(0xAB)
+      data.set([0xD0, 0xCF, 0x11, 0x00], 100)
+      data.set([0x50, 0x4B, 0x03, 0x00], 5000)
+
+      expect(extractChartsFromWordDocumentStream(data)).toEqual([])
+    })
+
     it('should extract an embedded OLE object larger than 500 bytes', () => {
       // OLE magic at 0, non-zero payload until a 4-byte zero run
       const data = new Uint8Array(700)

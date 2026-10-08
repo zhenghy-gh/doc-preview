@@ -15,7 +15,6 @@ export interface OleHeader {
   difatSectorsCount: number
   firstDifatSector: number
   difat: number[]
-  [key: string]: any
 }
 
 export interface DirectoryEntry {
@@ -48,6 +47,7 @@ export class OleParser {
   private _fat: number[] | null = null
   private _miniFat: number[] | null = null
   private _directory: DirectoryEntry[] | null = null
+  private _rootMiniStream: StreamData | null = null
 
   constructor(buffer: ArrayBuffer) {
     this.buffer = buffer
@@ -60,6 +60,7 @@ export class OleParser {
     this._fat = null
     this._miniFat = null
     this._directory = null
+    this._rootMiniStream = null
   }
 
   // ---- Safe readers ----
@@ -405,7 +406,11 @@ export class OleParser {
       const miniFat = this.getMiniFatSectors(header, fat)
       const rootEntry = this.findRootEntry(header, fat)
       if (rootEntry) {
-        const rootStream = this.readRegularStream(rootEntry, header, fat)
+        let rootStream = this._rootMiniStream
+        if (!rootStream) {
+          rootStream = this.readRegularStream(rootEntry, header, fat)
+          if (rootStream.size > 0 && rootStream.size === rootEntry.size) this._rootMiniStream = rootStream
+        }
         if (rootStream.size > 0) {
           const miniStream = this.readMiniStream(entry, rootStream.data, miniFat, header)
           if (miniStream.size > 0) {

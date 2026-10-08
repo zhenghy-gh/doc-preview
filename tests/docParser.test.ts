@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { DocParser, parseDocFileFromBuffer, parseDocFileWithFormat, parseDocFile } from '../src/utils/docParser'
-import { parseFib } from '../src/utils/fibParser'
 
 describe('DocParser', () => {
   describe('parseDocFileFromBuffer', () => {
@@ -254,6 +253,23 @@ describe('DocParser', () => {
       ])
       const result = (parser as any).extractTextFromRange(data, 0, data.length, false)
       expect(result).toBe('A\u0007B\u0007\n')
+    })
+
+    it('should decode CP1252 Latin-1 range accents (0xA0-0xFF) in compressed text', () => {
+      const parser = new DocParser(new ArrayBuffer(512))
+      // "Nüshu" (ü = 0xFC) + "György" (ö = 0xF6) — regression guard for the
+      // piece-table path silently dropping unmapped high bytes
+      const data = new Uint8Array([0x4E, 0xFC, 0x73, 0x68, 0x75, 0x0D, 0x47, 0x79, 0xF6, 0x72, 0x67, 0x79])
+      const result = (parser as any).extractTextFromRange(data, 0, data.length, true)
+      expect(result).toBe('Nüshu\nGyörgy')
+    })
+
+    it('should apply Windows-1252 special mappings before Latin-1 fallback', () => {
+      const parser = new DocParser(new ArrayBuffer(512))
+      // 0x93 → “ (U+201C), 0xE9 → é (Latin-1直通), 0x81 → CP1252 未定义，仍丢弃
+      const data = new Uint8Array([0x93, 0x61, 0x94, 0xE9, 0x81, 0x62])
+      const result = (parser as any).extractTextFromRange(data, 0, data.length, true)
+      expect(result).toBe('\u201Ca\u201Déb')
     })
 
     it('should truncate compressed text at a binary signature', () => {
@@ -965,7 +981,6 @@ describe('fallback text paths', () => {
     const SECTOR = 512
     const buf = new ArrayBuffer(SECTOR * 4)
     const view = new Uint8Array(buf)
-    const w16 = (off: number, v: number) => { view[off] = v & 0xff; view[off + 1] = (v >> 8) & 0xff }
     const w32 = (off: number, v: number) => {
       view[off] = v & 0xff; view[off + 1] = (v >> 8) & 0xff
       view[off + 2] = (v >> 16) & 0xff; view[off + 3] = (v >> 24) & 0xff
@@ -1176,7 +1191,7 @@ describe('parseWithFormat field assembly', () => {
    * text directly (no control chars), so instruction extraction from the
    * raw stream and result slicing from the extracted text stay aligned.
    */
-  function buildOleWithFields(): ArrayBuffer {
+  function buildOleWithFields(withChart = true): ArrayBuffer {
     const SECTOR = 512
     const buf = new ArrayBuffer(SECTOR * 10)
     const view = new Uint8Array(buf)
@@ -1214,7 +1229,7 @@ describe('parseWithFormat field assembly', () => {
     writeDir(dirBase + 0 * 128, 'Root Entry', 5, END, 0)
     writeDir(dirBase + 1 * 128, 'WordDocument', 2, 2, 1536)
     writeDir(dirBase + 2 * 128, '0Table', 2, 5, 512)
-    writeDir(dirBase + 3 * 128, 'MSGraph.Chart.8', 1, END, 0)
+    if (withChart) writeDir(dirBase + 3 * 128, 'MSGraph.Chart.8', 1, END, 0)
     // Directory chain continues at sector 6 (physical 3584)
     const dirBase2 = SECTOR * 7
     writeDir(dirBase2 + 0 * 128, 'WordArt.1', 1, END, 0)
@@ -1315,7 +1330,7 @@ describe('parseWithFormat field assembly', () => {
     w32(wdBase + art + 8 + 32, 400) // height
     // Equation magic + UTF-16LE formula text
     const eqMagic = [0xEF, 0xBF, 0xBD, 0xEF, 0xBF, 0xBD]
-    let eq = art + spSize
+    const eq = art + spSize
     eqMagic.forEach((b, i) => { view[wdBase + eq + i] = b })
     const eqn = '\\alpha'
     for (let i = 0; i < eqn.length; i++) w16(wdBase + eq + 6 + i * 2, eqn.charCodeAt(i))
@@ -1598,7 +1613,7 @@ describe('libwv fallback mode', () => {
     w16(wdBase + textStreamOffset + text.length * 2, 0x0D)
     // A tiny JPEG right after the text so extractPictures finds it by
     // scanning the WordDocument stream (libwv embeds images inline).
-    let jpeg = wdBase + textStreamOffset + (text.length + 1) * 2
+    const jpeg = wdBase + textStreamOffset + (text.length + 1) * 2
     const jpegBytes: number[] = [0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10]
     for (let i = 0; i < 16; i++) jpegBytes.push(0x11)
     jpegBytes.push(0xFF, 0xD9)
@@ -1784,7 +1799,7 @@ describe('CLX-unreachable fallback paths', () => {
    *  detectEncodingFromBinary are inconclusive and the scoring fallback
    *  decides the encoding. lcbClx points at a zeroed Pcdt (no pieces) while
    *  ccpText stays >0 to skip the libwv gate. */
-  function buildScoringNullOle(): ArrayBuffer {
+  function buildScoringNullOle(opts: { ccpText?: number; complex?: boolean; withChart?: boolean; utf16Text?: boolean } = {}): ArrayBuffer {
     const SECTOR = 512
     // Layout: sector 0=FAT, 1=directory, 2..17 = WordDocument (8192 bytes)
     const buf = new ArrayBuffer(SECTOR * 20)
@@ -1824,7 +1839,7 @@ describe('CLX-unreachable fallback paths', () => {
     writeDir(dirBase + 0 * 128, 'Root Entry', 5, END, 0)
     writeDir(dirBase + 1 * 128, 'WordDocument', 2, 2, 8192)
     writeDir(dirBase + 2 * 128, '0Table', 2, 18, 16)
-    writeDir(dirBase + 3 * 128, 'MSGraph.Chart.8', 1, END, 0)
+    if (opts.withChart !== false) writeDir(dirBase + 3 * 128, 'MSGraph.Chart.8', 1, END, 0)
     // FIB at stream offset 0
     const wdBase = SECTOR * 3
     w16(0 + wdBase, 0xA5EC)
@@ -1832,7 +1847,8 @@ describe('CLX-unreachable fallback paths', () => {
     w16(10 + wdBase, 0)
     w16(32 + wdBase, 0)
     w16(34 + wdBase, 22)
-    w32(36 + 12 + wdBase, 300) // ccpText > 0 (libwv gate needs lcbClx==0)
+    const ccpText = opts.ccpText ?? 300
+    w32(36 + 12 + wdBase, ccpText) // >0 keeps scoring's textEnd bound active
     w16(124 + wdBase, 34)
     // CLX pair pointing at 'A' filler inside WordDocument ([500,510)):
     // clxt != 2 -> no pieces, while lcbClx > 0 skips the libwv gate.
@@ -1842,12 +1858,25 @@ describe('CLX-unreachable fallback paths', () => {
     // strictly no 0x0D so both encoding heuristics stay inconclusive.
     // The first 600 bytes also get periodic spaces so the 8-bit decode wins
     // the scoring step with multiple dictionary-ish words.
-    view[wdBase + 10] = 0x04 // fComplex (byte10 bit2) -> suggestedComplex
-    for (let i = 2048; i < 8192; i++) {
-      const rel = i - 2048
-      if (rel % 15 === 14) view[wdBase + i] = 0x00
-      else if (rel < 600 && rel % 8 === 7) view[wdBase + i] = 0x20
-      else view[wdBase + i] = 0x41
+    view[wdBase + 10] = opts.complex === false ? 0x00 : 0x04 // fComplex -> suggestedComplex
+    if (opts.utf16Text) {
+      // Real ASCII prose stored as UTF-16LE in the ccpText-bounded region
+      // [2048, 2648): the 16-bit decode yields dictionary words and scores
+      // high, while the 8-bit decode breaks every word with NUL bytes and
+      // scores low — so the flipped suggestedComplex=false comparison arm
+      // selects raw16. Still no 0x0D anywhere, keeping both heuristics
+      // in detectEncodingFromBinary inconclusive.
+      const sentence = 'The quick brown fox jumps over the lazy dog. '
+      for (let i = 0; i < 600; i += 2) {
+        view[wdBase + 2048 + i] = sentence.charCodeAt((i / 2) % sentence.length)
+      }
+    } else {
+      for (let i = 2048; i < 8192; i++) {
+        const rel = i - 2048
+        if (rel % 15 === 14) view[wdBase + i] = 0x00
+        else if (rel < 600 && rel % 8 === 7) view[wdBase + i] = 0x20
+        else view[wdBase + i] = 0x41
+      }
     }
     return buf
   }
@@ -1861,6 +1890,29 @@ describe('CLX-unreachable fallback paths', () => {
     // MSGraph storage keeps tryParseFormatsFromTableStream non-null, so the
     // scored paragraphs flow through applyParsedStylesToParagraphs.
     expect(result.document.charts.length).toBe(1)
+  })
+
+  it('scoring fallback scans unbounded when ccpText is absent', () => {
+    // ccpText=0 leaves textEnd undefined; extraction runs to the stream end.
+    const parser = new DocParser(buildScoringNullOle({ ccpText: 0 }))
+    const result = parser.parseWithFormat()
+    expect(result.success).toBe(true)
+    expect((result.document.paragraphs as Array<{ text: string }>).length).toBeGreaterThan(0)
+  })
+
+  it('scoring fallback can pick UTF-16 and return without format data', () => {
+    // fComplex=false flips the useComplex comparison arm; the utf16Text
+    // fixture makes the 16-bit decode outscore the NUL-broken 8-bit decode
+    // so raw16 wins. Dropping the MSGraph storage leaves no charts so the
+    // plain paragraph-only result is returned.
+    const parser = new DocParser(buildScoringNullOle({ complex: false, withChart: false, utf16Text: true }))
+    const result = parser.parseWithFormat()
+    expect(result.success).toBe(true)
+    const paras = result.document.paragraphs as Array<{ text: string }>
+    expect(paras.length).toBeGreaterThan(0)
+    // The sentence text proves raw16 (not the NUL-broken raw8) was selected.
+    expect(paras.map(p => p.text).join('')).toContain('quick brown fox')
+    expect(result.document.charts?.length ?? 0).toBe(0)
   })
 
 })

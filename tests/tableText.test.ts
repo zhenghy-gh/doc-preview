@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { isTableRowText, isWordTableRow, renderTableHtml, renderNestedTableHtml, splitTableCells } from '../src/utils/tableText'
+import { isTableRowText, isWordTableRow, renderTableHtml, renderNestedTableHtml, splitTableCells, collectTableBlock } from '../src/utils/tableText'
+import type { RenderParagraph, TableInfo, TableCellInfo } from '../src/utils/docFormat'
 
 describe('tableText', () => {
   it('should split tab-delimited rows into cells', () => {
@@ -111,6 +112,20 @@ describe('tableText', () => {
       expect(html).toContain('Child2')
     })
 
+    it('renders multiple sibling nested tables in a single pass', () => {
+      const html = renderNestedTableHtml(
+        [['Parent A'], ['Child A'], ['Parent B'], ['Child B']],
+        undefined,
+        [1, 2, 1, 2],
+      )
+      expect((html.match(/<table/g) || []).length).toBe(3)
+      expect(html).toContain('Parent A')
+      expect(html).toContain('Child A')
+      expect(html).toContain('Parent B')
+      expect(html).toContain('Child B')
+      expect(html).not.toContain('NESTED_')
+    })
+
     it('should handle three levels of nesting', () => {
       const html = renderNestedTableHtml(
         [
@@ -198,6 +213,41 @@ describe('tableText', () => {
       const html = renderTableHtml([['A', 'B']], undefined, 2)
       expect(html).not.toContain('<thead>')
       expect(html).toContain('<tbody>')
+    })
+
+    it('should read borders, justification and indent from different rows, first match each', () => {
+      // 单次遍历重构的契约：三个表格级属性各自独立取“首个匹配行”，
+      // 可以来自不同行，且后面的行不会覆盖先命中的值。
+      const rowsInfo: TableInfo[] = [
+        { inTable: true },
+        {
+          inTable: true,
+          borders: {
+            top: { borderType: 1, lineWidth: 8, colorIndex: 1 },
+            insideH: { borderType: 1, lineWidth: 8, colorIndex: 1 },
+          },
+        },
+        { inTable: true, justification: 'center' },
+        { inTable: true, indentTwips: 300 },
+      ]
+      const html = renderTableHtml([['A'], ['B'], ['C'], ['D']], rowsInfo)
+      // borders 来自第 2 行 → collapse + 顶部实线
+      expect(html).toContain('border-collapse:collapse')
+      expect(html).toContain('border-top:1px solid #000000')
+      // justification 来自第 3 行；center 优先于第 4 行的 indent
+      expect(html).toContain('margin-left:auto')
+      expect(html).toContain('margin-right:auto')
+      expect(html).not.toContain('margin-left:20px')
+    })
+
+    it('should keep the first matching row when several rows declare borders', () => {
+      const rowsInfo: TableInfo[] = [
+        { inTable: true, borders: { top: { borderType: 3, lineWidth: 8, colorIndex: 6 } } },
+        { inTable: true, borders: { top: { borderType: 1, lineWidth: 8, colorIndex: 1 } } },
+      ]
+      const html = renderTableHtml([['A'], ['B']], rowsInfo)
+      expect(html).toContain('border-top:1px dashed #FF0000')
+      expect(html).not.toContain('#000000')
     })
 
     it('should apply table borders and collapse when inside borders exist', () => {
@@ -295,6 +345,19 @@ describe('tableText', () => {
       expect(tdCount).toBe(1)
     })
 
+    it('keeps rowspan spans bounded by the next non-continue row', () => {
+      const rowsInfo: any[] = [
+        { inTable: true, cells: [{ verticalMerge: 'restart' }] },
+        { inTable: true, cells: [{ verticalMerge: 'continue' }] },
+        { inTable: true, cells: [{ verticalMerge: 'continue' }] },
+        { inTable: true, cells: [{ verticalMerge: 'restart' }] },
+        { inTable: true, cells: [{ verticalMerge: 'continue' }] },
+      ]
+      const html = renderTableHtml([['A'], ['B'], ['C'], ['D'], ['E']], rowsInfo)
+      expect((html.match(/rowspan="3"/g) || [])).toHaveLength(1)
+      expect((html.match(/rowspan="2"/g) || [])).toHaveLength(1)
+    })
+
     it('should stop rowspan count at a non-continue cell', () => {
       const rowsInfo: any[] = [
         { inTable: true, cells: [{ verticalMerge: 'restart' }, {}] },
@@ -333,6 +396,12 @@ describe('tableText uncovered branches', () => {
     const html = renderTableHtml([['A', 'B', ''], ['X', 'Y', 'Z']], undefined, 1)
     expect(html).toContain('<thead>')
     // Last non-empty header cell gets colspan to fill the row
+    expect(html).toMatch(/<th colspan="2"[^>]*>B<\/th>/)
+  })
+
+  it('does not extend sparse header cells before the last populated column', () => {
+    const html = renderTableHtml([['A', '', 'B', ''], ['W', 'X', 'Y', 'Z']], undefined, 1)
+    expect(html).toMatch(/<th[^>]*>A<\/th>/)
     expect(html).toMatch(/<th colspan="2"[^>]*>B<\/th>/)
   })
 
@@ -452,5 +521,116 @@ describe('tableText border rendering branches', () => {
 
   it('returns empty when every nested row is deeper than the top depth', () => {
     expect(renderNestedTableHtml([['a'], ['b']], undefined, [2, 3])).toBe('')
+  })
+
+  // ---- collectTableBlock（contract-split-r1 §3.2 最小用例面：合并单元格数据通路）----
+
+  describe('collectTableBlock', () => {
+    /** 构造渲染层段落视图夹具（CharacterFormat/ParagraphFormat 字段全可选） */
+    const rp = (text: string, table?: TableInfo): RenderParagraph => ({
+      text,
+      charFormat: {},
+      paraFormat: table ? { table } : {},
+    })
+
+    const cell = (column: number, extra: Partial<TableCellInfo> = {}): TableCellInfo =>
+      ({ column, verticalMerge: 'none', ...extra })
+
+    it('collects consecutive Word-mark rows and stops at the first non-row paragraph', () => {
+      const paragraphs = [
+        rp('Name\u0007Age\u0007'),
+        rp('Alice\u000730\u0007'),
+        rp('Plain paragraph, not a row.'),
+      ]
+      const result = collectTableBlock(paragraphs, 0)
+      expect(result).not.toBeNull()
+      expect(result!.rows).toEqual([['Name', 'Age'], ['Alice', '30']])
+      expect(result!.headerRowCount).toBe(0)
+      expect(result!.nextIndex).toBe(2)
+      expect(result!.rowsDepth).toEqual([1, 1])
+      // 无任何真实 TableInfo → rowsTableInfo 为 undefined（原样语义）
+      expect(result!.rowsTableInfo).toBeUndefined()
+    })
+
+    it('splits one paragraph containing multiple rows via double cell marks and pads short rows', () => {
+      // 'r1c1\u0007r1c2\u0007\u0007r2only\u0007' → 两行；短行按段内最大列数补齐空串
+      const result = collectTableBlock([
+        rp('r1c1\u0007r1c2\u0007\u0007r2only\u0007'),
+        rp('after table'),
+      ], 0)!
+      expect(result.rows).toEqual([
+        ['r1c1', 'r1c2'],
+        ['r2only', ''],
+      ])
+      expect(result.nextIndex).toBe(1)
+      expect(result.headerRowCount).toBe(0)
+    })
+
+    it('carries TableInfo with merged cells through (colspan/rowspan source data)', () => {
+      const firstRowInfo: TableInfo = {
+        inTable: true,
+        depth: 1,
+        cells: [
+          cell(0, { verticalMerge: 'restart' }),            // rowspan 起点
+          cell(1, { horizontalMerge: 'restart' }),           // colspan 起点
+          cell(2),
+        ],
+      }
+      const secondRowInfo: TableInfo = {
+        inTable: true,
+        depth: 1,
+        cells: [
+          cell(0, { verticalMerge: 'continue' }),            // 被 rowspan 覆盖
+          cell(1, { horizontalMerge: 'continue' }),           // 被 colspan 覆盖
+          cell(2),
+        ],
+      }
+      const result = collectTableBlock([
+        rp('Span\u0007Wide\u0007C\u0007', firstRowInfo),
+        rp('v\u0007w\u0007x\u0007', secondRowInfo),
+      ], 0)!
+
+      expect(result.rowsTableInfo).toBeDefined()
+      expect(result.rowsTableInfo).toHaveLength(2)
+      // 合并信息原样透传给下游 renderNestedTableHtml/renderTableHtml
+      expect(result.rowsTableInfo![0]).toEqual(firstRowInfo)
+      expect(result.rowsTableInfo![1]).toEqual(secondRowInfo)
+      expect(result.rowsDepth).toEqual([1, 1])
+    })
+
+    it('aligns placeholder info with real TableInfo by row index', () => {
+      const realInfo: TableInfo = { inTable: true, depth: 2 }
+      const result = collectTableBlock([
+        rp('no\u0007info\u0007'),                            // 无属性 → 占位
+        rp('deep\u0007row\u0007', realInfo),                 // 真实属性 depth=2
+      ], 0)!
+      expect(result.rowsTableInfo).toEqual([{ inTable: true }, realInfo])
+      expect(result.rowsDepth).toEqual([1, 2])
+    })
+
+    it('detects a header when the first row has a single non-empty cell (heuristic A)', () => {
+      // 单段落内两行：'Title\u0007\u0007A\u0007B\u0007' → [['Title',''],['A','B']]
+      const result = collectTableBlock([rp('Title\u0007\u0007A\u0007B\u0007')], 0)!
+      expect(result.rows).toEqual([['Title', ''], ['A', 'B']])
+      expect(result.headerRowCount).toBe(1)
+    })
+
+    it('detects a header when the first row is partial and the second row is full (heuristic B)', () => {
+      // 单段落两行：'A\u0007B\u0007\u0007C\u0007D\u0007E\u0007'
+      // → [['A','B',''], ['C','D','E']]：首行非空=2 ∈ (0,3) 且第二行非空=3=列数 → 表头
+      const result = collectTableBlock([rp('A\u0007B\u0007\u0007C\u0007D\u0007E\u0007')], 0)!
+      expect(result.rows).toEqual([
+        ['A', 'B', ''],
+        ['C', 'D', 'E'],
+      ])
+      expect(result.headerRowCount).toBe(1)
+      expect(result.nextIndex).toBe(1)
+    })
+
+    it('returns null when the start paragraph is not a table row or start is out of range', () => {
+      expect(collectTableBlock([rp('plain text only')], 0)).toBeNull()
+      expect(collectTableBlock([rp('Name\u0007Age\u0007')], 5)).toBeNull()
+      expect(collectTableBlock([], 0)).toBeNull()
+    })
   })
 })

@@ -207,7 +207,7 @@ describe('fieldParser', () => {
       writeUtf16le(textBytes, 2, 'CREATEDATE')
       writeUtf16le(textBytes, 24, '2024-01-01')
       writeUtf16le(textBytes, 48, 'LASTSAVEDATE')
-      writeUtf16le(textBytes, 72, '2024-06-15')
+      writeUtf16le(textBytes, 74, '2024-06-15') // resultStart cp=37 → 字节 74
       const result = extractDocumentFields(fldEntries, text, textBytes)
       expect(result.createDate).toBe('2024-01-01')
       expect(result.lastSavedDate).toBe('2024-06-15')
@@ -222,7 +222,7 @@ describe('fieldParser', () => {
       ]
       const textBytes = new Uint8Array(30)
       writeUtf16le(textBytes, 2, 'REVNUM')
-      writeUtf16le(textBytes, 14, '5')
+      writeUtf16le(textBytes, 16, '5') // resultStart cp=8 → 字节 16
       const result = extractDocumentFields(fldEntries, text, textBytes)
       expect(result.revisionNumber).toBe('5')
     })
@@ -259,7 +259,7 @@ describe('fieldParser', () => {
       writeUtf16le(textBytes, 40, 'TITLE')
       writeUtf16le(textBytes, 52, 'Project Proposal')
       writeUtf16le(textBytes, 86, 'REVNUM')
-      writeUtf16le(textBytes, 98, '3')
+      writeUtf16le(textBytes, 102, '3') // resultStart cp=51 → 字节 102
       const result = extractDocumentFields(fldEntries, text, textBytes)
       expect(result.author).toBe('Jane Smith')
       expect(result.title).toBe('Project Proposal')
@@ -354,7 +354,7 @@ describe('fieldParser', () => {
       ]
       const textBytes = new Uint8Array(50)
       writeUtf16le(textBytes, 2, instr)
-      writeUtf16le(textBytes, (instr.length + 1) * 2, '7')
+      writeUtf16le(textBytes, (instr.length + 2) * 2, '7') // resultStart cp=21 → 字节 42
       const result = extractPageFields(fldEntries, text, textBytes)
       expect(result.length).toBe(1)
       expect(result[0].type).toBe('page')
@@ -393,7 +393,7 @@ describe('fieldParser', () => {
       writeUtf16le(textBytes, 2, 'PAGE')           // cp=1
       writeUtf16le(textBytes, 12, '1')             // cp=6
       writeUtf16le(textBytes, 18, 'NUMPAGES')      // cp=9
-      writeUtf16le(textBytes, 38, '10')            // cp=19 (start of "10")
+      writeUtf16le(textBytes, 36, '10')            // NUMPAGES resultStart cp=18 → 字节 36
       // text passed to extractPageFields: result is sliced from text, not textBytes
       // PAGE result at cp 6-7 = "1", NUMPAGES result at cp 18-20 = "10"
       // Build a text string that matches: chars 0-20
@@ -467,7 +467,7 @@ describe('fieldParser', () => {
       ]
       const textBytes = new Uint8Array(40)
       writeUtf16le(textBytes, 2, instr)
-      writeUtf16le(textBytes, (instr.length + 1) * 2, '1')
+      writeUtf16le(textBytes, (instr.length + 2) * 2, '1') // resultStart cp=13 → 字节 26
       const result = extractCrossReferences(fldEntries, text, textBytes)
       expect(result.length).toBe(1)
       expect(result[0].type).toBe('ref')
@@ -487,7 +487,7 @@ describe('fieldParser', () => {
       ]
       const textBytes = new Uint8Array(50)
       writeUtf16le(textBytes, 2, instr)
-      writeUtf16le(textBytes, (instr.length + 1) * 2, '1')
+      writeUtf16le(textBytes, (instr.length + 2) * 2, '1') // resultStart cp=20 → 字节 40
       const result = extractCrossReferences(fldEntries, text, textBytes)
       expect(result.length).toBe(1)
       expect(result[0].type).toBe('noteref')
@@ -798,7 +798,7 @@ Banana`
       ]
       const textBytes = new Uint8Array(60)
       writeUtf16le(textBytes, 2, instr)
-      writeUtf16le(textBytes, (instr.length + 1) * 2, resultText)
+      writeUtf16le(textBytes, (instr.length + 2) * 2, resultText) // resultStart cp=7 → 字节 14
       const fields = extractAllFields(fldEntries, text, textBytes)
       expect(fields).toHaveLength(1)
       expect(fields[0].flt).toBe(14)
@@ -887,6 +887,12 @@ describe('fieldParser uncovered branches', () => {
     writeUtf16le(textBytes, 58, 'COMMENTS')
     writeUtf16le(textBytes, 86, 'LASTSAVEDBY')
     writeUtf16le(textBytes, 120, 'PRINTEDATE')
+    // result 字节同样按 cp×2 轴写入（resultStart = sep.cp + 1）：
+    writeUtf16le(textBytes, 9 * 2, 'Subj')
+    writeUtf16le(textBytes, 24 * 2, 'Key')
+    writeUtf16le(textBytes, 38 * 2, 'Com')
+    writeUtf16le(textBytes, 55 * 2, 'LSB')
+    writeUtf16le(textBytes, 71 * 2, 'PD')
     const result = extractDocumentFields(fldEntries, text, textBytes)
     expect(result.subject).toBe('Subj')
     expect(result.keywords).toBe('Key')

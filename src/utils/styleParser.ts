@@ -525,7 +525,7 @@ function parseLegacyStylesheet(data: Uint8Array, fc: number, lcb: number): Style
           const cupx = data[scanPos]
           if (cupx !== 1) continue
 
-          let upxPos = scanPos + 1
+          const upxPos = scanPos + 1
           const upxEnd = stdEnd
 
           // CHPX UPX: cb (2) + grpprl

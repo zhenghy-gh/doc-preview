@@ -27,6 +27,10 @@
   --error-text: #d63031;
   --highlight: #ffeb3b;
   --highlight-current: #f44336;
+  /* W1-C (ui-kit-dev): App.vue 暗黑接入必要新增 —— 品牌渐变两端与强调悬停档 */
+  --accent-gradient-from: #667eea;
+  --accent-gradient-to: #764ba2;
+  --accent-hover: #5a6fd6;
 }
 
 .dark {
@@ -52,6 +56,10 @@
   --error-text: #e06060;
   --highlight: #8a7a20;
   --highlight-current: #a03030;
+  /* W1-C: 与浅色档同名对应，压暗品牌色相以贴合海军蓝 ramp */
+  --accent-gradient-from: #2a3a6e;
+  --accent-gradient-to: #3a2a5e;
+  --accent-hover: #8c9af4;
 }
 
 body {

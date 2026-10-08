@@ -310,15 +310,23 @@ export function imageFormatMime(format: ImageFormat): string {
 }
 
 /** Convert extracted images to data URLs for inline rendering. */
+/**
+ * PERF-T2：共享快速 base64 dataUrl 编码。
+ *
+ * 直接对 Uint8Array 子块做 String.fromCharCode.apply（免去 Array.from 的
+ * 32k 元素数字数组中转），兆级嵌入图的编码耗时下降一个数量级；
+ * docParser 的 pictures 编码路径复用本函数，消除逐字符拼接副本。
+ */
+export function bytesToBase64DataUrl(bytes: Uint8Array, format: ImageFormat): string {
+  let binary = ''
+  const chunkSize = 0x8000
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const slice = bytes.subarray(i, Math.min(i + chunkSize, bytes.length))
+    binary += String.fromCharCode.apply(null, slice as unknown as number[])
+  }
+  return `data:${imageFormatMime(format)};base64,${btoa(binary)}`
+}
+
 export function imagesToDataUrls(images: ExtractedImage[]): string[] {
-  return images.map(img => {
-    let binary = ''
-    const bytes = img.data
-    const chunkSize = 0x8000
-    for (let i = 0; i < bytes.length; i += chunkSize) {
-      const slice = bytes.subarray(i, Math.min(i + chunkSize, bytes.length))
-      binary += String.fromCharCode.apply(null, Array.from(slice) as unknown as number[])
-    }
-    return `data:${imageFormatMime(img.format)};base64,${btoa(binary)}`
-  })
+  return images.map(img => bytesToBase64DataUrl(img.data, img.format))
 }

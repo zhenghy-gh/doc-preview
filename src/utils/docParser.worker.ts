@@ -1,17 +1,15 @@
 import { DocParser } from './docParser'
 import type { ProgressCallback, ParseProgressStage } from './docParser'
+import type { ParseResult } from './docFormat'
 
 export interface WorkerParseRequest {
   buffer: ArrayBuffer
   maxScanBytes?: number
 }
 
-export interface WorkerParseResultMessage {
+/** 结果消息负载与主线程 ParseResult 同形（TD-1a 收敛，消息协议形状不变）。 */
+export interface WorkerParseResultMessage extends ParseResult {
   type: 'result'
-  success: boolean
-  document?: any
-  text?: string
-  error?: string
 }
 
 export interface WorkerParseProgressMessage {

@@ -761,6 +761,7 @@ describe('OleParser', () => {
       const dirOffset = sectorSize * 3
       writeDirectoryEntry(view, dirOffset, 'Root Entry', 5, 4, 128)
       writeDirectoryEntry(view, dirOffset + 128, 'WordDocument', 2, 0, 70)
+      writeDirectoryEntry(view, dirOffset + 256, 'SmallStream', 2, 1, 4)
 
       const miniFatOffset = sectorSize * 4
       // mini-sector 0 -> 1 -> end of chain
@@ -778,12 +779,24 @@ describe('OleParser', () => {
       const header = parser.parseHeader()
       const fat = parser.getFatSectors(header)
       const dirs = parser.getDirectorySectors(header, fat)
+      const readRegularStream = vi.spyOn(parser as any, 'readRegularStream')
       const stream = parser.findWordDocumentStream(dirs)
 
       expect(stream).not.toBeNull()
       expect(stream?.size).toBe(70)
       expect(new TextDecoder('latin1').decode(stream!.data.slice(0, 5))).toBe('Hello')
       expect(stream?.data[69]).toBe('x'.charCodeAt(0))
+
+      const repeatedStream = parser.readStream(dirs[2])
+      repeatedStream.data[0] = 0
+      expect(parser.readStream(dirs[2]).data[0]).toBe(stream!.data[64])
+      expect(readRegularStream.mock.calls.filter(([entry]) => entry.objectType === 5)).toHaveLength(1)
+
+      view[rootMiniStreamOffset + 64] = 0x5A
+      parser.resetCache()
+      const refreshedStream = parser.readStream(dirs[2])
+      expect(refreshedStream.data[0]).toBe(0x5A)
+      expect(readRegularStream.mock.calls.filter(([entry]) => entry.objectType === 5)).toHaveLength(2)
     })
   })
 

@@ -1,10 +1,13 @@
 import { shallowRef } from 'vue'
+import { safeStorage } from './safeStorage'
 
 export type Locale = 'zh-CN' | 'en'
 
 const _locale = shallowRef<Locale>('zh-CN')
 
-const saved = localStorage.getItem('locale') as Locale | null
+// B1: 语言持久化改经 safeStorage —— 原先在模块顶层裸读 localStorage，
+// 存储被禁环境（隐私模式/企业策略/deny iframe）下 import 即抛异常导致整站白屏。
+const saved = safeStorage.getItem('locale')
 if (saved === 'zh-CN' || saved === 'en') {
   _locale.value = saved
 }
@@ -13,10 +16,11 @@ export { _locale as currentLocale }
 
 export function setLocale(locale: Locale) {
   _locale.value = locale
-  localStorage.setItem('locale', locale)
+  // B1: 写入同样改走 safeStorage，受限环境下静默降级为会话内生效。
+  safeStorage.setItem('locale', locale)
 }
 
-type TransValue = string | Record<string, string> | ((params: Record<string, any>) => string)
+type TransValue = string | Record<string, string> | ((params: Record<string, unknown>) => string)
 
 const zh: Record<string, TransValue> = {
   // App
@@ -29,6 +33,8 @@ const zh: Record<string, TransValue> = {
   'app.upload.or': '或者',
   'app.upload.url.placeholder': '输入 .doc 文件地址...',
   'app.upload.url.btn': '加载',
+  'app.upload.url.empty': '请输入文件地址',
+  'app.upload.url.invalid': '请输入有效的 http:// 或 https:// 文件地址',
   'app.upload.error.format': ({ ext }) => `不支持的文件格式 ".${ext}"，请选择 .doc 或 .dot 文件`,
   'app.upload.error.docx': '.docx 格式暂不支持。\n此工具为旧版 .doc (OLE2) 格式设计，\n.docx 文件需使用 Microsoft Word 或其他兼容工具打开。',
   'app.upload.error.size': ({ size, max }) => `文件过大 (${size})，最大支持 ${max}`,
@@ -39,6 +45,11 @@ const zh: Record<string, TransValue> = {
   'app.font.off': '启用 Web Font',
   'app.reader.on': '退出阅读模式',
   'app.reader.off': '阅读模式',
+  'print.popupBlocked': '请允许弹出窗口以进行打印',
+  'print.p1': '第 ',
+  'print.p2': ' 页 / 共 ',
+  'print.p3': ' 页',
+  'app.skip.content': '跳到文档内容',
   'app.lang.switch': '切换语言 / Switch Language',
 
   // Loading / Error
@@ -46,6 +57,7 @@ const zh: Record<string, TransValue> = {
   'loading.size': ({ size }) => `大小: ${size}`,
   'loading.time': ({ sec }) => `已用: ${sec}秒`,
   'loading.worker': '⚡ 后台线程',
+  'loading.progress.label': '文档解析进度',
   'loading.progress.reading': '读取文件...',
   'loading.progress.downloading': '下载文件...',
   'loading.progress.parsing': '解析文档结构...',
@@ -57,8 +69,10 @@ const zh: Record<string, TransValue> = {
   'error.load.fail': ({ msg }) => `❌ 加载失败\n\n${msg}`,
   'error.retry': '重试',
   'error.details': '查看技术细节',
+  'error.emptyDoc': '⚠️ 文档内容为空或无法提取文本\n\n可能原因：\n• 文件格式不受支持\n• 文件已损坏\n• 文档内容为空',
 
   // Toolbar
+  'toolbar.label': '文档工具栏',
   'toolbar.zoom.in': '放大',
   'toolbar.zoom.out': '缩小',
   'toolbar.zoom.reset': '重置缩放',
@@ -87,8 +101,12 @@ const zh: Record<string, TransValue> = {
   'search.results': ({ n }) => `找到 ${n} 个匹配`,
   'search.case': '大小写敏感',
   'search.word': '全词匹配',
+  'search.prevMatch': '上一个匹配',
+  'search.nextMatch': '下一个匹配',
+  'search.close': '关闭搜索',
 
   // Pagination
+  'pagination.label': '文档分页导航',
   'pagination.prev': '上一页',
   'pagination.next': '下一页',
   'pagination.page': ({ current, total }) => `${current} / ${total}`,
@@ -192,8 +210,9 @@ const zh: Record<string, TransValue> = {
   // Sections panel
   'sections.title': '分节与页面布局',
   'sections.summary': '纸张 / 边距 / 方向 / 分栏',
-  'sections.index': ({ n }) => `节 ${n + 1}`,
+  'sections.index': ({ n }) => `节 ${Number(n) + 1}`,
   'sections.pageSize': '页面尺寸',
+  'sections.sizePt': '{pt}磅 ({cm}cm)',
   'sections.marginLeft': '左边距',
   'sections.marginRight': '右边距',
   'sections.marginTop': '上边距',
@@ -390,6 +409,8 @@ const en: Record<string, TransValue> = {
   'app.upload.or': 'or',
   'app.upload.url.placeholder': 'Enter .doc file URL...',
   'app.upload.url.btn': 'Load',
+  'app.upload.url.empty': 'Please enter a file URL',
+  'app.upload.url.invalid': 'Please enter a valid http:// or https:// file URL',
   'app.upload.error.format': ({ ext }) => `Unsupported format ".${ext}". Please select a .doc or .dot file`,
   'app.upload.error.docx': '.docx format is not yet supported.\nThis tool is designed for legacy .doc (OLE2) format.\n.docx files require Microsoft Word or other compatible software.',
   'app.upload.error.size': ({ size, max }) => `File too large (${size}), max ${max}`,
@@ -400,6 +421,11 @@ const en: Record<string, TransValue> = {
   'app.font.off': 'Enable Web Font',
   'app.reader.on': 'Exit reader mode',
   'app.reader.off': 'Reader mode',
+  'print.popupBlocked': 'Please allow pop-ups to print',
+  'print.p1': 'Page ',
+  'print.p2': ' of ',
+  'print.p3': '',
+  'app.skip.content': 'Skip to document content',
   'app.lang.switch': 'Switch Language / 切换语言',
 
   // Loading / Error
@@ -407,6 +433,7 @@ const en: Record<string, TransValue> = {
   'loading.size': ({ size }) => `Size: ${size}`,
   'loading.time': ({ sec }) => `Elapsed: ${sec}s`,
   'loading.worker': '⚡ Worker',
+  'loading.progress.label': 'Document parsing progress',
   'loading.progress.reading': 'Reading file...',
   'loading.progress.downloading': 'Downloading file...',
   'loading.progress.parsing': 'Parsing document structure...',
@@ -418,8 +445,10 @@ const en: Record<string, TransValue> = {
   'error.load.fail': ({ msg }) => `❌ Load failed\n\n${msg}`,
   'error.retry': 'Retry',
   'error.details': 'View technical details',
+  'error.emptyDoc': '⚠️ Document content is empty or could not be extracted\n\nPossible causes:\n• Unsupported file format\n• File is corrupted\n• Document is empty',
 
   // Toolbar
+  'toolbar.label': 'Document toolbar',
   'toolbar.zoom.in': 'Zoom in',
   'toolbar.zoom.out': 'Zoom out',
   'toolbar.zoom.reset': 'Reset zoom',
@@ -448,8 +477,12 @@ const en: Record<string, TransValue> = {
   'search.results': ({ n }) => `Found ${n} matches`,
   'search.case': 'Case sensitive',
   'search.word': 'Whole word',
+  'search.prevMatch': 'Previous match',
+  'search.nextMatch': 'Next match',
+  'search.close': 'Close search',
 
   // Pagination
+  'pagination.label': 'Document pagination',
   'pagination.prev': 'Previous page',
   'pagination.next': 'Next page',
   'pagination.page': ({ current, total }) => `${current} / ${total}`,
@@ -553,8 +586,9 @@ const en: Record<string, TransValue> = {
   // Sections panel
   'sections.title': 'Sections & Layout',
   'sections.summary': 'Paper / Margins / Orientation / Columns',
-  'sections.index': ({ n }) => `Section ${n + 1}`,
+  'sections.index': ({ n }) => `Section ${Number(n) + 1}`,
   'sections.pageSize': 'Page Size',
+  'sections.sizePt': '{pt} pt ({cm} cm)',
   'sections.marginLeft': 'Left Margin',
   'sections.marginRight': 'Right Margin',
   'sections.marginTop': 'Top Margin',
@@ -742,7 +776,7 @@ const en: Record<string, TransValue> = {
 
 const translations: Record<Locale, Record<string, TransValue>> = { 'zh-CN': zh, en }
 
-export function t(key: string, params?: Record<string, any>): string {
+export function t(key: string, params?: Record<string, unknown>): string {
   const locale = _locale.value
   const value = translations[locale]?.[key]
   if (value === undefined) return key

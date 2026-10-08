@@ -177,7 +177,7 @@ function readUnicodeString(data: Uint8Array, offset: number): string {
  * Parse a property value based on its type.
  * Returns the value and the number of bytes consumed.
  */
-function parsePropertyValue(data: Uint8Array, offset: number, type: number): { value: any; size: number } {
+function parsePropertyValue(data: Uint8Array, offset: number, type: number): { value: unknown; size: number } {
   switch (type) {
     case VT_EMPTY:
     case VT_NULL:
@@ -344,7 +344,7 @@ function parsePropertySetSection(data: Uint8Array, sectionOffset: number, isDocS
 }
 
 /** Map SummaryInformation property ID to DocumentProperties field. */
-function mapSummaryProperty(properties: DocumentProperties, propertyId: number, value: any): void {
+function mapSummaryProperty(properties: DocumentProperties, propertyId: number, value: unknown): void {
   switch (propertyId) {
     case PID_TITLE:
       if (typeof value === 'string') properties.title = value
@@ -410,7 +410,7 @@ function mapSummaryProperty(properties: DocumentProperties, propertyId: number, 
 }
 
 /** Map DocumentSummaryInformation property ID to DocumentProperties field. */
-function mapDocSummaryProperty(properties: DocumentProperties, propertyId: number, value: any): void {
+function mapDocSummaryProperty(properties: DocumentProperties, propertyId: number, value: unknown): void {
   switch (propertyId) {
     case PIDDSI_CATEGORY:
       if (typeof value === 'string') properties.category = value

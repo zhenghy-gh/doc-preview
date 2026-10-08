@@ -32,6 +32,8 @@ pnpm-debug.log*
 settings.json
 dist
 dist.tar
+# 库模式构建产物（W1-D 起 lib 输出与 app 的 dist 分离）
+dist-lib
 
 # Auto loop state
 .opencode/
@@ -51,6 +53,13 @@ scout*.mjs
 
 # Test coverage
 coverage/
+
+# Publish script temporary backup (restored automatically)
+.package.json.bak
+
+# Local agent memory / tool state
+.workbuddy/
+.workbuddy-ai/
 
 # Personal / CSDN content
 .qoder/

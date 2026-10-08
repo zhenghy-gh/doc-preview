@@ -50,7 +50,7 @@ function pictureToHeaderFooterImage(pic: ParsedPicture): HeaderFooterImage | nul
     const slice = bytes.subarray(i, Math.min(i + chunkSize, bytes.length))
     binary += String.fromCharCode.apply(
       null,
-      Array.from(slice) as unknown as number[],
+      slice as unknown as number[],
     )
   }
   

@@ -133,10 +133,10 @@ function parsePlcfSed(
 
   const entries: SedEntry[] = []
   let offset = fc + (n + 1) * 4
+  let cpStart = readDwordAt(data, fc)
 
   // aSED: n 个 SED (每个 8 字节)
   for (let i = 0; i < n; i++) {
-    const cpStart = readDwordAt(data, fc + i * 4)
     const cpEnd = readDwordAt(data, fc + (i + 1) * 4)
     const fn = readWordAt(data, offset)
     const fcSepx = readDwordAt(data, offset + 2)
@@ -147,6 +147,7 @@ function parsePlcfSed(
       fcSepx,
       fn,
     })
+    cpStart = cpEnd
     offset += 8
   }
 

@@ -142,12 +142,14 @@ export function highlightTextMatches(
 
 /** 清除容器内全部搜索高亮，还原为纯文本节点 */
 export function clearSearchHighlights(container: Node): void {
+  const parents = new Set<Node>()
   ;(container as Element).querySelectorAll('.search-highlight').forEach(el => {
     const parent = el.parentNode
     if (parent) {
       const text = document.createTextNode(el.textContent || '')
       parent.replaceChild(text, el)
-      parent.normalize()
+      parents.add(parent)
     }
   })
+  parents.forEach(parent => parent.normalize())
 }

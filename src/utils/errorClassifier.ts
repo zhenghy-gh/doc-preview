@@ -3,6 +3,8 @@
  * 将底层错误信息分类为用户可理解的提示，附带解决建议
  */
 
+import type { ParseErrorCode } from './docFormat'
+
 export type ErrorCategory =
   | 'network'
   | 'format'
@@ -31,13 +33,80 @@ function containsAny(text: string, keywords: string[]): boolean {
 }
 
 /**
+ * ERR-CODE（方案 b）：结构化错误码 → 分类直映射。
+ *
+ * 中文错误文案无法稳定参与关键字匹配（自由文本极易漏判落 unknown）；
+ * 解析器在失败出口附带的机器可读 code 具有最高优先级，
+ * 仅当 code 缺失或未注册时才回退到关键字推断（兼容旧调用方）。
+ */
+const PARSE_ERROR_CATEGORY: Record<ParseErrorCode, ErrorCategory> = {
+  OLE_FORMAT: 'format',
+  NO_WORDDOCUMENT_STREAM: 'corrupted',
+  EMPTY_DOCUMENT: 'corrupted',
+  PARSE_FAILED: 'parse',
+  FILE_READ_FAILED: 'parse',
+}
+
+function classifyByErrorCode(
+  errorCode: ParseErrorCode,
+  rawText: string,
+  isEN: boolean,
+): ClassifiedError | null {
+  const category = PARSE_ERROR_CATEGORY[errorCode]
+  if (!category) return null
+
+  const shared = { category, retryable: true, raw: rawText }
+  switch (errorCode) {
+    case 'OLE_FORMAT':
+      return {
+        ...shared,
+        title: isEN ? 'Unsupported file format' : '不支持的文件格式',
+        detail: isEN
+          ? `This tool only supports legacy .doc files (OLE2/CFB format). ${rawText}`
+          : `本工具仅支持传统 .doc 文件（OLE2/CFB 复合文档格式）。${rawText}`,
+        suggestions: isEN
+          ? ['.docx/.rtf files are not supported — please use a .doc file', 'On macOS, use Word or Pages to save as .doc']
+          : ['不支持 .docx/.rtf 文件 —— 请使用 .doc 格式', '在 macOS 上可用 Word 或 Pages 另存为 .doc'],
+      }
+    case 'NO_WORDDOCUMENT_STREAM':
+    case 'EMPTY_DOCUMENT':
+      return {
+        ...shared,
+        title: isEN ? 'File may be corrupted or empty' : '文件可能已损坏或为空',
+        detail: isEN
+          ? `No readable document content was found: ${rawText}`
+          : `未能提取到可读的文档内容：${rawText}`,
+        suggestions: isEN
+          ? ['Verify the file opens in Microsoft Word', 'Try re-downloading or re-saving the file', 'The file may be empty or use an uncommon sub-format']
+          : ['确认文件能在 Microsoft Word 中正常打开', '尝试重新下载或重新保存文件', '文件可能为空或使用了不常见的子格式'],
+      }
+    case 'PARSE_FAILED':
+    case 'FILE_READ_FAILED':
+      return {
+        ...shared,
+        title: isEN ? 'Failed to parse document' : '解析文档失败',
+        detail: isEN
+          ? `An error occurred during parsing/reading: ${rawText}`
+          : `解析或读取过程中发生错误：${rawText}`,
+        suggestions: isEN
+          ? ['Try opening in Word and re-saving', 'Check if the file can be opened in LibreOffice']
+          : ['尝试在 Word 中打开后重新保存', '检查文件是否能在 LibreOffice 中打开'],
+      }
+    default:
+      return null
+  }
+}
+
+/**
  * 对原始错误信息进行分类
  * @param rawError 原始错误信息（字符串或 Error 对象）
  * @param locale 语言（'zh-CN' | 'en'），默认中文
+ * @param errorCode 解析器附带的结构化错误码（ERR-CODE，优先于关键字判定）
  */
 export function classifyError(
   rawError: string | Error | unknown,
   locale: 'zh-CN' | 'en' = 'zh-CN',
+  errorCode?: ParseErrorCode,
 ): ClassifiedError {
   const rawText =
     rawError instanceof Error
@@ -49,11 +118,19 @@ export function classifyError(
   const lower = rawText.toLowerCase()
   const isEN = locale === 'en'
 
-  // 1. 网络错误
+  // 0. ERR-CODE 直映射（最高优先级；未知 code 静默回退关键字路径）
+  if (errorCode) {
+    const byCode = classifyByErrorCode(errorCode, rawText, isEN)
+    if (byCode) return byCode
+  }
+
+  // 1. 网络错误（含 W2-1 加载超时：fetch 响应头超时文案『加载超时：…』与
+  //    TimeoutError DOMException 名归入此类，保证可重试与网络类建议）
   if (
     containsAny(lower, ['failed to fetch', 'networkerror', 'network error']) ||
     containsAny(lower, ['load failed', 'cors', 'cross-origin']) ||
-    containsAny(lower, ['http 4', 'http 5', '403', '404', '500', '502', '503'])
+    containsAny(lower, ['http 4', 'http 5', '403', '404', '500', '502', '503']) ||
+    containsAny(lower, ['加载超时', 'timeouterror', 'request timed out'])
   ) {
     return {
       category: 'network',

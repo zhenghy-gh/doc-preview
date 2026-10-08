@@ -1,11 +1,50 @@
 // @vitest-environment happy-dom
 import { describe, it, expect } from 'vitest'
+import { nextTick } from 'vue'
 import { mount } from '@vue/test-utils'
 import CollapsiblePanel from '../../src/components/CollapsiblePanel.vue'
 import DocStatsPanel from '../../src/components/DocStatsPanel.vue'
 import ErrorDisplay from '../../src/components/ErrorDisplay.vue'
 import LoadingOverlay from '../../src/components/LoadingOverlay.vue'
 import ShortcutsPanel from '../../src/components/ShortcutsPanel.vue'
+import App from '../../src/App.vue'
+
+describe('App upload accessibility', () => {
+  it('keeps the native file input available for keyboard focus', () => {
+    const wrapper = mount(App, { attachTo: document.body })
+    const fileInput = wrapper.find('input[type="file"]')
+    expect(fileInput.exists()).toBe(true)
+    expect(fileInput.attributes('aria-describedby')).toBe('upload-hint')
+    ;(fileInput.element as HTMLInputElement).focus()
+    expect(document.activeElement).toBe(fileInput.element)
+    wrapper.unmount()
+  })
+})
+
+describe('App upload errors', () => {
+  it('keeps file validation errors away from the URL field', async () => {
+    const wrapper = mount(App)
+    const fileInput = wrapper.find('input[type="file"]')
+    const badFile = new File(['content'], 'notes.txt', { type: 'text/plain' })
+    Object.defineProperty(fileInput.element, 'files', { value: [badFile] })
+    await fileInput.trigger('change')
+
+    expect(wrapper.find('#upload-error').exists()).toBe(true)
+    expect(wrapper.find('input[type="url"]').attributes('aria-invalid')).toBe('false')
+    expect(wrapper.find('input[type="url"]').attributes('aria-describedby')).toBeUndefined()
+  })
+
+  it('keeps URL validation errors away from the file field', async () => {
+    const wrapper = mount(App)
+    const urlInput = wrapper.find('input[type="url"]')
+    await urlInput.setValue('ftp://example.com/file.doc')
+    await wrapper.find('.url-btn').trigger('click')
+
+    expect(urlInput.attributes('aria-invalid')).toBe('true')
+    expect(urlInput.attributes('aria-describedby')).toBe('upload-error')
+    expect(wrapper.find('input[type="file"]').attributes('aria-describedby')).toBe('upload-hint')
+  })
+})
 
 describe('CollapsiblePanel', () => {
   it('toggles and emits update:modelValue', async () => {
@@ -96,6 +135,23 @@ describe('LoadingOverlay', () => {
 })
 
 describe('ShortcutsPanel', () => {
+  it('moves focus into the dialog and restores it to the trigger', async () => {
+    const trigger = document.createElement('button')
+    trigger.setAttribute('aria-controls', 'doc-shortcuts-panel')
+    document.body.append(trigger)
+    trigger.focus()
+    const wrapper = mount(ShortcutsPanel, { props: { modelValue: true }, attachTo: document.body })
+    await nextTick()
+    await nextTick()
+    expect(wrapper.find('.shortcuts-panel').element).toBeTruthy()
+
+    await wrapper.find('.shortcuts-close').trigger('click')
+    await wrapper.setProps({ modelValue: false })
+    await nextTick()
+    expect(document.activeElement).toBe(trigger)
+    trigger.remove()
+  })
+
   it('shows the shortcut list and closes via the close button', async () => {
     const wrapper = mount(ShortcutsPanel, { props: { modelValue: true } })
     expect(wrapper.find('.shortcuts-overlay').exists()).toBe(true)

@@ -15,6 +15,13 @@ export function escapeHtml(text: string): string {
   return _escapeDiv.innerHTML
 }
 
+/** HTML 属性值转义（在 escapeHtml 基础上处理引号边界）。 */
+export function escapeHtmlAttribute(text: string): string {
+  return escapeHtml(text)
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
 /**
  * 将制表符 (\t) 替换为基于制表位位置的空白间隔。
  *
@@ -46,7 +53,14 @@ export function applyTabStops(
   }
 
   // 有自定义制表位：精确计算每个 tab 的跳转宽度
-  const sortedTabs = [...tabs].sort((a, b) => a - b)
+  let isSorted = true
+  for (let i = 1; i < tabs.length; i++) {
+    if (tabs[i] < tabs[i - 1]) {
+      isSorted = false
+      break
+    }
+  }
+  const sortedTabs = isSorted ? tabs : [...tabs].sort((a, b) => a - b)
 
   // 使用 Canvas 测量字符宽度（近似值）
   let canvas: HTMLCanvasElement | null = null
@@ -67,6 +81,7 @@ export function applyTabStops(
   const parts: string[] = []
   const segments = text.split('\t')
   let currentPosPt = 0
+  let nextTabIndex = 0
 
   for (let i = 0; i < segments.length; i++) {
     const seg = segments[i]
@@ -78,13 +93,10 @@ export function applyTabStops(
       currentPosPt += segWidth
 
       // 找到下一个制表位位置
-      let nextTab: number | undefined
-      for (const tab of sortedTabs) {
-        if (tab > currentPosPt + 0.5) {
-          nextTab = tab
-          break
-        }
+      while (nextTabIndex < sortedTabs.length && sortedTabs[nextTabIndex] <= currentPosPt + 0.5) {
+        nextTabIndex++
       }
+      let nextTab = sortedTabs[nextTabIndex]
 
       // 如果超出自定义制表位范围，使用默认间隔
       if (nextTab === undefined) {
@@ -125,7 +137,7 @@ export function formatTextWithInferredFormat(
   text: string,
   webFontFamily: WebFontFamilyResolver = () => '',
 ): string {
-  const paragraphs = text.split(/\n+/).filter(p => p.trim())
+  const paragraphs = text.split(/\n+/).map(p => p.trim()).filter(Boolean)
   if (paragraphs.length === 0) return `<p style="font-family:${webFontFamily('宋体')}'宋体',serif;font-size:1.0rem">${escapeHtml(text)}</p>`
 
   let html = ''
@@ -134,7 +146,7 @@ export function formatTextWithInferredFormat(
     const rowBlock: string[][] = []
     let j = i
     while (j < paragraphs.length) {
-      const cells = splitTableCells(paragraphs[j].trim())
+      const cells = splitTableCells(paragraphs[j])
       if (!cells) break
       rowBlock.push(cells)
       j++
@@ -146,7 +158,7 @@ export function formatTextWithInferredFormat(
       continue
     }
 
-    const t = paragraphs[i].trim()
+    const t = paragraphs[i]
     if (!t) {
       i++
       continue

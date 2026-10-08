@@ -166,12 +166,14 @@ function parseLvlf(data: Uint8Array, offset: number, endBound: number): ListLeve
     let numberText = ''
     if (numTextStart + 2 <= endBound) {
       const numTextLen = readUint16(data, numTextStart)
+      const chars: string[] = []
       // Read UTF-16LE characters
       for (let i = 0; i < numTextLen && numTextStart + 2 + i * 2 + 1 < endBound; i++) {
         const ch = readUint16(data, numTextStart + 2 + i * 2)
         if (ch === 0) break
-        numberText += String.fromCharCode(ch)
+        chars.push(String.fromCharCode(ch))
       }
+      numberText = chars.join('')
     }
 
     return {

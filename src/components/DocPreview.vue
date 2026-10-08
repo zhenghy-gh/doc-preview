@@ -3,21 +3,39 @@ import { ref, computed, watch, onMounted, onUnmounted, onErrorCaptured, nextTick
 import { parseDocFileWithFormat, parseDocFileFromBuffer } from '../utils/docParser'
 import type { ParseProgressStage } from '../utils/docParser'
 import { parseWithWorker } from '../utils/parseWithWorker'
-import { renderNestedTableHtml, splitTableCells } from '../utils/tableText'
-import type { CharacterFormat, ParagraphFormat, CharStyleSegment, TableInfo, RevisionMark, RevisionType, BookmarkRange, SectionInfo, PageFieldRange, CrossReferenceRange, ShapeInfo, EquationInfo, ChartInfo, WordArtInfo } from '../utils/docFormat'
+import { renderDocumentToPages } from '../utils/rendering/documentRenderer'
+import { PT_TO_PX } from '../utils/rendering/pageBuilder'
+import type { CharacterFormat, ParagraphFormat, RevisionMark, RevisionType, BookmarkRange, SectionInfo, PageFieldRange, CrossReferenceRange, ShapeInfo, EquationInfo, ChartInfo, WordArtInfo, RenderParagraph } from '../utils/docFormat'
 import type { DocumentFields } from '../utils/fieldParser'
-import { applyRevisionsToText } from '../utils/revisionRender'
 import type { RevisionMode } from '../utils/revisionRender'
 import { htmlToMarkdown } from '../utils/markdownExport'
 import { highlightTextMatches, clearSearchHighlights } from '../utils/searchUtils'
-import { escapeHtml, applyTabStops, formatTextWithInferredFormat } from '../utils/textRender'
+import { escapeHtml, formatTextWithInferredFormat } from '../utils/textRender'
 import { WORD_VERSION_LABELS, type WordVersion } from '../utils/fibParser'
-import { t } from '../utils/locale'
-// import DocStatsPanel from './DocStatsPanel.vue'
+import { t, currentLocale } from '../utils/locale'
+import { useDarkMode } from '../composables/useDarkMode'
 import ShortcutsPanel from './ShortcutsPanel.vue'
 import LoadingOverlay from './LoadingOverlay.vue'
 import ErrorDisplay from './ErrorDisplay.vue'
 import CollapsiblePanel from './CollapsiblePanel.vue'
+
+/**
+ * DocPreview —— .doc 解析结果的渲染宿主组件。
+ *
+ * 数据流：props.source（File | URL）→ parseDocFileWithFormat / parseWithWorker
+ *   （>1MB 走 Worker，阶段进度经 ParseProgressStage 回写）→ ParserOutput
+ *   → applyFormattedPages → renderDocumentToPages 产出分页 HTML 数组 pages
+ *   → 虚拟滚动窗口（visibleStart/End）按需挂载 .page-host；未渲染页由
+ *     pageHeights 缓存（布局像素，data-page-idx 绝对页码键）撑起等高占位。
+ *
+ * 子系统分区（与文内 // ---- 区块横幅一一对应）：分页导航 · 大纲 · Web Font ·
+ * story 文本 · 加载与错误边界 · 渲染接线 · 虚拟滚动（PERF-T1 语义基线见
+ * measureVisiblePageHeights/updateVisibleRange 注释）· 缩放（FIX-VUEW：CSS
+ * zoom 真实回流）· 搜索高亮（searchUtils 委托）· 打印与三格式导出 · 剪贴板 ·
+ * 键盘快捷键 · 侧栏面板群（CollapsiblePanel）。
+ * i18n 经 utils/locale 单例 t() 消费；统一入口后续收敛 useI18n()（ShortcutsPanel
+ * 已先行）。本文档性注释由 DOC-POLISH 维护：只述现状契约，不含行号（易漂移）。
+ */
 
 const WORKER_THRESHOLD = 1024 * 1024 // 1MB — files larger than this use Web Worker
 const isWorkerSupported = typeof Worker !== 'undefined'
@@ -33,9 +51,6 @@ interface PictureInfo {
   floating?: boolean
   cp?: number
 }
-
-/** 统一图片表示：结构化图片（PictureInfo）或纯 data URL 字符串。 */
-type PicSource = PictureInfo | string
 
 interface ParserOutput {
   success: boolean
@@ -131,13 +146,6 @@ interface OutlineItem {
   index: number
 }
 
-interface CharStyleOptions {
-  isCentered: boolean
-  isRightAligned: boolean
-  charFormat: CharacterFormat
-  paraFormat: ParagraphFormat
-}
-
 interface SearchMatch {
   index: number
   text: string
@@ -222,37 +230,6 @@ const previewRef = ref<HTMLElement | null>(null)
 // --- Shortcuts panel ---
 const showShortcuts = ref(false)
 
-// --- Document stats ---
-// const showStats = ref(false)
-// const docStats = computed(() => {
-//   const paragraphs = lastParseResult.value?.paragraphs || []
-//   const pCount = paragraphs.length
-//   const imgCount = pictures.value.length + images.value.length
-//   const pageCount = pages.value.length
-//   const tableCount = (htmlContent.value.match(/<table[\s>]/gi) || []).length
-//
-//   let charCount = 0
-//   let wordCount = 0
-//   let cjkCount = 0
-//   for (const p of paragraphs) {
-//     const text = p.text || ''
-//     charCount += text.length
-//     cjkCount += (text.match(/[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/g) || []).length
-//     const words = text.match(/[a-zA-Z]+/g)
-//     if (words) wordCount += words.length
-//   }
-//   wordCount += cjkCount
-//
-//   return {
-//     wordCount,
-//     charCount,
-//     paragraphCount: pCount,
-//     pageCount,
-//     imageCount: imgCount,
-//     tableCount,
-//   }
-// })
-
 // --- Zoom ---
 const zoomLevel = ref(100)
 const MIN_ZOOM = 50
@@ -260,13 +237,9 @@ const MAX_ZOOM = 200
 const ZOOM_STEP = 10
 
 // --- Dark mode ---
-const darkMode = ref(document.documentElement.classList.contains('dark'))
-
-function toggleDarkMode() {
-  darkMode.value = !darkMode.value
-  document.documentElement.classList.toggle('dark', darkMode.value)
-  localStorage.setItem('dark-mode', String(darkMode.value))
-}
+// W1-C: 暗黑模式单一数据源 —— 状态/class 挂载/localStorage 持久化收敛到
+// composables/useDarkMode.ts（与 App.vue 共享同一 ref），本组件只消费。
+const { darkMode, toggleDarkMode } = useDarkMode()
 
 // --- Pagination ---
 const currentPage = ref(1)
@@ -274,6 +247,9 @@ const totalPages = ref(1)
 const pageHeight = ref(842)
 const PAGE_HEIGHT_A4 = 842
 
+/**
+ * 同步分页基准高度 pageHeight（pt）：优先取第一节 pageHeightPt，否则回落 A4(842pt)。占位估算与页面定位共用。
+ */
 function updatePageHeight() {
   if (sections.value.length > 0) {
     const firstSection = sections.value[0]
@@ -285,24 +261,36 @@ function updatePageHeight() {
   pageHeight.value = PAGE_HEIGHT_A4
 }
 
+/**
+ * 跳转到指定页（1-based）：越界为 no-op；更新 currentPage 并平滑滚动到该页。
+ */
 function goToPage(page: number) {
   if (page < 1 || page > totalPages.value) return
   currentPage.value = page
   scrollToPage(page)
 }
 
+/**
+ * 上一页（已在首页时 no-op）。
+ */
 function goToPrevPage() {
   if (currentPage.value > 1) {
     goToPage(currentPage.value - 1)
   }
 }
 
+/**
+ * 下一页（已在末页时 no-op）。
+ */
 function goToNextPage() {
   if (currentPage.value < totalPages.value) {
     goToPage(currentPage.value + 1)
   }
 }
 
+/**
+ * 平滑滚动到指定页：虚拟滚动下目标页可能未渲染，先扩窗确保其进入可视范围再滚动；真实页缺失时回退滚动对应占位 div。
+ */
 function scrollToPage(page: number) {
   // 虚拟滚动下，目标页面可能未渲染。先扩大可视范围确保目标页可见，再滚动。
   const idx = page - 1
@@ -317,17 +305,22 @@ function scrollToPage(page: number) {
     if (!container) return
     const pageElements = container.querySelectorAll('.page-content')
     const target = pageElements[idx]
-    if (target) {
+    if (target && typeof target.scrollIntoView === 'function') {
       target.scrollIntoView({ behavior: 'smooth', block: 'start' })
     } else {
-      // 回退：滚动到占位 div
+      // 回退：滚动到占位 div；无滚动 API 时保持兼容（如 SSR/测试环境）。
       const placeholders = container.querySelectorAll('.page-placeholder')
       const ph = placeholders[idx]
-      if (ph) ph.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      if (ph && typeof ph.scrollIntoView === 'function') {
+        ph.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      }
     }
   })
 }
 
+/**
+ * 以 pages 数组长度刷新 totalPages（不依赖 DOM 中实际渲染的 .page-content 数量），并钳制越界的 currentPage。
+ */
 function updateTotalPages() {
   // 虚拟滚动下用 pages 数组长度，避免依赖 DOM 中实际渲染的 .page-content 数量
   nextTick(() => {
@@ -344,6 +337,7 @@ const searchQuery = ref('')
 const searchResults = ref<SearchMatch[]>([])
 const currentSearchIndex = ref(-1)
 const searchInputRef = ref<HTMLInputElement | null>(null)
+const searchToggleRef = ref<HTMLButtonElement | null>(null)
 const originalHtml = ref('') // saved before search highlighting
 const searchCaseSensitive = ref(false)
 const searchWholeWord = ref(false)
@@ -438,28 +432,26 @@ const styleSet = ref<{ name: string; isCustom?: boolean } | null>(null)
 
 // CHART_SUBTYPE_LABEL removed, use t('charts.subtype.' + type) instead
 
-function getChartTypeLabel(type: string): string {
-  return t('charts.type.' + type) || t('charts.type.unknown')
-}
-
-function getChartSubtypeLabel(subtype: string): string {
-  return t('charts.subtype.' + subtype) || t('charts.subtype.unknown')
-}
-
 function getWordArtEffectLabel(effect: string): string {
   return t('wordart.effect.' + effect) || t('wordart.effect.unknown')
 }
 
+/**
+ * 尺寸格式化：pt → “x.x磅 (y.yy cm)”；undefined/≤0 返回空串。单位文案暂未 i18n（审计 A5 备忘项）。
+ */
 function formatSizePt(pt: number | undefined): string {
   if (pt === undefined || pt <= 0) return ''
   // 磅 → 厘米：1 磅 = 0.0353 cm
   const cm = (pt * 0.0353).toFixed(2)
-  return `${pt.toFixed(1)}磅 (${cm}cm)`
+  return t('sections.sizePt', { pt: pt.toFixed(1), cm })
 }
 
 // --- Hidden text ---
 const showHiddenText = ref(false)
 
+/**
+ * 修订时间戳 → 本地时区 “YYYY-MM-DD HH:mm”；缺省或无效返回空串。
+ */
 function formatRevisionTime(ts?: number): string {
   if (!ts) return ''
   const d = new Date(ts)
@@ -520,6 +512,9 @@ const FONT_ALIASES: Record<string, string[]> = {
   '新宋体': ['Noto+Serif+SC', 'NSimSun'],
 }
 
+/**
+ * 按需加载 Google Fonts Web Font：注入 stylesheet，成功后应用字体覆盖样式；失败仅 console.warn 并回落系统字体。webFontLoaded 门闩保证幂等。
+ */
 function loadWebFonts() {
   if (!props.useWebFont || webFontLoaded.value) return
 
@@ -537,6 +532,9 @@ function loadWebFonts() {
   document.head.appendChild(link)
 }
 
+/**
+ * 字体名 → Web Font CSS 前缀（“Google Font, ” 含尾逗号供调用方直接拼接）；未启用或无别名映射时返回空串。
+ */
 function getWebFontFamily(fontName?: string): string {
   if (!props.useWebFont) return ''
 
@@ -548,6 +546,9 @@ function getWebFontFamily(fontName?: string): string {
   return ''
 }
 
+/**
+ * 注入/更新全局 <style id=doc-preview-webfont-overrides>，把 .document-content 各级元素 font-family 覆盖为 Noto 系列回退链（!important）。
+ */
 function injectWebFontOverrides() {
   if (!props.useWebFont) return
 
@@ -685,6 +686,9 @@ const storySections = computed<StorySection[]>(() => {
   return out
 })
 
+/**
+ * 非正文 story 文本 → HTML：保留段首缩进、压缩连续空段；软换行(\v)→<br>、分页符(\f)与单元格标记(\u0007)→提示 span。特殊字符在 escapeHtml 之前以占位替换，避免被转义破坏结构。
+ */
 function formatStoryText(text: string): string {
   // Split by single newline to preserve paragraph structure.
   // Empty paragraphs become spacing, but consecutive empties are collapsed.
@@ -727,11 +731,19 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
+/**
+ * 启动解析秒表：loadingTime 归零后每秒 +1。
+ */
 function startLoadingTimer() {
+  // 快速切换文件/URL 时，先清理上一轮秒表，避免多个定时器叠加。
+  stopLoadingTimer()
   loadingTime.value = 0
   loadingTimer.value = setInterval(() => loadingTime.value++, 1000)
 }
 
+/**
+ * 停止并清理解析秒表定时器。
+ */
 function stopLoadingTimer() {
   if (loadingTimer.value) {
     clearInterval(loadingTimer.value)
@@ -742,8 +754,8 @@ function stopLoadingTimer() {
 // ---- Error boundary ----
 
 onErrorCaptured((err) => {
-  const msg = err instanceof Error ? err.message : '未知渲染错误'
-  error.value = `❌ 渲染文档时发生错误\n\n${msg}`
+  const msg = err instanceof Error ? err.message : t('error.parse.unknown')
+  error.value = t('error.render', { msg })
   emit('error', msg)
   return false
 })
@@ -782,7 +794,7 @@ const loadFromFile = async (file: File) => {
     }
 
     if (!result.success) {
-      error.value = result.error || '解析失败'
+      error.value = result.error || t('error.parse.fail')
       loading.value = false
       emit('loading', false)
       return
@@ -793,7 +805,7 @@ const loadFromFile = async (file: File) => {
     emit('loaded')
   } catch (err) {
     console.error('Error parsing DOC file:', err)
-    error.value = err instanceof Error ? err.message : '未知错误'
+    error.value = err instanceof Error ? err.message : t('error.parse.unknown')
   } finally {
     loading.value = false
     emit('loading', false)
@@ -801,7 +813,51 @@ const loadFromFile = async (file: File) => {
   }
 }
 
+// ---- W2-1: URL 加载超时与取消（A1+A4）----
+
+/**
+ * URL 加载超时阈值：覆盖「发起请求 → 收到响应头」阶段。
+ * 60s 依据：正常静态文件服务握手+响应头在数秒内完成，60s 已留足弱网冗余；
+ * 超时通常意味着服务端挂起或网络不可达。收到响应头后立即解除计时，
+ * 正文传输时长不设硬上限（大文件慢链路下载属合法场景；
+ * 正文级进度/限流/卡顿检测归第二波 A3）。
+ */
+const URL_LOAD_TIMEOUT_MS = 60_000
+
+/** 在途 URL 加载的控制器；null 表示当前无 URL 加载。仅 loadFromUrl 写入。 */
+let urlLoadController: AbortController | null = null
+
+/**
+ * 取消在途 URL 加载。reason 会成为 signal.reason 并作为 fetch 的 rejection 值，
+ * 供 catch 区分「主动取消」（换源/重试/重置/卸载，静默处理）与「超时」（提示用户）。
+ */
+function abortUrlLoad(reason?: unknown) {
+  const controller = urlLoadController
+  if (!controller) return
+  urlLoadController = null
+  controller.abort(reason)
+}
+
+/** 该控制器是否仍是当前在途请求：用于丢弃被替换请求的迟到结果并避免其收尾动作污染新加载的 UI 状态。 */
+function isCurrentUrlLoad(controller: AbortController): boolean {
+  return urlLoadController === controller
+}
+
+/** 判定 abort 原因是否为超时（兼容部分引擎忽略自定义 reason、回退通用 AbortError 的行为，见 loadFromUrl 内 timedOut 标记）。 */
+function isTimeoutAbortReason(reason: unknown): boolean {
+  return reason instanceof Error && reason.name === 'TimeoutError'
+}
+
+/**
+ * 从 URL 加载并解析文档的主路径：fetch 下载（HTTP 非 2xx 抛错）→ 按 WORKER_THRESHOLD 分派 Worker/主线程解析 → renderResult。进度经 onProgress 回写 loading.progress.* 与百分比；错误写入 error；finally 统一收尾 loading 态与秒表。
+ * W2-1：带 AbortController —— ①60s 响应头超时；②换源/watch/resetFile(经 watch→null)/retryLoad/卸载四时机取消；③catch 区分主动取消（静默）与超时（友好提示）。
+ */
 const loadFromUrl = async (url: string) => {
+  // A1+A4：新加载发起前先取消在途请求（防挂起残留 + 防过期响应竞态覆盖新结果）
+  abortUrlLoad('superseded')
+  const controller = new AbortController()
+  urlLoadController = controller
+
   fileName.value = url.split('/').pop() || url
   fileSize.value = ''
   loading.value = true
@@ -812,12 +868,30 @@ const loadFromUrl = async (url: string) => {
   lastSource.value = { type: 'url', url }
   startLoadingTimer()
 
+  // 超时标记独立于 signal.reason：部分引擎 abort(reason) 后 fetch 仍以通用
+  // AbortError 拒绝（丢失自定义原因），用本地标志保证超时提示不丢。
+  let timedOut = false
+  const timeoutId = setTimeout(() => {
+    timedOut = true
+    controller.abort(new DOMException(`加载超时（${URL_LOAD_TIMEOUT_MS / 1000} 秒无响应）`, 'TimeoutError'))
+  }, URL_LOAD_TIMEOUT_MS)
+
   try {
     progressStep.value = t('loading.progress.downloading')
-    const response = await fetch(url)
+    let response: Response
+    try {
+      response = await fetch(url, { signal: controller.signal })
+    } finally {
+      // 收到响应头（或请求已失败）即解除超时计时：正文传输不计入本轮超时
+      clearTimeout(timeoutId)
+    }
+    if (!isCurrentUrlLoad(controller)) return // 已被更新的加载取代
+
     if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`)
 
     const buffer = await response.arrayBuffer()
+    if (!isCurrentUrlLoad(controller)) return // 下载期间被取代：丢弃
+
     fileSize.value = formatFileSize(buffer.byteLength)
 
     // Use Worker for large files
@@ -834,8 +908,10 @@ const loadFromUrl = async (url: string) => {
       ? await parseWithWorker(buffer, undefined, onProgress)
       : parseDocFileFromBuffer(buffer, fileName.value)
 
+    if (!isCurrentUrlLoad(controller)) return // 解析期间被取代：丢弃结果不渲染
+
     if (!result.success) {
-      error.value = result.error || '解析失败'
+      error.value = result.error || t('error.parse.fail')
       loading.value = false
       emit('loading', false)
       return
@@ -843,18 +919,37 @@ const loadFromUrl = async (url: string) => {
     renderResult(result)
     emit('loaded')
   } catch (err) {
+    // W2-1/③：先看是否为本请求的取消/超时，再看是否已被更新的加载取代
+    if (controller.signal.aborted) {
+      if ((timedOut || isTimeoutAbortReason(controller.signal.reason)) && isCurrentUrlLoad(controller)) {
+        console.warn(`URL 加载超时: ${url}`)
+        // 文案含『加载超时』关键字 → errorClassifier network 类（可重试）
+        error.value = '加载超时：服务器长时间无响应，请检查地址是否可访问或稍后重试'
+      }
+      // 其余 abort（superseded/source-changed/retry/reset/unmounted）：静默，
+      // UI 状态归属新的加载或组件已销毁，不得回写
+      return
+    }
+    if (!isCurrentUrlLoad(controller)) return // 陈旧错误不得覆盖新加载的状态
     console.error('Error loading from URL:', err)
-    error.value = err instanceof Error ? err.message : '未知错误'
+    error.value = err instanceof Error ? err.message : t('error.parse.unknown')
   } finally {
-    loading.value = false
-    emit('loading', false)
-    stopLoadingTimer()
+    clearTimeout(timeoutId) // 兜底（fetch 抛错路径的内层 finally 已清；此处防漏）
+    if (isCurrentUrlLoad(controller)) {
+      // 仅当前请求有权收尾；被取代/已取消的请求不得触碰新加载的 UI 状态
+      urlLoadController = null
+      loading.value = false
+      emit('loading', false)
+      stopLoadingTimer()
+    }
   }
 }
 
 /** 重试上次加载 */
 const retryLoad = () => {
   if (!lastSource.value) return
+  // W2-1/A1：重试前显式取消在途请求（loadFromUrl 入口亦会自取消，此处双保险并覆盖 file 分支）
+  abortUrlLoad('retry')
   if (lastSource.value.type === 'file') {
     loadFromFile(lastSource.value.file)
   } else {
@@ -921,7 +1016,7 @@ function buildOutline(paragraphs: FormattedParagraphOutput[]) {
 const renderResult = (result: ParserOutput) => {
   if (result.document && result.document.paragraphs) {
     isRichFormat.value = true
-    const rawText = result.document.paragraphs.map((p: any) => p.text).join('\n\n')
+    const rawText = result.document.paragraphs.map(p => p.text).join('\n\n')
     plainText.value = rawText
     computeStats(rawText)
     buildOutline(result.document.paragraphs)
@@ -997,71 +1092,7 @@ const renderResult = (result: ParserOutput) => {
     // showImages.value = false
     loadWebFonts()
   } else {
-    error.value = '⚠️ 文档内容为空或无法提取文本\n\n可能原因：\n• 文件格式不受支持\n• 文件已损坏\n• 文档内容为空'
-  }
-}
-
-// ---- Format / Styles ----
-
-const FONT_SIZE_MAP: Record<number, string> = {
-  36: '2.25rem', 22: '1.375rem', 32: '2.0rem',
-  16: '1.0rem', 14: '0.875rem', 12: '0.75rem',
-}
-
-function resolveFontSize(size: number | undefined, fallback: string): string {
-  if (!size) return fallback
-  return FONT_SIZE_MAP[size] || `${size / 16}rem`
-}
-
-function getTextAlignment(paraFormat: ParagraphFormat, _charFormat: CharacterFormat): string {
-  if (paraFormat.alignment) return paraFormat.alignment
-  return 'justify'
-}
-
-const BORDER_COLOR_MAP: Record<number, string> = {
-  1: '#000000',  // Black
-  2: '#0000FF',  // Blue
-  3: '#00FFFF',  // Cyan
-  4: '#00FF00',  // Green
-  5: '#FF00FF',  // Magenta
-  6: '#FF0000',  // Red
-  7: '#FFFF00',  // Yellow
-  8: '#FFFFFF',  // White
-  9: '#000080',  // Dark Blue
-  10: '#008080', // Dark Cyan
-  11: '#008000', // Dark Green
-  12: '#800080', // Dark Magenta
-  13: '#800000', // Dark Red
-  14: '#808000', // Dark Yellow (Olive)
-  15: '#808080', // Dark Gray
-  16: '#C0C0C0', // Light Gray
-}
-
-const BORDER_TYPE_MAP: Record<number, string> = {
-  0: 'none',
-  1: 'solid',
-  2: 'dotted',
-  3: 'dashed',
-  4: 'double',
-  5: 'double',
-  6: 'solid',
-  7: 'dashed',
-}
-
-function getBorderStyle(border: any): string {
-  if (!border || border.borderType === 0) return ''
-  const width = border.lineWidth ? `${border.lineWidth / 8}pt` : '1pt'
-  const style = BORDER_TYPE_MAP[border.borderType] || 'solid'
-  const color = border.colorIndex ? (BORDER_COLOR_MAP[border.colorIndex] || '#000000') : '#000000'
-  return `${width} ${style} ${color}`
-}
-
-function getBorderCss(borders: any): { top: string; left: string; bottom: string; right: string } {
-  return {
-    top: borders?.top ? getBorderStyle(borders.top) : '',
-    left: borders?.left ? getBorderStyle(borders.left) : '',
-    bottom: borders?.bottom ? getBorderStyle(borders.bottom) : '',
-    right: borders?.right ? getBorderStyle(borders.right) : '',
+    error.value = t('error.emptyDoc')
   }
 }
 
@@ -1074,608 +1105,25 @@ interface ParaWithList {
 }
 
 /**
- * Strip a leading list marker from the paragraph text so the rendered
- * `<li>` content does not duplicate the marker (the browser renders its
- * own via `list-style`).
- *
- * Supports the same markers as `DocParser.detectListInfo`: Arabic / Latin /
- * Roman / CJK ideographic / circled numerals, parenthesized forms, and
- * ASCII / CJK bullets.
- */
-function extractListItemText(text: string, listType: string): string {
-  const trimmed = text.trimStart()
-  // Ordered markers
-  if (listType === 'ordered') {
-    return trimmed
-      .replace(/^\d+(?:\.\d+)+[\.\s\t]+/, '')            // 1.1 / 1.2.3
-      .replace(/^\d+[\.\)][\s\t]+/, '')                   // 1. / 2)
-      .replace(/^[\(\（\[]\d+[\)\）\]][\s\t]+/, '')        // (1) / （2） / [3]
-      .replace(/^[a-zA-Z][\.\)][\s\t]+/, '')              // a. / B)
-      .replace(/^[\(\（][a-zA-Z][\)\）][\s\t]+/, '')       // (a) / （B）
-      .replace(/^(?:i{1,3}|iv|v|vi{0,3}|ix|x|I{1,3}|IV|V|VI{0,3}|IX|X)[\.\)][\s\t]+/, '') // i. / II.
-      .replace(/^([一二三四五六七八九十百千零〇]{1,4}|[甲乙丙丁戊己庚辛壬癸]|[壹贰叁肆伍陆柒捌玖拾佰仟]{1,4})[\、\.\)][\s\t]*/, '') // 一、 / 甲.
-      .replace(/^[\(\（]([一二三四五六七八九十]{1,4}|[甲乙丙丁戊己庚辛壬癸])[）\)][\s\t]+/, '') // （一）
-      .replace(/^[\u2460-\u2473\u3251-\u325F\u32B1-\u32BF][\s\t]+/, '') // ① ②
-  }
-  // Unordered markers
-  return trimmed
-    .replace(/^[•\-\*][\s\t]+/, '')
-    .replace(/^[○●▪▸►→◇◆▪▫◦‣⁃]\s*/, '')
-}
-
-function collectTableBlock(paragraphs: ParaWithList[], startIndex: number): { rows: string[][]; rowsTableInfo?: TableInfo[]; rowsDepth?: number[]; headerRowCount: number; nextIndex: number } | null {
-  const rows: string[][] = []
-  const rowsTableInfo: TableInfo[] = []
-  const rowsDepth: number[] = []
-  let hasTableInfo = false
-  let i = startIndex
-
-  while (i < paragraphs.length) {
-    const para = paragraphs[i]
-    const text = para.text.trim()
-    // Check if this paragraph contains multiple table rows merged together.
-    // In Word binary format, multiple consecutive cell marks (2+)
-    // with empty content between them indicates a row boundary within a single paragraph.
-    // Common patterns: \u0007\u0007\u0007 (3+) or \u0007\u0007 (2) as row separators.
-    if (text.includes('\u0007\u0007')) {
-      const rawRows = text.split(/\u0007{2,}/)
-      const parsedRows: string[][] = []
-      for (const rowText of rawRows) {
-        const trimmed = rowText.trim()
-        if (trimmed.length === 0) continue
-        const cells = trimmed
-          .replace(/\u00a0/g, ' ')
-          .split('\u0007')
-          .map(cell => cell.trim())
-        if (cells.length > 0 && cells[cells.length - 1] === '') {
-          cells.pop()
-        }
-        const nonEmptyCount = cells.filter(c => c.length > 0).length
-        if (nonEmptyCount >= 1) {
-          parsedRows.push(cells)
-        }
-      }
-      if (parsedRows.length < 1) {
-        i++
-        continue
-      }
-      const columnCount = parsedRows.reduce((max, row) => Math.max(max, row.length), 0)
-      const paddedRows = parsedRows.map(row => {
-        while (row.length < columnCount) row.push('')
-        return row
-      })
-      for (const cells of paddedRows) {
-        rows.push(cells)
-        const tableInfo = (para.paraFormat as ParagraphFormat).table
-        const depth = tableInfo?.depth ?? 1
-        rowsDepth.push(depth)
-        if (tableInfo) {
-          hasTableInfo = true
-          rowsTableInfo.push(tableInfo)
-        } else {
-          rowsTableInfo.push({ inTable: true })
-        }
-      }
-      i++
-      continue
-    }
-    const cells = splitTableCells(text)
-    if (!cells) break
-    rows.push(cells)
-    const tableInfo = (para.paraFormat as ParagraphFormat).table
-    const depth = tableInfo?.depth ?? 1
-    rowsDepth.push(depth)
-    if (tableInfo) {
-      hasTableInfo = true
-      rowsTableInfo.push(tableInfo)
-    } else {
-      // Push a placeholder so indices align with rows[].
-      rowsTableInfo.push({ inTable: true })
-    }
-    i++
-  }
-
-  if (rows.length < 1) return null
-
-  let headerRowCount = 0
-  const columnCount = rows.reduce((max, row) => Math.max(max, row.length), 0)
-  if (rows.length >= 2 && columnCount >= 2) {
-    const firstRow = rows[0]
-    const firstRowNonEmpty = firstRow.filter(c => c && c.length > 0).length
-    if (firstRowNonEmpty === 1 && firstRowNonEmpty < columnCount) {
-      headerRowCount = 1
-    } else if (firstRowNonEmpty > 0 && firstRowNonEmpty < columnCount) {
-      const secondRowNonEmpty = rows[1].filter(c => c && c.length > 0).length
-      if (secondRowNonEmpty === columnCount) {
-        headerRowCount = 1
-      }
-    }
-  }
-
-  return { rows, rowsTableInfo: hasTableInfo ? rowsTableInfo : undefined, rowsDepth, headerRowCount, nextIndex: i }
-}
-
-interface ListItemNode {
-  text: string
-  level: number
-  charFormat: CharacterFormat
-  paraFormat: ParagraphFormat
-  children: ListItemNode[]
-}
-
-/**
- * Render a (possibly nested) `<ol>` / `<ul>` from a flat list of items.
- *
- * Items are grouped by their `level` field: when a deeper item follows a
- * shallower one, it becomes a child of the previous item; when a shallower
- * item follows a deeper one, the stack pops back to the right parent.
- *
- * @param startAt - For ordered lists, the starting number (default 1). Used for list number continuation.
- */
-function renderNestedList(
-  listTag: 'ol' | 'ul',
-  listStyle: string,
-  items: Array<{ text: string; level: number; charFormat: CharacterFormat; paraFormat: ParagraphFormat }>,
-  _startLevel: number,
-  startAt: number = 1,
-): string {
-  if (items.length === 0) return ''
-
-  // Build a tree from the flat list using a stack.
-  const root: ListItemNode = {
-    text: '', level: -1,
-    charFormat: {} as CharacterFormat,
-    paraFormat: {} as ParagraphFormat,
-    children: [],
-  }
-  const stack: ListItemNode[] = [root]
-
-  for (const it of items) {
-    while (stack.length > 1 && stack[stack.length - 1].level >= it.level) {
-      stack.pop()
-    }
-    const parent = stack[stack.length - 1]
-    const node: ListItemNode = {
-      text: it.text,
-      level: it.level,
-      charFormat: it.charFormat,
-      paraFormat: it.paraFormat,
-      children: [],
-    }
-    parent.children.push(node)
-    stack.push(node)
-  }
-
-  // Render the tree recursively.
-  const render = (node: ListItemNode, isRoot: boolean = false): string => {
-    if (node.children.length === 0) return ''
-    const renderedItems = node.children.map(child => {
-      const content = renderParagraphHtml(child.text, child.charFormat, child.paraFormat, 0, child.text.length, [])
-        .replace(/^<p[^>]*>/, '').replace(/<\/p>$/, '')
-      const subList = render(child, false)
-      // Apply paragraph-level font-size to li so items without char-styles
-      // still get the correct font size (otherwise the <p> tag was stripped).
-      const fontSize = resolveFontSize(child.charFormat.fontSize, '1.0rem')
-      return `<li style="font-size:${fontSize}">${content}${subList}</li>`
-    })
-    const startAttr = isRoot && listTag === 'ol' && startAt > 1 ? ` start="${startAt}"` : ''
-    return `<${listTag}${startAttr} style="list-style:${listStyle};padding-left:2em">${renderedItems.join('')}</${listTag}>`
-  }
-  return render(root, true)
-}
-
-function renderParagraphHtml(
-  text: string,
-  charFormat: CharacterFormat,
-  paraFormat: ParagraphFormat,
-  paraCpStart: number,
-  paraCpEnd: number,
-  hyperlinks?: HyperlinkRange[],
-  revisions?: RevisionMark[],
-): string {
-  const textAlign = getTextAlignment(paraFormat, charFormat)
-  const isCentered = textAlign === 'center'
-  const isRightAligned = textAlign === 'right'
-  const hasCharStyles = charFormat.styles && charFormat.styles.length > 0
-
-  // Apply revision marks (insert / delete) on plain text, producing <ins>/<del>
-  // HTML with author + time tooltip. Sort descending by cpStart so earlier
-  // insertions don't shift later offsets.
-  //
-  // revisionMode controls how each revision is rendered:
-  //   'marks'    — <ins>/<del> tags with tooltip (default)
-  //   'accepted' — insert: keep text; delete: drop text
-  //   'rejected' — insert: drop text; delete: keep text
-  const revisionResult = applyRevisionsToText(
-    text, paraCpStart, paraCpEnd, revisions || [], revisionMode.value
-  )
-  let workingText = revisionResult.text
-  let hasRevisionHtml = revisionResult.hasRevisionHtml
-
-  // Apply hyperlinks. Skip when revision HTML is present to avoid breaking
-  // <ins>/<del> tags via substring slicing (revisions and hyperlinks rarely
-  // overlap; when they do, revisions win).
-  let textWithLinks = workingText
-  let hasHyperlinkHtml = false
-  if (hyperlinks && hyperlinks.length > 0 && !hasRevisionHtml) {
-    const paraLinks = hyperlinks.filter(link =>
-      link.cpEnd > paraCpStart && link.cpStart < paraCpEnd
-    )
-    if (paraLinks.length > 0) {
-      paraLinks.sort((a, b) => b.cpStart - a.cpStart)
-      for (const link of paraLinks) {
-        const linkStartInPara = Math.max(0, link.cpStart - paraCpStart)
-        const linkEndInPara = Math.min(text.length, link.cpEnd - paraCpStart)
-        if (linkStartInPara < linkEndInPara && link.url) {
-          const before = textWithLinks.substring(0, linkStartInPara)
-          const linkText = textWithLinks.substring(linkStartInPara, linkEndInPara)
-          const after = textWithLinks.substring(linkEndInPara)
-          const displayText = link.result || linkText
-          textWithLinks = `${before}<a href="${escapeHtml(link.url)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent);text-decoration:underline;">${escapeHtml(displayText)}</a>${after}`
-          hasHyperlinkHtml = true
-        }
-      }
-    }
-  }
-
-  let hasHtml = hasRevisionHtml || hasHyperlinkHtml
-
-  // Replace picture placeholder characters (\u0001) with inline image or chart HTML.
-  // Chart placeholders take precedence over generic images so that chart OLE objects
-  // are not accidentally rendered as unrelated embedded pictures.
-  // Uses global counters (globalChartIdx/globalPicIdx) to ensure each chart/image
-  // is consumed only once across all paragraphs.
-  const hasPicPlaceholder = textWithLinks.includes('\u0001')
-  if (hasPicPlaceholder) {
-    // Phase 1: Replace placeholders with images first.
-    // Images take priority over charts for \u0001 placeholders because charts
-    // are also inserted via the justFinishedList logic (after a list group, before
-    // the next long body paragraph). If charts consumed \u0001 placeholders first,
-    // they would appear inside the list (e.g., between list items) instead of
-    // after the entire list.
-    if (pictures.value.length > 0 || images.value.length > 0) {
-      const allPics: PicSource[] = pictures.value.length > 0 ? pictures.value : images.value.map(url => ({
-        format: 'jpeg', dataUrl: url, widthPx: undefined, heightPx: undefined
-      }))
-      textWithLinks = textWithLinks.replace(/\u0001/g, () => {
-        if (globalPicIdx < allPics.length) {
-          const pic = allPics[globalPicIdx++]
-          const src = typeof pic === 'string' ? pic : pic.dataUrl
-          const style = 'max-width:100%;height:auto;margin:8px 0;'
-          return `<img src="${src}" alt="Embedded image" style="${style}" loading="lazy" />`
-        }
-        return '\u0001'
-      })
-    }
-    // Phase 2: Replace any remaining placeholders with charts.
-    if (textWithLinks.includes('\u0001') && charts.value.length > 0) {
-      textWithLinks = textWithLinks.replace(/\u0001/g, () => {
-        if (globalChartIdx < charts.value.length) {
-          const chart = charts.value[globalChartIdx++]
-          hasHtml = true
-          return renderChartHtml(chart)
-        }
-        return ''
-      })
-      hasHtml = true
-    }
-  }
-
-  // 软换行 (\v = Shift+Enter) 转换为 <br>（在所有基于偏移的处理完成后）
-  const hasSoftBreak = text.includes('\v')
-  const applySoftBreaks = (html: string): string => {
-    if (!hasSoftBreak) return html
-    // 注意：软换行在原始文本中是 \v，在 HTML 输出中也需要替换
-    // 但由于 escapeHtml 不会转义 \v 为特殊字符，直接替换即可
-    return html.replace(/\v/g, '<br>')
-  }
-
-  if (hasCharStyles) {
-    return applySoftBreaks(formatTextWithCharacterStyles(textWithLinks, charFormat.styles!, {
-      isCentered,
-      isRightAligned,
-      charFormat: { ...charFormat },
-      paraFormat: { ...paraFormat },
-    }, hasHtml))
-  }
-
-  if (hasHtml) {
-    return applySoftBreaks(formatTextWithDefaultStyles(textWithLinks, charFormat, paraFormat, {
-      isCentered,
-      isRightAligned,
-    }, true))
-  }
-
-  return applySoftBreaks(formatTextWithDefaultStyles(text, charFormat, paraFormat, {
-    isCentered,
-    isRightAligned,
-  }))
-}
-
-/**
- * Render a floating textbox anchor marker.
- *
- * Textbox shapes from the Office Art Drawing Container carry position (x, y),
- * size (width, height) and anchor CP information. This marker is displayed
- * at the anchor paragraph to indicate where the textbox is positioned.
- *
- * Position and size are shown in both twips and pixels (1 twip = 1/15 px).
- */
-function renderTextboxAnchorHtml(shape: ShapeInfo): string {
-  const twipsToPx = (twips: number): number => Math.round(twips / 15)
-  const parts: string[] = []
-  if (shape.x !== undefined && shape.y !== undefined) {
-    parts.push(`位置: ${twipsToPx(shape.x)}×${twipsToPx(shape.y)}px`)
-  }
-  if (shape.width !== undefined && shape.height !== undefined) {
-    parts.push(`尺寸: ${twipsToPx(shape.width)}×${twipsToPx(shape.height)}px`)
-  }
-  if (shape.anchorType) {
-    const anchorLabel = t('shapes.anchor.' + shape.anchorType) || shape.anchorType
-    parts.push(`锚点: ${anchorLabel}`)
-  }
-  const info = parts.length > 0 ? parts.join(' · ') : ''
-  const titleParts: string[] = []
-  if (shape.x !== undefined && shape.y !== undefined) {
-    titleParts.push(`位置: (${shape.x}, ${shape.y}) twips`)
-  }
-  if (shape.width !== undefined && shape.height !== undefined) {
-    titleParts.push(`尺寸: ${shape.width} × ${shape.height} twips`)
-  }
-  if (shape.anchorCp !== undefined) {
-    titleParts.push(`锚点 CP: ${shape.anchorCp}`)
-  }
-  if (shape.spid) {
-    titleParts.push(`SPID: ${shape.spid}`)
-  }
-  if (shape.floating) {
-    titleParts.push('浮动')
-  }
-  const title = titleParts.join(' · ')
-  return `<div class="textbox-anchor-marker" title="${escapeHtml(title)}" data-spid="${shape.spid}">
-  <span class="textbox-anchor-icon">⬚</span>
-  <span class="textbox-anchor-label">文本框</span>
-  ${info ? `<span class="textbox-anchor-info">${escapeHtml(info)}</span>` : ''}
-</div>`
-}
-
-function renderInlinePictureHtml(pic: {
-  format: string
-  dataUrl: string
-  widthPx?: number
-  heightPx?: number
-  floating?: boolean
-  cp?: number
-}): string {
-  const styleParts: string[] = []
-  if (pic.widthPx) {
-    styleParts.push(`max-width: ${Math.min(pic.widthPx, 600)}px`)
-  } else {
-    styleParts.push('max-width: 100%')
-  }
-  if (pic.heightPx) {
-    styleParts.push(`max-height: ${Math.min(pic.heightPx, 500)}px`)
-  }
-  const style = styleParts.join('; ')
-  const caption = `${pic.format.toUpperCase()}${pic.widthPx && pic.heightPx ? ` · ${pic.widthPx}×${pic.heightPx}px` : ''}`
-  return `<div class="inline-picture-container">
-  <img src="${pic.dataUrl}" alt="${escapeHtml(caption)}" class="inline-picture" style="${style}" loading="lazy" />
-  <div class="inline-picture-caption">${escapeHtml(caption)}</div>
-</div>`
-}
-
-function renderChartSvg(chart: ChartInfo): string {
-  const subtype = chart.subtype || 'chart'
-  // WPS-style colors: blue, orange, yellow — matching the actual chart in the document
-  const palette = ['#4472C4', '#ED7D31', '#FFC000']
-  // Column / Pyramid / Cone / Cylinder / generic chart → render as grouped column chart
-  // with axis labels and legend, matching the most common Word embedded chart layout.
-  if (subtype === 'column' || subtype === 'cone' || subtype === 'cylinder' || subtype === 'pyramid' || subtype === 'chart' || subtype === 'unknown' || subtype === 'picture') {
-    // Grouped column chart: 4 groups × 3 series
-    const groups = [
-      { label: 'Row 1', values: [9, 3, 4.5] },
-      { label: 'Row 2', values: [2.5, 8.8, 9.5] },
-      { label: 'Row 3', values: [3, 1.5, 3.5] },
-      { label: 'Row 4', values: [4.2, 9, 6] },
-    ]
-    const numSeries = 3
-    const maxVal = 12
-    // Landscape chart area matching WPS aspect ratio
-    const chartLeft = 45, chartTop = 15, chartRight = 200, chartBottom = 115
-    const chartWidth = chartRight - chartLeft
-    const chartHeight = chartBottom - chartTop
-    const groupCount = groups.length
-    const groupWidth = chartWidth / groupCount
-    const barWidth = groupWidth / (numSeries + 1.5)
-    let svgContent = ''
-    // Y-axis grid lines and labels
-    const yTicks = [0, 2, 4, 6, 8, 10, 12]
-    yTicks.forEach(tick => {
-      const y = chartBottom - (tick / maxVal) * chartHeight
-      svgContent += `<line x1="${chartLeft}" y1="${y}" x2="${chartRight}" y2="${y}" stroke="#d9d9d9" stroke-width="0.5"></line>`
-      svgContent += `<text x="${chartLeft - 5}" y="${y + 4}" text-anchor="end" font-size="9" fill="#555">${tick}</text>`
-    })
-    // Bars
-    groups.forEach((g, gi) => {
-      const groupX = chartLeft + gi * groupWidth + barWidth * 0.25
-      g.values.forEach((v, si) => {
-        const x = groupX + si * barWidth
-        const barHeight = (v / maxVal) * chartHeight
-        const y = chartBottom - barHeight
-        const fill = palette[si % palette.length]
-        svgContent += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${barHeight.toFixed(1)}" fill="${fill}"></rect>`
-      })
-      // X-axis label
-      const labelX = chartLeft + gi * groupWidth + groupWidth / 2
-      svgContent += `<text x="${labelX}" y="${chartBottom + 14}" text-anchor="middle" font-size="9" fill="#333">${g.label}</text>`
-    })
-    // Axes
-    svgContent += `<line x1="${chartLeft}" y1="${chartTop}" x2="${chartLeft}" y2="${chartBottom}" stroke="#999" stroke-width="1"></line>`
-    svgContent += `<line x1="${chartLeft}" y1="${chartBottom}" x2="${chartRight}" y2="${chartBottom}" stroke="#999" stroke-width="1"></line>`
-    // Legend
-    const legendNames = ['Column 1', 'Column 2', 'Column 3']
-    const legendX = chartRight + 10, legendStartY = 30
-    legendNames.forEach((name, i) => {
-      const ly = legendStartY + i * 16
-      const fill = palette[i % palette.length]
-      svgContent += `<rect x="${legendX}" y="${ly}" width="10" height="9" fill="${fill}"></rect>`
-      svgContent += `<text x="${legendX + 14}" y="${ly + 8}" font-size="9" fill="#333">${name}</text>`
-    })
-    return `<svg class="chart-svg" viewBox="0 0 280 145" xmlns="http://www.w3.org/2000/svg">
-  ${svgContent}
-</svg>`
-  }
-  // Bar chart (horizontal bars) — 条形图
-  if (subtype === 'bar') {
-    const widths = [60, 95, 75, 130, 100, 70]
-    const barHeight = 18
-    const gap = 12
-    const startY = 24
-    const startX = 20
-    let bars = ''
-    widths.forEach((w, i) => {
-      const y = startY + i * (barHeight + gap)
-      const fill = palette[i % palette.length]
-      bars += `<rect x="${startX}" y="${y}" width="${w}" height="${barHeight}" fill="${fill}" rx="2"></rect>`
-    })
-    return `<svg class="chart-svg" viewBox="0 0 220 170" xmlns="http://www.w3.org/2000/svg">
-  <line x1="20" y1="15" x2="20" y2="160" stroke="#94a3b8" stroke-width="1"></line>
-  <line x1="20" y1="160" x2="210" y2="160" stroke="#94a3b8" stroke-width="1"></line>
-  ${bars}
-</svg>`
-  }
-  // Line chart — 折线图
-  if (subtype === 'line' || subtype === 'scatter' || subtype === 'stock' || subtype === 'area' || subtype === 'bubble') {
-    const pts = [88, 50, 70, 40, 60, 28]
-    const startX = 24
-    const gap = 32
-    const baseY = 150
-    const points = pts.map((v, i) => `${startX + i * gap},${baseY - v}`).join(' ')
-    const areaPath = `M ${startX},${baseY} ${pts.map((v, i) => `L ${startX + i * gap},${baseY - v}`).join(' ')} L ${startX + (pts.length - 1) * gap},${baseY} Z`
-    return `<svg class="chart-svg" viewBox="0 0 220 170" xmlns="http://www.w3.org/2000/svg">
-  <line x1="20" y1="150" x2="210" y2="150" stroke="#94a3b8" stroke-width="1"></line>
-  <line x1="20" y1="15" x2="20" y2="150" stroke="#94a3b8" stroke-width="1"></line>
-  ${subtype === 'area' ? `<path d="${areaPath}" fill="#4F81BD" fill-opacity="0.25"></path>` : ''}
-  <polyline points="${points}" fill="none" stroke="#4F81BD" stroke-width="2"></polyline>
-  ${pts.map((v, i) => `<circle cx="${startX + i * gap}" cy="${baseY - v}" r="3" fill="#C0504D"></circle>`).join(' ')}
-</svg>`
-  }
-  // Pie / Doughnut — 饼图 / 环形图
-  if (subtype === 'pie' || subtype === 'doughnut') {
-    const values = [35, 25, 20, 20]
-    const total = values.reduce((s, v) => s + v, 0)
-    const cx = 110, cy = 85, r = 50
-    let angle = -Math.PI / 2
-    let slices = ''
-    values.forEach((v, i) => {
-      const next = angle + (v / total) * Math.PI * 2
-      const x1 = cx + r * Math.cos(angle)
-      const y1 = cy + r * Math.sin(angle)
-      const x2 = cx + r * Math.cos(next)
-      const y2 = cy + r * Math.sin(next)
-      const large = (next - angle) > Math.PI ? 1 : 0
-      slices += `<path d="M ${cx},${cy} L ${x1},${y1} A ${r},${r} 0 ${large} 1 ${x2},${y2} Z" fill="${palette[i % palette.length]}"></path>`
-      angle = next
-    })
-    const inner = subtype === 'doughnut' ? `<circle cx="${cx}" cy="${cy}" r="${r * 0.55}" fill="var(--bg-secondary, #f8f9fa)"></circle>` : ''
-    return `<svg class="chart-svg" viewBox="0 0 220 170" xmlns="http://www.w3.org/2000/svg">
-  ${slices}${inner}
-</svg>`
-  }
-  // Radar — 雷达图
-  if (subtype === 'radar') {
-    const cx = 110, cy = 85, r = 50, n = 5
-    const webs: string[] = []
-    for (let k = 0; k <= n; k++) {
-      const rad = (r * k) / n
-      const pts: string[] = []
-      for (let i = 0; i < n; i++) {
-        const a = (i / n) * Math.PI * 2 - Math.PI / 2
-        pts.push(`${cx + rad * Math.cos(a)},${cy + rad * Math.sin(a)}`)
-      }
-      webs.push(`<polygon points="${pts.join(' ')}" fill="none" stroke="#cbd5e1" stroke-width="1"></polygon>`)
-    }
-    const data = [0.9, 0.6, 0.85, 0.45, 0.7]
-    const pts = data.map((v, i) => {
-      const a = (i / n) * Math.PI * 2 - Math.PI / 2
-      return `${cx + r * v * Math.cos(a)},${cy + r * v * Math.sin(a)}`
-    }).join(' ')
-    return `<svg class="chart-svg" viewBox="0 0 220 170" xmlns="http://www.w3.org/2000/svg">
-  ${webs.join('')}
-  <polygon points="${pts}" fill="#4F81BD" fill-opacity="0.35" stroke="#4F81BD" stroke-width="2"></polygon>
-</svg>`
-  }
-  // Surface — 曲面图
-  if (subtype === 'surface') {
-    return `<svg class="chart-svg" viewBox="0 0 220 170" xmlns="http://www.w3.org/2000/svg">
-  <path d="M 20,140 Q 60,80 110,60 T 200,30" fill="none" stroke="#4F81BD" stroke-width="2"></path>
-  <path d="M 20,150 Q 70,110 130,90 T 200,70" fill="none" stroke="#C0504D" stroke-width="2"></path>
-  <path d="M 20,160 Q 80,140 140,120 T 200,110" fill="none" stroke="#9BBB59" stroke-width="2"></path>
-  <line x1="20" y1="15" x2="20" y2="160" stroke="#94a3b8" stroke-width="1"></line>
-  <line x1="20" y1="160" x2="210" y2="160" stroke="#94a3b8" stroke-width="1"></line>
-</svg>`
-  }
-  // OrgChart / hierarchy — 组织结构图
-  if (subtype === 'orgchart' || subtype === 'hierarchy') {
-    return `<svg class="chart-svg" viewBox="0 0 220 170" xmlns="http://www.w3.org/2000/svg">
-  <rect x="85" y="15" width="50" height="20" fill="#4F81BD" rx="3"></rect>
-  <line x1="110" y1="35" x2="110" y2="60" stroke="#94a3b8"></line>
-  <line x1="60" y1="60" x2="160" y2="60" stroke="#94a3b8"></line>
-  <line x1="60" y1="60" x2="60" y2="75" stroke="#94a3b8"></line>
-  <line x1="110" y1="60" x2="110" y2="75" stroke="#94a3b8"></line>
-  <line x1="160" y1="60" x2="160" y2="75" stroke="#94a3b8"></line>
-  <rect x="35" y="75" width="50" height="20" fill="#C0504D" rx="3"></rect>
-  <rect x="85" y="75" width="50" height="20" fill="#9BBB59" rx="3"></rect>
-  <rect x="135" y="75" width="50" height="20" fill="#8064A2" rx="3"></rect>
-  <line x1="60" y1="95" x2="60" y2="115" stroke="#94a3b8"></line>
-  <rect x="35" y="115" width="50" height="20" fill="#4BACC6" rx="3"></rect>
-</svg>`
-  }
-  // Process / cycle — 流程 / 循环
-  if (subtype === 'process' || subtype === 'cycle' || subtype === 'relationship' || subtype === 'list' || subtype === 'matrix') {
-    return `<svg class="chart-svg" viewBox="0 0 220 170" xmlns="http://www.w3.org/2000/svg">
-  <rect x="25" y="60" width="45" height="25" fill="#4F81BD" rx="3"></rect>
-  <rect x="88" y="60" width="45" height="25" fill="#C0504D" rx="3"></rect>
-  <rect x="151" y="60" width="45" height="25" fill="#9BBB59" rx="3"></rect>
-  <polygon points="72,73 80,68 80,78" fill="#94a3b8"></polygon>
-  <polygon points="135,73 143,68 143,78" fill="#94a3b8"></polygon>
-  ${subtype === 'cycle' ? `<path d="M 173,90 A 30,30 0 0,1 25,90" fill="none" stroke="#94a3b8" stroke-width="2" stroke-dasharray="4 3"></path><polygon points="32,90 25,86 25,94" fill="#94a3b8"></polygon>` : ''}
-</svg>`
-  }
-  // Default: generic bars
-  return `<svg class="chart-svg" viewBox="0 0 220 170" xmlns="http://www.w3.org/2000/svg">
-  <line x1="20" y1="150" x2="210" y2="150" stroke="#94a3b8" stroke-width="1"></line>
-  <line x1="20" y1="15" x2="20" y2="150" stroke="#94a3b8" stroke-width="1"></line>
-  <rect x="40" y="90" width="18" height="60" fill="#4F81BD" rx="2"></rect>
-  <rect x="80" y="55" width="18" height="95" fill="#C0504D" rx="2"></rect>
-  <rect x="120" y="75" width="18" height="75" fill="#9BBB59" rx="2"></rect>
-  <rect x="160" y="40" width="18" height="110" fill="#8064A2" rx="2"></rect>
-</svg>`
-}
-
-function renderChartHtml(chart: ChartInfo): string {
-  const labelParts = [escapeHtml(getChartTypeLabel(chart.type))]
-  if (chart.subtype && chart.subtype !== 'unknown') {
-    labelParts.push(escapeHtml(getChartSubtypeLabel(chart.subtype)))
-  }
-  const label = labelParts.join(' · ')
-  if (chart.dataUrl) {
-    return `<div class="chart-placeholder chart-with-image">
-  <img src="${chart.dataUrl}" alt="${label}" class="chart-preview-image" loading="lazy" />
-  <div class="chart-placeholder-label">${label}</div>
-</div>`
-  }
-  return `<div class="chart-placeholder">
-  ${renderChartSvg(chart)}
-</div>`
-}
-
-/**
  * 应用格式化页面数组到状态：同步更新 pages（虚拟滚动用）和 htmlContent（打印/复制用），
  * 并重置虚拟滚动状态（高度缓存、可视范围）。
  */
 function applyFormattedPages(paragraphs: ParaWithList[], hyperlinks?: HyperlinkRange[], revisions?: RevisionMark[]) {
-  const pageArr = formatFormattedTextToHtml(paragraphs, hyperlinks, revisions)
+  const pageArr = renderDocumentToPages({
+    paragraphs: paragraphs as RenderParagraph[],
+    hyperlinks,
+    revisions,
+    revisionMode: revisionMode.value,
+    shapes: shapes.value || [],
+    pictures: pictures.value || [],
+    images: images.value || [],
+    charts: charts.value || [],
+    sections: sections.value || [],
+    pageHeightPt: pageHeight.value,
+    showHiddenText: showHiddenText.value,
+    fontResolver: getWebFontFamily,
+    t,
+  })
   pages.value = pageArr
   htmlContent.value = pageArr.join('\n')
   // 重置虚拟滚动状态
@@ -1693,8 +1141,8 @@ function applyFormattedPages(paragraphs: ParaWithList[], hyperlinks?: HyperlinkR
 function getPagePlaceholderHeight(idx: number): number {
   const cached = pageHeights.value[idx]
   if (cached && cached > 0) return cached
-  // 默认按 A4 页面高度估算（与 formatFormattedTextToHtml 中的 pageHeightPx 一致）
-  return Math.max(400, pageHeight.value * 1.333)
+  // 默认按 A4 页面高度估算（与 documentRenderer/pageBuilder 的 PT_TO_PX 同源）
+  return Math.max(400, pageHeight.value * PT_TO_PX)
 }
 
 /** 判断页面索引是否在当前可视范围内（应渲染真实内容） */
@@ -1704,17 +1152,34 @@ function isPageVisible(idx: number): boolean {
   return idx >= visibleStart.value && idx <= visibleEnd.value
 }
 
-/** 测量已渲染页面的真实高度并缓存 */
-function measureVisiblePageHeights() {
+/** 测量已渲染页面的真实高度并缓存。
+ *  PERF-T1：以 data-page-idx 绝对页码为缓存键（旧实现用 NodeList 序号当页码，
+ *  visibleStart>0 后系统性错位污染 pageHeights）；并对 FIX-VUEW 的 CSS zoom
+ *  做归一化——getBoundingClientRect 返回的是缩放后视觉像素，除以 zoom 因子
+ *  还原为布局像素后再入库，占位 div 与真实页面共用同一单位系。返回是否有变更。 */
+function measureVisiblePageHeights(): boolean {
   const container = previewRef.value?.querySelector('.document-content')
-  if (!container) return
-  const pageEls = container.querySelectorAll('.page-content')
-  pageEls.forEach((el, idx) => {
-    const rect = (el as HTMLElement).getBoundingClientRect()
-    if (rect.height > 0) {
-      pageHeights.value[idx] = rect.height
+  if (!container) return false
+  const zoomFactor = zoomLevel.value / 100
+  const safeZoom = zoomFactor > 0 ? zoomFactor : 1
+  const hosts = container.querySelectorAll<HTMLElement>('.page-host[data-page-idx]')
+  let changed = false
+  let next: Record<number, number> | null = null
+  hosts.forEach((host) => {
+    const idx = Number(host.dataset.pageIdx)
+    if (!Number.isInteger(idx) || idx < 0) return
+    // .page-host 为 display:contents 无布局盒，实际盒子是其内部的 .page-content
+    const el = (host.querySelector('.page-content') as HTMLElement | null) ?? host
+    const rect = el.getBoundingClientRect()
+    const height = rect.height / safeZoom
+    if (height > 0 && Math.abs((pageHeights.value[idx] ?? -1) - height) > 0.5) {
+      if (!next) next = { ...pageHeights.value }
+      next[idx] = height
+      changed = true
     }
   })
+  if (changed && next) pageHeights.value = next
+  return changed
 }
 
 /** 根据滚动位置计算当前可视页面索引范围（含缓冲区） */
@@ -1730,10 +1195,15 @@ function updateVisibleRange() {
     visibleEnd.value = total - 1
     return
   }
-  // 使用容器相对于视口的位置计算可视范围
+  // 使用容器相对于视口的位置计算可视范围。
+  // PERF-T1：容器处于 .paper-page 的 CSS zoom 内，getBoundingClientRect 返回
+  // 视觉像素；pageHeights 缓存的是布局像素（已除 zoom），故把视口度量也换算回
+  // 布局像素，保证累计高度与视口窗口同一单位系（>100% 缩放下不漂移）。
   const containerRect = container.getBoundingClientRect()
-  const viewportTop = -containerRect.top
-  const viewportHeight = window.innerHeight
+  const zoomFactor = zoomLevel.value / 100
+  const safeZoom = zoomFactor > 0 ? zoomFactor : 1
+  const viewportTop = -containerRect.top / safeZoom
+  const viewportHeight = window.innerHeight / safeZoom
   // 累加各页面高度，定位当前可视的页面索引
   let accumulated = 0
   let start = 0
@@ -1741,7 +1211,10 @@ function updateVisibleRange() {
   for (let i = 0; i < total; i++) {
     const h = getPagePlaceholderHeight(i)
     const pageBottom = accumulated + h
-    if (pageBottom < viewportTop) {
+    // PERF-T1 收口：用 <= 而非 < —— 页底恰好落在视口顶（pageBottom === viewportTop）
+    // 时该页可见面积为零，应判为已滚出视口；严格小于会把这条零高度缝算作"可见"，
+    // 使 start 系统性偏小一页（perfT1 用例三的不变量断言即钉此处）。
+    if (pageBottom <= viewportTop) {
       start = i + 1
     }
     if (accumulated > viewportTop + viewportHeight) {
@@ -1758,502 +1231,66 @@ function updateVisibleRange() {
   }
 }
 
-/** 滚动事件处理器（throttle 用 requestAnimationFrame） */
+/** 滚动事件处理器（throttle 用 requestAnimationFrame）。
+ *  PERF-T1：rAF 回调里只做可视范围计算；高度测量改由 visibleStart/visibleEnd
+ *  的 watcher 在 DOM 更新后（nextTick）执行——旧实现在同一 rAF 内同步测量，
+ *  读到的是窗口变更前的旧 DOM，且 NodeList 序号错位会污染缓存。 */
 function handleVirtualScroll() {
   if (scrollTicking) return
   scrollTicking = true
   requestAnimationFrame(() => {
     updateVisibleRange()
-    measureVisiblePageHeights()
     scrollTicking = false
   })
 }
 
-// Global counters for chart/image placeholder replacement across paragraphs.
-// These persist across renderParagraphHtml calls so that each chart/image
-// is only consumed once, in document order.
-let globalChartIdx = 0
-let globalPicIdx = 0
+// 窗口变化 → DOM 重渲染完成后测量新渲染页面的真实高度；测量若引起累计高度
+// 变化则再校准一次可视范围。changed 门闩保证收敛，不会形成死循环。
+watch([visibleStart, visibleEnd], () => {
+  nextTick(() => {
+    if (measureVisiblePageHeights()) updateVisibleRange()
+  })
+})
 
-const formatFormattedTextToHtml = (paragraphs: ParaWithList[], hyperlinks?: HyperlinkRange[], revisions?: RevisionMark[]): string[] => {
-  if (!paragraphs || paragraphs.length === 0) return ['<p>文档内容为空</p>']
-  // Reset global counters for this document rendering pass
-  globalChartIdx = 0
-  globalPicIdx = 0
-
-  // Build a map of hyperlinks by paragraph CP range
-  const hyperlinkMap = new Map<number, HyperlinkRange[]>()
-  if (hyperlinks && hyperlinks.length > 0) {
-    for (const link of hyperlinks) {
-      // Group links by their start CP (we'll match to paragraphs later)
-      if (!hyperlinkMap.has(link.cpStart)) {
-        hyperlinkMap.set(link.cpStart, [])
-      }
-      hyperlinkMap.get(link.cpStart)!.push(link)
-    }
-  }
-
-  // Build a sorted list of textbox shapes with anchor CP for inline markers.
-  // These shapes are rendered as floating markers at their anchor paragraph
-  // to indicate where the textbox is positioned in the document.
-  const textBoxShapes = (shapes.value || [])
-    .filter(s => s.type === 'textbox' && s.anchorCp !== undefined && s.anchorCp > 0)
-    .slice()
-    .sort((a, b) => (a.anchorCp! - b.anchorCp!))
-
-  // Build a sorted list of inline pictures (those with a known CP position)
-  // for rendering at the corresponding paragraph in the document body.
-  const inlinePictures = (pictures.value || [])
-    .filter(p => p.cp !== undefined && p.cp >= 0 && !p.floating)
-    .slice()
-    .sort((a, b) => (a.cp! - b.cp!))
-
-  const result: string[] = []
-  const pageContent: string[] = []
-  let currentPageHeight = 0
-  const pageHeightPx = pageHeight.value * 1.333
-
-  // Section lookup for multi-column rendering.
-  // We track which section the current paragraph belongs to so that
-  // finalizePage() can apply CSS column-count to the page container.
-  const sectionList = sections.value || []
-  let currentColumnCount = 1
-  let currentColumnSpacingPt: number | undefined
-
-  const findSectionForCp = (cp: number): SectionInfo | undefined => {
-    for (const sec of sectionList) {
-      if (cp >= sec.cpStart && cp < sec.cpEnd) return sec
-    }
-    return undefined
-  }
-
-  const finalizePage = () => {
-    if (pageContent.length > 0) {
-      const styleParts: string[] = []
-      if (currentColumnCount > 1) {
-        styleParts.push(`column-count: ${currentColumnCount}`)
-        styleParts.push('column-fill: auto')
-        if (currentColumnSpacingPt !== undefined) {
-          styleParts.push(`column-gap: ${Math.round(currentColumnSpacingPt * 1.333)}px`)
-        }
-      }
-      const style = styleParts.length > 0 ? ` style="${styleParts.join('; ')}"` : ''
-      result.push(`<div class="page-content"${style}>${pageContent.join('\n')}</div>`)
-      pageContent.length = 0
-      currentPageHeight = 0
-    }
-  }
-
-  const addToPage = (html: string, estimatedHeight: number) => {
-    if (currentPageHeight > 0 && currentPageHeight + estimatedHeight > pageHeightPx) {
-      finalizePage()
-    }
-    pageContent.push(html)
-    currentPageHeight += estimatedHeight
-  }
-
-  const estimateParaHeight = (text: string, charFormat: CharacterFormat): number => {
-    const fontSize = charFormat.fontSize || 12
-    const baseLineHeight = fontSize * 1.5
-    const charCount = text.length
-    const charsPerLine = 45
-    const lines = Math.max(1, Math.ceil(charCount / charsPerLine))
-    return lines * baseLineHeight + 4
-  }
-
-  let i = 0
-  const listCounters = new Map<number, number>()
-  // Track whether we just finished rendering a list group.
-  // In the original .doc, floating charts often occupy empty paragraphs
-  // right after a list group. When the parser encounters the first long
-  // body paragraph after a list, we insert any unconsumed charts there.
-  let justFinishedList = false
-
-  while (i < paragraphs.length) {
-    const para = paragraphs[i]
-    const text = para.text
-    // Render empty paragraphs as blank lines (matching the original document's
-    // spacing). Previously these were skipped, causing lost vertical spacing
-    // between sections (e.g., after title, subtitle, section headings).
-    if (!text || !text.trim()) {
-      addToPage('<p style="margin:0;padding:0;height:0.6em;">&nbsp;</p>', 8)
-      i++
-      continue
-    }
-
-    const visibleLen = text.replace(/\u0001/g, '').length
-    const isList = !!para.paraFormat?.listType
-
-    // When the previous block was a list and the current paragraph is a
-    // long body paragraph (>= 100 chars), render any unconsumed charts
-    // here — this is where the chart's empty placeholder paragraphs were
-    // in the original document (between the list and the next body text).
-    if (justFinishedList && visibleLen >= 100 && !isList && globalChartIdx < charts.value.length) {
-      const chart = charts.value[globalChartIdx++]
-      addToPage(renderChartHtml(chart), 200)
-    }
-    // Reset the flag only for non-list paragraphs that have actual content.
-    // Pure image/placeholder paragraphs (visibleLen === 0) should not reset
-    // the flag, as they are part of the post-list visual block and charts
-    // should still be inserted before the next real body paragraph.
-    if (!isList && visibleLen > 0) justFinishedList = false
-
-    // Track which section this paragraph belongs to and update column settings.
-    // When the column count changes (section switch), finalize the current page
-    // so that content with different column layouts stays in separate pages.
-    const paraCp = para._cpStart || 0
-    const sec = findSectionForCp(paraCp)
-    if (sec) {
-      const newColumnCount = sec.columnCount || 1
-      const newColumnSpacing = sec.columnSpacingPt
-      if (newColumnCount !== currentColumnCount) {
-        finalizePage()
-        currentColumnCount = newColumnCount
-        currentColumnSpacingPt = newColumnSpacing
-      } else if (newColumnSpacing !== currentColumnSpacingPt) {
-        currentColumnSpacingPt = newColumnSpacing
-      }
-    }
-
-    const paraFormat = para.paraFormat
-    const listType = paraFormat?.listType
-    const tableBlock = collectTableBlock(paragraphs, i)
-
-    if (tableBlock) {
-      const html = renderNestedTableHtml(tableBlock.rows, tableBlock.rowsTableInfo, tableBlock.rowsDepth, tableBlock.headerRowCount)
-      const estimatedHeight = 100
-      addToPage(html, estimatedHeight)
-      i = tableBlock.nextIndex
-      continue
-    }
-
-    if (listType === 'ordered' || listType === 'unordered') {
-      const listStyle = paraFormat?.listStyle || (listType === 'ordered' ? 'decimal' : 'disc')
-      const startLevel = paraFormat?.listLevel ?? 0
-      const listId = paraFormat?.listId
-
-      const items: Array<{ text: string; level: number; charFormat: CharacterFormat; paraFormat: ParagraphFormat }> = []
-      let totalEstimatedHeight = 0
-      while (i < paragraphs.length) {
-        const item = paragraphs[i]
-        const itemFormat = item.paraFormat as ParagraphFormat & { listType?: string; listId?: number }
-        if (itemFormat.listType !== listType) break
-        const itemText = extractListItemText(item.text, listType)
-        if (!itemText.trim()) { i++; continue }
-        items.push({
-          text: itemText,
-          level: itemFormat.listLevel ?? 0,
-          charFormat: item.charFormat || ({} as CharacterFormat),
-          paraFormat: itemFormat,
-        })
-        totalEstimatedHeight += estimateParaHeight(itemText, item.charFormat || {} as CharacterFormat)
-        i++
-      }
-
-      let startAt = 1
-      if (listType === 'ordered' && listId !== undefined && listId !== null) {
-        const prevCount = listCounters.get(listId) || 0
-        startAt = prevCount + 1
-        const levelZeroCount = items.filter(it => it.level === 0).length
-        listCounters.set(listId, prevCount + levelZeroCount)
-      }
-
-      const listTag = listType === 'ordered' ? 'ol' : 'ul'
-      let html = renderNestedList(listTag, listStyle, items, startLevel, startAt)
-
-      // Replace picture placeholders (\u0001) inside list items with inline images.
-      // Images take priority over charts (charts are inserted after the list via
-      // justFinishedList logic, not consumed by \u0001 placeholders inside the list).
-      if (html.includes('\u0001')) {
-        if (pictures.value.length > 0 || images.value.length > 0) {
-          const allPics: PicSource[] = pictures.value.length > 0 ? pictures.value : images.value.map(url => ({
-            format: 'jpeg', dataUrl: url, widthPx: undefined, heightPx: undefined
-          }))
-          html = html.replace(/\u0001/g, () => {
-            if (globalPicIdx < allPics.length) {
-              const pic = allPics[globalPicIdx++]
-              const src = typeof pic === 'string' ? pic : pic.dataUrl
-              const style = 'max-width:100%;height:auto;margin:8px 0;'
-              return `<img src="${src}" alt="Embedded image" style="${style}" loading="lazy" />`
-            }
-            return '\u0001'
-          })
-        }
-        if (html.includes('\u0001') && charts.value.length > 0) {
-          html = html.replace(/\u0001/g, () => {
-            if (globalChartIdx < charts.value.length) {
-              return renderChartHtml(charts.value[globalChartIdx++])
-            }
-            return ''
-          })
-        }
-      }
-
-      addToPage(html, totalEstimatedHeight)
-      // Mark that we just finished rendering a list group, so that the
-      // next long body paragraph can trigger chart insertion (charts
-      // often follow a list in the original document).
-      justFinishedList = true
-    } else {
-      const charFormat = para.charFormat || {} as CharacterFormat
-      const paraCpStart = para._cpStart || 0
-      const paraCpEnd = paraCpStart + (text?.length || 0)
-      const html = renderParagraphHtml(text, charFormat, paraFormat, paraCpStart, paraCpEnd, hyperlinks, revisions)
-      const estimatedHeight = estimateParaHeight(text, charFormat)
-      if (paraFormat.pageBreakBefore) {
-        finalizePage()
-      }
-      addToPage(html, estimatedHeight)
-
-      // Render textbox floating markers anchored to this paragraph.
-      // Each textbox shape whose anchorCp falls within [paraCpStart, paraCpEnd]
-      // gets a floating marker displayed after the paragraph.
-      if (textBoxShapes.length > 0) {
-        for (const shape of textBoxShapes) {
-          const cp = shape.anchorCp!
-          if (cp >= paraCpStart && cp <= paraCpEnd + 1) {
-            addToPage(renderTextboxAnchorHtml(shape), 24)
-          }
-        }
-      }
-
-      // Render inline pictures anchored to this paragraph.
-      // Each picture whose cp falls within [paraCpStart, paraCpEnd]
-      // gets rendered as an inline image within the paragraph.
-      if (inlinePictures.length > 0) {
-        for (const pic of inlinePictures) {
-          const cp = pic.cp!
-          if (cp >= paraCpStart && cp <= paraCpEnd + 1) {
-            const picHtml = renderInlinePictureHtml(pic)
-            const picHeight = pic.heightPx ? Math.min(pic.heightPx, 400) : 200
-            addToPage(picHtml, picHeight + 16)
-          }
-        }
-      }
-      i++
-    }
-  }
-
-  // Render any remaining charts that weren't consumed by \u0001 placeholders.
-  // This happens when the chart's OLE placeholder was stripped during text
-  // extraction (e.g., HYPERLINK field cleanup removed the \u0001 marker).
-  // Appending to the end keeps the chart visible after the body text.
-  const usedChartCount = globalChartIdx
-  for (let ci = usedChartCount; ci < charts.value.length; ci++) {
-    const chart = charts.value[ci]
-    const chartHtml = renderChartHtml(chart)
-    addToPage(chartHtml, 200)
-  }
-
-  // Render any remaining pictures that weren't consumed by \u0001 placeholders.
-  // This handles floating images or images without a character position anchor.
-  const usedPicCount = globalPicIdx
-  const allPics: PicSource[] = pictures.value.length > 0 ? pictures.value : images.value.map(url => ({
-    format: 'jpeg', dataUrl: url, widthPx: undefined, heightPx: undefined,
-    cp: undefined, floating: false,
-  }))
-  for (let pi = usedPicCount; pi < allPics.length; pi++) {
-    const pic = allPics[pi]
-    // Skip pictures that were already rendered inline (they have a valid cp)
-    if (typeof pic !== 'string' && pic.cp !== undefined && pic.cp >= 0) continue
-    const src = typeof pic === 'string' ? pic : pic.dataUrl
-    const style = 'max-width:100%;height:auto;margin:8px 0;'
-    const imgHtml = `<img src="${src}" alt="Embedded image" style="${style}" loading="lazy" />`
-    addToPage(imgHtml, 200)
-  }
-
-  finalizePage()
-
-  return result
-}
-
-const formatTextWithCharacterStyles = (
-  text: string, charStyles: CharStyleSegment[], options: CharStyleOptions, hasHtml: boolean = false
-): string => {
-  const { isCentered, charFormat, paraFormat } = options
-  const isRightAligned = paraFormat.alignment === 'right'
-  const fontSize = resolveFontSize(charFormat.fontSize, '1.0rem')
-  const textAlign = isCentered ? 'center' : isRightAligned ? 'right' : 'justify'
-  const fontWeight = charFormat.bold ? 'bold' : 'normal'
-
-  let totalLength = 0
-  for (const s of charStyles) totalLength += (s.end - s.start)
-  if (totalLength < text.length * 0.8) {
-    return formatTextWithDefaultStyles(text, charFormat, paraFormat, { isCentered, isRightAligned }, hasHtml)
-  }
-
-  let htmlContent = ''
-  let lastEnd = 0
-  for (const style of charStyles) {
-    if (style.start > lastEnd) {
-      const gap = text.substring(lastEnd, style.start)
-      if (gap) htmlContent += hasHtml ? gap : escapeHtml(gap)
-    }
-    const segment = text.substring(style.start, style.end)
-    if (!segment) continue
-
-    const css: string[] = []
-    css.push(`font-family: ${getWebFontFamily(style.style.fontName)}'${style.style.fontName || '宋体'}', serif`)
-    css.push(`font-size: ${fontSize}`)
-    css.push(`font-weight: ${fontWeight}`)
-    if (style.style.italic) css.push('font-style: italic')
-
-    const textDecs: string[] = []
-    if (style.style.underline) textDecs.push('underline')
-    if (style.style.strikethrough) textDecs.push('line-through')
-    if (textDecs.length > 0) css.push(`text-decoration: ${textDecs.join(' ')}`)
-
-    if (style.style.color) css.push(`color: ${style.style.color}`)
-    if (style.style.highlight) css.push(`background-color: ${style.style.highlight}`)
-    if (style.style.superscript) css.push('vertical-align: super; font-size: 0.7em')
-    if (style.style.subscript) css.push('vertical-align: sub; font-size: 0.7em')
-    if (style.style.smallCaps) css.push('font-variant: small-caps')
-    if (style.style.allCaps) css.push('text-transform: uppercase')
-    if (style.style.outline) css.push('text-shadow: 1px 0 0 currentColor, -1px 0 0 currentColor, 0 1px 0 currentColor, 0 -1px 0 currentColor')
-    if (style.style.shadow) css.push('text-shadow: 2px 2px 2px rgba(0,0,0,0.5)')
-    if (style.style.letterSpacing !== undefined && style.style.letterSpacing !== 0) {
-      css.push(`letter-spacing: ${style.style.letterSpacing}pt`)
-    }
-    if (style.style.hidden) {
-      if (showHiddenText.value) {
-        css.push('border-bottom: 1px dotted #888; color: #888;')
-      } else {
-        css.push('display: none;')
-      }
-    }
-
-    htmlContent += `<span style="${css.join('; ')}">${hasHtml ? segment : escapeHtml(segment)}</span>`
-    lastEnd = style.end
-  }
-  if (lastEnd < text.length) {
-    const rem = text.substring(lastEnd)
-    if (rem) htmlContent += hasHtml ? rem : escapeHtml(rem)
-  }
-
-  const pCss: string[] = []
-  pCss.push(`font-size:${fontSize}`)
-  pCss.push(`text-align:${textAlign}`)
-  if (paraFormat.lineSpacing) pCss.push(`line-height: ${paraFormat.lineSpacing}`)
-  if (paraFormat.spaceBefore) pCss.push(`margin-top: ${paraFormat.spaceBefore}pt`)
-  if (paraFormat.spaceAfter) pCss.push(`margin-bottom: ${paraFormat.spaceAfter}pt`)
-  if (paraFormat.indent) pCss.push(`margin-left: ${paraFormat.indent}pt`)
-  if (paraFormat.rightIndent) pCss.push(`margin-right: ${paraFormat.rightIndent}pt`)
-  if (paraFormat.firstLineIndent) pCss.push(`text-indent: ${paraFormat.firstLineIndent}pt`)
-  if (paraFormat.backgroundColor) pCss.push(`background-color: ${paraFormat.backgroundColor}`)
-  if (paraFormat.borders) {
-    const borderCss = getBorderCss(paraFormat.borders)
-    if (borderCss.top) pCss.push(`border-top: ${borderCss.top}`)
-    if (borderCss.left) pCss.push(`border-left: ${borderCss.left}`)
-    if (borderCss.bottom) pCss.push(`border-bottom: ${borderCss.bottom}`)
-    if (borderCss.right) pCss.push(`border-right: ${borderCss.right}`)
-    pCss.push('padding: 4px')
-  }
-
-  const headingLevel = paraFormat?.headingLevel
-  const hasTabs = text.includes('\t')
-  const finalContent = hasTabs && (!paraFormat.tabs || paraFormat.tabs.length === 0)
-    ? `<span style="white-space: pre; tab-size: 3;">${htmlContent}</span>`
-    : htmlContent
-
-  const hasPageBreak = paraFormat.pageBreakBefore
-  const pageBreakHtml = hasPageBreak
-    ? '<div style="page-break-before: always; break-before: page; border-top: 2px dashed var(--border); margin: 24px 0 16px 0; position: relative;"><span style="position: absolute; top: -12px; left: 50%; transform: translateX(-50%); background: var(--bg); padding: 0 8px; font-size: 12px; color: var(--muted);">— 分页 —</span></div>'
-    : ''
-
-  if (headingLevel && headingLevel >= 1 && headingLevel <= 6) {
-    return `${pageBreakHtml}<h${headingLevel} style="${pCss.join('; ')}">${finalContent}</h${headingLevel}>`
-  }
-  return `${pageBreakHtml}<p style="${pCss.join('; ')}">${finalContent}</p>`
-}
-
-const formatTextWithDefaultStyles = (
-  text: string, charFormat: CharacterFormat, paraFormat: ParagraphFormat,
-  options: { isCentered: boolean; isRightAligned: boolean }, hasHtml: boolean = false
-): string => {
-  const { isCentered, isRightAligned } = options
-  const css: string[] = []
-  css.push(`font-family: ${getWebFontFamily(charFormat.fontName)}'${charFormat.fontName || '宋体'}', 'SimSun', serif`)
-  css.push(`font-size: ${resolveFontSize(charFormat.fontSize, '1.0rem')}`)
-  if (charFormat.bold) css.push('font-weight: bold')
-  if (charFormat.italic) css.push('font-style: italic')
-
-  const textDecorations: string[] = []
-  if (charFormat.underline) textDecorations.push('underline')
-  if (charFormat.strikethrough) textDecorations.push('line-through')
-  if (textDecorations.length > 0) css.push(`text-decoration: ${textDecorations.join(' ')}`)
-
-  if (charFormat.color) css.push(`color: ${charFormat.color}`)
-  if (charFormat.highlight) css.push(`background-color: ${charFormat.highlight}`)
-  if (charFormat.superscript) css.push('vertical-align: super; font-size: 0.7em')
-  if (charFormat.subscript) css.push('vertical-align: sub; font-size: 0.7em')
-  if (charFormat.smallCaps) css.push('font-variant: small-caps')
-  if (charFormat.allCaps) css.push('text-transform: uppercase')
-  if (charFormat.outline) css.push('text-shadow: 1px 0 0 currentColor, -1px 0 0 currentColor, 0 1px 0 currentColor, 0 -1px 0 currentColor')
-  if (charFormat.shadow) css.push('text-shadow: 2px 2px 2px rgba(0,0,0,0.5)')
-  if (charFormat.letterSpacing !== undefined && charFormat.letterSpacing !== 0) {
-    css.push(`letter-spacing: ${charFormat.letterSpacing}pt`)
-  }
-  if (charFormat.hidden) {
-    if (showHiddenText.value) {
-      css.push('border-bottom: 1px dotted #888; color: #888;')
-    } else {
-      css.push('display: none;')
-    }
-  }
-
-  css.push(`text-align: ${isCentered ? 'center' : isRightAligned ? 'right' : 'justify'}`)
-
-  if (paraFormat.lineSpacing) css.push(`line-height: ${paraFormat.lineSpacing}`)
-  if (paraFormat.spaceBefore) css.push(`margin-top: ${paraFormat.spaceBefore}pt`)
-  if (paraFormat.spaceAfter) css.push(`margin-bottom: ${paraFormat.spaceAfter}pt`)
-  if (paraFormat.indent) css.push(`margin-left: ${paraFormat.indent}pt`)
-  if (paraFormat.rightIndent) css.push(`margin-right: ${paraFormat.rightIndent}pt`)
-  if (paraFormat.firstLineIndent) css.push(`text-indent: ${paraFormat.firstLineIndent}pt`)
-  if (paraFormat.backgroundColor) css.push(`background-color: ${paraFormat.backgroundColor}`)
-  if (paraFormat.borders) {
-    const borderCss = getBorderCss(paraFormat.borders)
-    if (borderCss.top) css.push(`border-top: ${borderCss.top}`)
-    if (borderCss.left) css.push(`border-left: ${borderCss.left}`)
-    if (borderCss.bottom) css.push(`border-bottom: ${borderCss.bottom}`)
-    if (borderCss.right) css.push(`border-right: ${borderCss.right}`)
-    css.push('padding: 4px')
-  }
-
-  const hasPageBreak = paraFormat.pageBreakBefore
-
-  const headingLevel = paraFormat?.headingLevel
-  const hasTabs = text.includes('\t')
-  const finalText = hasTabs
-    ? applyTabStops(text, paraFormat.tabs, charFormat.fontSize || 12, charFormat.fontName || '宋体', hasHtml)
-    : (hasHtml ? text : escapeHtml(text))
-
-  const pageBreakHtml = hasPageBreak
-    ? '<div style="page-break-before: always; break-before: page; border-top: 2px dashed var(--border); margin: 24px 0 16px 0; position: relative;"><span style="position: absolute; top: -12px; left: 50%; transform: translateX(-50%); background: var(--bg); padding: 0 8px; font-size: 12px; color: var(--muted);">— 分页 —</span></div>'
-    : ''
-
-  if (headingLevel && headingLevel >= 1 && headingLevel <= 6) {
-    return `${pageBreakHtml}<h${headingLevel} style="${css.join('; ')}">${finalText}</h${headingLevel}>`
-  }
-  return `${pageBreakHtml}<p style="${css.join('; ')}">${finalText}</p>`
-}
-
-// 纯文本推断渲染与制表位/转义辅助提取至 utils/textRender.ts
-
+// FIX-VUEW 的 zoom 是真实回流：>100% 时文字重新折行、页面布局像素高度改变，
+// 缩放变化后需在回流完成的新布局上重新测量并校准可视范围。
+// PERF-T1 收口：缓存存的是布局像素，zoom 改变布局语义——旧 zoom 下测得的
+// 条目全部失效（尤其未渲染页的占位估算），必须整体清空后在回流完成的新
+// 布局上重测当前窗口；残留旧值会让占位高度与新布局混用两套单位系。
+watch(zoomLevel, () => {
+  pageHeights.value = {}
+  nextTick(() => {
+    measureVisiblePageHeights()
+    updateVisibleRange()
+  })
+})
 // ---- Zoom ----
 
 function zoomIn() {
   zoomLevel.value = Math.min(MAX_ZOOM, zoomLevel.value + ZOOM_STEP)
 }
 
+/**
+ * 缩小一档（MIN_ZOOM 下限钳制）。
+ */
 function zoomOut() {
   zoomLevel.value = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoomLevel.value - ZOOM_STEP))
 }
 
+/**
+ * 缩放复位 100%。
+ */
 function zoomReset() {
   zoomLevel.value = 100
 }
 
 const zoomLabel = computed(() => `${zoomLevel.value}%`)
+
+/** DOC-POLISH①：面板标题计数括号按语言取形——zh 全角（n）、en 半角 (n)。 */
+function panelTitle(key: string, n: number): string {
+  const base = t(key)
+  return currentLocale.value === 'en' ? `${base} (${n})` : `${base}（${n}）`
+}
 
 // ---- Search ----
 
@@ -2280,10 +1317,14 @@ function toggleSearch() {
     nextTick(() => {
       measureVisiblePageHeights()
       updateVisibleRange()
+      searchToggleRef.value?.focus()
     })
   }
 }
 
+/**
+ * 切换隐藏文字显示态，并基于 lastParseResult 全量重渲染以使样式变化生效。
+ */
 function toggleHiddenText() {
   showHiddenText.value = !showHiddenText.value
   // 重新渲染 HTML 以应用隐藏文字样式变化
@@ -2347,26 +1388,41 @@ function performSearch() {
   }
 }
 
+/**
+ * 移除预览区内全部搜索高亮包装（委托 searchUtils.clearSearchHighlights）。
+ */
 function clearHighlights() {
   if (previewRef.value) clearSearchHighlights(previewRef.value)
 }
 
+/**
+ * 高亮第 idx 个匹配（加 search-highlight-current）并平滑滚动居中；其余匹配清除 current 态；idx 越界静默忽略。
+ */
 function scrollToMatch(idx: number) {
   const matches = previewRef.value?.querySelectorAll('.search-highlight') as NodeListOf<HTMLElement>
   if (idx >= 0 && idx < matches.length) {
     matches.forEach((el, i) => {
       el.classList.toggle('search-highlight-current', i === idx)
-      el.scrollIntoView({ block: 'center', behavior: 'smooth' })
     })
+    const current = matches[idx]
+    if (current && typeof current.scrollIntoView === 'function') {
+      current.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    }
   }
 }
 
+/**
+ * 下一个匹配（模长环形轮转）。
+ */
 function nextMatch() {
   if (searchResults.value.length === 0) return
   currentSearchIndex.value = (currentSearchIndex.value + 1) % searchResults.value.length
   scrollToMatch(currentSearchIndex.value)
 }
 
+/**
+ * 上一个匹配（模长环形轮转）。
+ */
 function prevMatch() {
   if (searchResults.value.length === 0) return
   currentSearchIndex.value = (currentSearchIndex.value - 1 + searchResults.value.length) % searchResults.value.length
@@ -2374,7 +1430,7 @@ function prevMatch() {
 }
 
 const searchStatusLabel = computed(() => {
-  if (searchResults.value.length === 0) return '无匹配'
+  if (searchResults.value.length === 0) return t('search.no.results')
   return `${currentSearchIndex.value + 1} / ${searchResults.value.length}`
 })
 
@@ -2385,7 +1441,7 @@ function printDocument() {
   
   const printWindow = window.open('', '_blank')
   if (!printWindow) {
-    alert('请允许弹出窗口以进行打印')
+    alert(t('print.popupBlocked'))
     return
   }
   
@@ -2405,7 +1461,7 @@ function printDocument() {
         color: #666;
       }
       @bottom-center {
-        content: "第 " counter(page) " 页 / 共 " counter(pages) " 页";
+        content: "${t('print.p1')}" counter(page) "${t('print.p2')}" counter(pages) "${t('print.p3')}";
         font-size: 10pt;
         color: #666;
       }
@@ -2478,15 +1534,16 @@ function printDocument() {
 </body>
 </html>`
   
-  printWindow.document.write(printContent)
-  printWindow.document.close()
-  
+  // 注册监听后再写入文档，避免部分浏览器在 document.close() 后立即触发
+  // load，导致监听器错过而无法自动打开打印对话框。
   printWindow.addEventListener('load', () => {
     setTimeout(() => {
       printWindow.print()
       printWindow.close()
     }, 500)
-  })
+  }, { once: true })
+  printWindow.document.write(printContent)
+  printWindow.document.close()
 }
 
 // ---- Download ----
@@ -2508,7 +1565,7 @@ function scrollToOutline(item: OutlineItem) {
     }
     const paragraphs = container.querySelectorAll('p, h1, h2, h3, h4')
     const target = paragraphs[item.index]
-    if (target) {
+    if (target && typeof target.scrollIntoView === 'function') {
       target.scrollIntoView({ block: 'start', behavior: 'smooth' })
       target.classList.add('outline-highlight')
       setTimeout(() => target.classList.remove('outline-highlight'), 2000)
@@ -2526,16 +1583,21 @@ function scrollToOutline(item: OutlineItem) {
   })
 }
 
+/**
+ * 复制纯文本到剪贴板，三级降级：① Clipboard API 富文本写入 ② 隐藏 textarea + execCommand("copy") ③ 同法纯文本兜底；任一成功后按 data-action="copy-text" 定位工具栏按钮显示 ✓ 反馈 2s（FIX-VUEW 后不再依赖中文 title 选择器）。
+ */
 async function copyText() {
   if (!plainText.value) return
   
   const tryRichCopy = async () => {
     if (!htmlContent.value) return false
-    
-    const blob = new Blob([htmlContent.value], { type: 'text/html' })
-    const item = new ClipboardItem({ 'text/html': blob })
-    
+    if (typeof ClipboardItem === 'undefined' || typeof navigator.clipboard?.write !== 'function') {
+      return false
+    }
+
     try {
+      const blob = new Blob([htmlContent.value], { type: 'text/html' })
+      const item = new ClipboardItem({ 'text/html': blob })
       await navigator.clipboard.write([item])
       return true
     } catch {
@@ -2580,7 +1642,10 @@ async function copyText() {
   }
   
   const showCopySuccess = () => {
-    const btn = document.querySelector('.toolbar-btn[title*="复制"]')
+    // FIX-VUEW：原选择器 .toolbar-btn[title*="复制"] 依赖中文 title 文本，
+    // i18n 化或切 EN（title 变 "Copy text to clipboard"）后即失效。
+    // 改为语言无关的 data-action 属性定位（见模板 📋 按钮）。
+    const btn = document.querySelector('.toolbar-btn[data-action="copy-text"]')
     if (btn) {
       const originalText = btn.innerHTML
       btn.innerHTML = '✓'
@@ -2606,6 +1671,9 @@ async function copyText() {
   }
 }
 
+/**
+ * 导出纯文本 .txt：Blob + 临时 <a download> 触发下载；文件名取去 .doc/.dot 扩展的文档名，空内容静默跳过。
+ */
 function downloadText() {
   if (!plainText.value) return
   const name = fileName.value.replace(/\.(doc|dot)$/i, '') || 'document'
@@ -2618,6 +1686,9 @@ function downloadText() {
   URL.revokeObjectURL(url)
 }
 
+/**
+ * 导出可独立打开的 .html：预览 HTML 内联进完整样式模板（title 取文档名转义）。
+ */
 function downloadHtml() {
   if (!htmlContent.value) return
   const name = fileName.value.replace(/\.(doc|dot)$/i, '') || 'document'
@@ -2710,6 +1781,9 @@ function downloadHtml() {
 // ---- Download Markdown ----
 // 转换逻辑提取至 utils/markdownExport.ts
 
+/**
+ * 导出 .md：htmlToMarkdown 纯函数将当前预览 HTML 转 Markdown 后下载。
+ */
 function downloadMarkdown() {
   if (!htmlContent.value) return
 
@@ -2731,6 +1805,13 @@ function toggleShortcuts() {
   showShortcuts.value = !showShortcuts.value
 }
 
+/**
+ * 全局键盘快捷键分发（document 级监听，onUnmounted 时解绑）：
+ *  - Ctrl/⌘+F 搜索 · Ctrl/⌘+P 打印 · Esc 先关搜索再关快捷键面板
+ *  - Ctrl/⌘+=/-/0 缩放 · F3|Ctrl+G / Shift+F3|Ctrl+Shift+G 匹配导航（搜索开启时生效）
+ *  - PageUp/PageDown/Home/End 翻页 · ? 或 Ctrl+/ 开关快捷键面板
+ *  - 输入框聚焦时跳过翻页类与 ?/Ctrl+/（守卫位于这些分支之前），避免干扰文本编辑。
+ */
 function handleKeydown(e: KeyboardEvent) {
   const isCtrl = e.ctrlKey || e.metaKey
 
@@ -2774,15 +1855,15 @@ function handleKeydown(e: KeyboardEvent) {
     return
   }
 
-  // F3 or Ctrl+G for next match
-  if (e.key === 'F3' || (isCtrl && e.key === 'g')) {
-    if (showSearch.value) { e.preventDefault(); nextMatch() }
+  // Shift+F3 or Ctrl+Shift+G for prev match (check before the unmodified form).
+  if ((e.key === 'F3' && e.shiftKey) || (isCtrl && e.shiftKey && e.key === 'g')) {
+    if (showSearch.value) { e.preventDefault(); prevMatch() }
     return
   }
 
-  // Shift+F3 or Ctrl+Shift+G for prev match
-  if (e.key === 'F3' && e.shiftKey || (isCtrl && e.shiftKey && e.key === 'g')) {
-    if (showSearch.value) { e.preventDefault(); prevMatch() }
+  // F3 or Ctrl+G for next match
+  if (e.key === 'F3' || (isCtrl && e.key === 'g')) {
+    if (showSearch.value) { e.preventDefault(); nextMatch() }
     return
   }
 
@@ -2791,13 +1872,20 @@ function handleKeydown(e: KeyboardEvent) {
   const isInputFocused = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
   if (isInputFocused) return
 
+  // DOC-POLISH④：翻页类按键仅在焦点位于本组件预览区时接管。
+  // 焦点落在侧栏/上传页等组件外时放行浏览器原生行为（滚动到顶/底、原生翻页），
+  // 不再全局劫持——修复"焦点在任意非输入处按 Home/End 页面不滚"的可达性回退。
+  const inPreview = !!previewRef.value && target instanceof Node && previewRef.value.contains(target)
+
   if (e.key === 'PageUp') {
+    if (!inPreview) return
     e.preventDefault()
     goToPrevPage()
     return
   }
 
   if (e.key === 'PageDown') {
+    if (!inPreview) return
     e.preventDefault()
     goToNextPage()
     return
@@ -2805,19 +1893,23 @@ function handleKeydown(e: KeyboardEvent) {
 
   // Home/End for first/last page (Ctrl or standalone)
   if (e.key === 'Home') {
+    if (!inPreview) return
     e.preventDefault()
     goToPage(1)
     return
   }
 
   if (e.key === 'End') {
+    if (!inPreview) return
     e.preventDefault()
     goToPage(totalPages.value)
     return
   }
 
-  // ? or Ctrl+/ to toggle shortcuts panel
+  // ? or Ctrl+/ to toggle shortcuts panel. Keep text fields untouched so typing
+  // punctuation or slash commands does not unexpectedly open the panel.
   if (e.key === '?' || (isCtrl && e.key === '/')) {
+    if (isInputFocused) return
     e.preventDefault()
     toggleShortcuts()
     return
@@ -2827,8 +1919,13 @@ function handleKeydown(e: KeyboardEvent) {
 // ---- Watchers ----
 
 watch(() => props.source, (newSource) => {
+  // W2-1/A1：源变更即取消在途 URL 加载。newSource 为 null 时（App.vue resetFile
+  // 将 previewSource 置空）同样触发本 watcher —— 由此覆盖「重置返回首页」时机，
+  // 防止已离开的加载在后台完成并回写状态。
+  abortUrlLoad('source-changed')
   if (newSource) {
-    typeof newSource === 'string' ? loadFromUrl(newSource) : loadFromFile(newSource)
+    if (typeof newSource === 'string') loadFromUrl(newSource)
+    else loadFromFile(newSource)
   }
 })
 
@@ -2837,11 +1934,16 @@ onMounted(() => {
   window.addEventListener('scroll', handleVirtualScroll, { passive: true })
   window.addEventListener('resize', handleVirtualScroll, { passive: true })
   if (props.source) {
-    typeof props.source === 'string' ? loadFromUrl(props.source) : loadFromFile(props.source)
+    if (typeof props.source === 'string') loadFromUrl(props.source)
+    else loadFromFile(props.source)
   }
 })
 
 onUnmounted(() => {
+  // W2-1/A1：卸载时取消在途 URL 加载，防止销毁后的迟到结果回写组件状态
+  abortUrlLoad('unmounted')
+  // 文件解析也可能尚未结束；无论来源如何都要清理加载秒表，避免卸载后定时器继续运行。
+  stopLoadingTimer()
   document.removeEventListener('keydown', handleKeydown)
   window.removeEventListener('scroll', handleVirtualScroll)
   window.removeEventListener('resize', handleVirtualScroll)
@@ -2851,17 +1953,32 @@ onUnmounted(() => {
 
 function reload() {
   if (props.source) {
-    typeof props.source === 'string' ? loadFromUrl(props.source) : loadFromFile(props.source)
+    if (typeof props.source === 'string') loadFromUrl(props.source)
+    else loadFromFile(props.source)
   }
 }
 
+/**
+ * 供父组件经 defineExpose 只读获取当前纯文本内容。
+ */
 function getPlainText(): string {
   return plainText.value
 }
 
+/**
+ * skip-link 目标动作：滚动到正文起点并把焦点移至正文容器。
+ * 正文尚未渲染时回退到预览根容器，避免焦点丢失。
+ */
 function focusContent() {
-  previewRef.value?.querySelector('.document-content')?.scrollIntoView({ block: 'start' })
-  previewRef.value?.focus()
+  const content = previewRef.value?.querySelector('.document-content') as HTMLElement | null
+  if (content && typeof content.scrollIntoView === 'function') {
+    content.scrollIntoView({ block: 'start' })
+  }
+  if (content) {
+    content.focus()
+  } else {
+    previewRef.value?.focus()
+  }
 }
 
 defineExpose({ reload, getPlainText, focusContent })
@@ -2869,7 +1986,7 @@ defineExpose({ reload, getPlainText, focusContent })
 
 <template>
   <div class="doc-preview" :style="{ '--zoom': zoomLevel / 100 }" tabindex="-1">
-    <a class="skip-link" href="#" @click.prevent="focusContent">跳到文档内容</a>
+    <a class="skip-link" href="#doc-content" @click.prevent="focusContent">{{ t('app.skip.content') }}</a>
     <!-- Loading -->
     <LoadingOverlay
       v-if="loading"
@@ -2885,58 +2002,63 @@ defineExpose({ reload, getPlainText, focusContent })
     <ErrorDisplay v-else-if="error" :error="error" @retry="retryLoad" />
 
     <!-- Preview -->
-    <div v-else ref="previewRef" class="preview-wrapper">
+    <div v-else ref="previewRef" class="preview-wrapper" tabindex="-1">
       <!-- Toolbar -->
-      <div class="toolbar">
+      <div class="toolbar" role="toolbar" :aria-label="t('toolbar.label')">
         <div class="toolbar-left">
           <!-- Zoom -->
-          <button class="toolbar-btn" @click="zoomOut" :disabled="zoomLevel <= MIN_ZOOM" title="缩小" aria-label="缩小">−</button>
-          <button class="toolbar-btn zoom-label" @click="zoomReset" title="重置缩放" aria-label="重置缩放为 100%">{{ zoomLabel }}</button>
-          <button class="toolbar-btn" @click="zoomIn" :disabled="zoomLevel >= MAX_ZOOM" title="放大" aria-label="放大">+</button>
+          <button type="button" class="toolbar-btn" @click="zoomOut" :disabled="zoomLevel <= MIN_ZOOM" :title="t('toolbar.zoom.out')" :aria-label="t('toolbar.zoom.out')">−</button>
+          <button type="button" class="toolbar-btn zoom-label" @click="zoomReset" :title="t('toolbar.zoom.reset')" :aria-label="t('toolbar.zoom.reset.aria')">{{ zoomLabel }}</button>
+          <button type="button" class="toolbar-btn" @click="zoomIn" :disabled="zoomLevel >= MAX_ZOOM" :title="t('toolbar.zoom.in')" :aria-label="t('toolbar.zoom.in')">+</button>
 
-          <span class="toolbar-sep" role="separator"></span>
+          <span class="toolbar-sep" aria-hidden="true"></span>
 
           <!-- Search -->
-          <button class="toolbar-btn" @click="toggleSearch" :class="{ active: showSearch }" title="搜索文档" aria-label="搜索文档">
+          <button ref="searchToggleRef" type="button" class="toolbar-btn" @click="toggleSearch" :class="{ active: showSearch }" :title="t('toolbar.search')" :aria-label="t('toolbar.search')" :aria-expanded="showSearch" aria-controls="doc-search-bar">
             🔍
           </button>
 
-          <span class="toolbar-sep" role="separator"></span>
+          <span class="toolbar-sep" aria-hidden="true"></span>
 
           <!-- Print -->
-          <button class="toolbar-btn" @click="printDocument" title="打印 / 导出 PDF" aria-label="打印">🖨️</button>
+          <button type="button" class="toolbar-btn" @click="printDocument" :title="t('toolbar.print')" :aria-label="t('toolbar.print')">🖨️</button>
 
           <!-- Download text -->
-          <button class="toolbar-btn" @click="downloadText" :title="t('toolbar.download.txt')" :aria-label="t('toolbar.download.txt')">📥</button>
+          <button type="button" class="toolbar-btn" @click="downloadText" :title="t('toolbar.download.txt')" :aria-label="t('toolbar.download.txt')">📥</button>
 
           <!-- Download HTML -->
-          <button class="toolbar-btn" @click="downloadHtml" :title="t('toolbar.download.html')" :aria-label="t('toolbar.download.html')">🌐</button>
+          <button type="button" class="toolbar-btn" @click="downloadHtml" :title="t('toolbar.download.html')" :aria-label="t('toolbar.download.html')">🌐</button>
 
           <!-- Download Markdown -->
-          <button class="toolbar-btn" @click="downloadMarkdown" :title="t('toolbar.download.md')" :aria-label="t('toolbar.download.md')">📝</button>
+          <button type="button" class="toolbar-btn" @click="downloadMarkdown" :title="t('toolbar.download.md')" :aria-label="t('toolbar.download.md')">📝</button>
 
           <!-- Copy text -->
-          <button class="toolbar-btn" @click="copyText" :title="t('toolbar.copy')" :aria-label="t('toolbar.copy')">📋</button>
+          <button type="button" class="toolbar-btn" data-action="copy-text" @click="copyText" :title="t('toolbar.copy')" :aria-label="t('toolbar.copy')">📋</button>
 
-          <span class="toolbar-sep" role="separator"></span>
+          <span class="toolbar-sep" aria-hidden="true"></span>
 
           <!-- Outline TOC -->
           <button
+            type="button"
             class="toolbar-btn"
             :class="{ active: showOutline }"
             :disabled="outline.length === 0"
             @click="showOutline = !showOutline"
             :title="t('toolbar.outline')"
             :aria-label="t('toolbar.outline')"
+            :aria-expanded="showOutline"
+            aria-controls="doc-outline-sidebar"
           >📑</button>
 
           <!-- Hidden text toggle -->
           <button
+            type="button"
             class="toolbar-btn"
             :class="{ active: showHiddenText }"
             @click="toggleHiddenText"
             :title="showHiddenText ? t('toolbar.hidden.show') : t('toolbar.hidden.hide')"
             :aria-label="t('toolbar.hidden.toggle')"
+            :aria-pressed="showHiddenText"
           >👁️</button>
         </div>
 
@@ -2945,43 +2067,55 @@ defineExpose({ reload, getPlainText, focusContent })
             {{ wordCount }} {{ t('stats.words') }} · {{ paragraphCount }} {{ t('stats.paragraphs') }} · {{ charCount }} {{ t('stats.chars') }}
           </span>
 
-          <span class="toolbar-sep" role="separator"></span>
+          <span class="toolbar-sep" aria-hidden="true"></span>
 
           <!-- Dark mode toggle -->
           <button
+            type="button"
             class="toolbar-btn"
             :class="{ active: darkMode }"
             @click="toggleDarkMode"
             :title="darkMode ? t('app.theme.light') : t('app.theme.dark')"
             :aria-label="t('toolbar.theme')"
+            :aria-pressed="darkMode"
           >
             {{ darkMode ? '☀️' : '🌙' }}
           </button>
 
           <!-- Shortcuts -->
           <button
+            type="button"
             class="toolbar-btn"
             :class="{ active: showShortcuts }"
             @click="toggleShortcuts"
             :title="t('toolbar.shortcuts') + ' (?)'"
             :aria-label="t('toolbar.shortcuts')"
+            :aria-expanded="showShortcuts"
+            aria-controls="doc-shortcuts-panel"
           >⌨️</button>
 
-          <span class="toolbar-sep" role="separator"></span>
+          <span class="toolbar-sep" aria-hidden="true"></span>
 
           <!-- Pagination controls -->
-          <div class="pagination-controls">
+          <div class="pagination-controls" role="group" :aria-label="t('pagination.label')">
             <button
+              type="button"
               class="pagination-btn"
               @click="goToPrevPage"
               :disabled="currentPage <= 1"
               :title="t('pagination.prev')"
               :aria-label="t('pagination.prev')"
             >◀</button>
-            <span class="pagination-info">
+            <span
+              class="pagination-info"
+              role="status"
+              aria-live="polite"
+              :aria-label="t('pagination.page', { current: currentPage, total: totalPages })"
+            >
               {{ currentPage }} / {{ totalPages }}
             </span>
             <button
+              type="button"
               class="pagination-btn"
               @click="goToNextPage"
               :disabled="currentPage >= totalPages"
@@ -2993,38 +2127,54 @@ defineExpose({ reload, getPlainText, focusContent })
       </div>
 
       <!-- Search bar -->
-      <div v-if="showSearch" class="search-bar">
+      <div
+        v-if="showSearch"
+        id="doc-search-bar"
+        class="search-bar"
+        role="search"
+        :aria-label="t('toolbar.search')"
+      >
         <input
           ref="searchInputRef"
           v-model="searchQuery"
-          type="text"
+          type="search"
           class="search-input"
+          autocomplete="off"
+          enterkeyhint="search"
           :placeholder="t('search.placeholder')"
+          :aria-label="t('search.placeholder')"
+          aria-describedby="doc-search-status"
           @input="performSearch"
           @keyup.enter="nextMatch"
         />
         <label class="search-option" :title="t('search.case')">
-          <input type="checkbox" v-model="searchCaseSensitive" @change="performSearch" />
-          <span>Aa</span>
+          <input type="checkbox" v-model="searchCaseSensitive" :aria-label="t('search.case')" @change="performSearch" />
+          <span aria-hidden="true">Aa</span>
         </label>
         <label class="search-option" :title="t('search.word')">
-          <input type="checkbox" v-model="searchWholeWord" @change="performSearch" />
-          <span>W</span>
+          <input type="checkbox" v-model="searchWholeWord" :aria-label="t('search.word')" @change="performSearch" />
+          <span aria-hidden="true">W</span>
         </label>
-        <span class="search-status">{{ searchStatusLabel }}</span>
-        <button class="toolbar-btn" @click="prevMatch" :disabled="searchResults.length === 0" :title="t('search.placeholder') + ' ▲'" aria-label="前一个匹配">▲</button>
-        <button class="toolbar-btn" @click="nextMatch" :disabled="searchResults.length === 0" :title="t('search.placeholder') + ' ▼'" aria-label="后一个匹配">▼</button>
-        <button class="toolbar-btn" @click="toggleSearch" :title="t('toolbar.search')" aria-label="关闭搜索">✕</button>
+        <span id="doc-search-status" class="search-status" role="status" aria-live="polite">{{ searchStatusLabel }}</span>
+        <button type="button" class="toolbar-btn" @click="prevMatch" :disabled="searchResults.length === 0" :title="t('search.prevMatch')" :aria-label="t('search.prevMatch')">▲</button>
+        <button type="button" class="toolbar-btn" @click="nextMatch" :disabled="searchResults.length === 0" :title="t('search.nextMatch')" :aria-label="t('search.nextMatch')">▼</button>
+        <button type="button" class="toolbar-btn" @click="toggleSearch" :title="t('search.close')" :aria-label="t('search.close')">✕</button>
       </div>
 
       <!-- Document info -->
       <div class="doc-info">
         <span class="doc-name">{{ fileName }}</span>
-        <span class="doc-status">{{ t('doc.status.ok') }}</span>
+        <span class="doc-status" role="status" aria-live="polite">{{ t('doc.status.ok') }}</span>
       </div>
 
       <!-- Document outline sidebar -->
-      <div v-if="showOutline && outline.length > 0" class="outline-sidebar">
+      <div
+        v-if="showOutline && outline.length > 0"
+        id="doc-outline-sidebar"
+        class="outline-sidebar"
+        role="navigation"
+        :aria-label="t('outline.header')"
+      >
         <div class="outline-header">{{ t('outline.header') }}</div>
         <div class="outline-list">
           <div
@@ -3032,23 +2182,30 @@ defineExpose({ reload, getPlainText, focusContent })
             :key="item.index"
             class="outline-item"
             :class="'outline-level-' + item.level"
+            role="button"
+            tabindex="0"
+            :aria-label="item.text"
             @click="scrollToOutline(item)"
+            @keydown.enter.prevent="scrollToOutline(item)"
+            @keydown.space.prevent="scrollToOutline(item)"
           >{{ item.text }}</div>
         </div>
       </div>
 
       <!-- Document content (paper-like) -->
       <div class="paper-page">
-        <div class="document-content">
+        <div id="doc-content" class="document-content" tabindex="-1">
           <template v-for="(pageHtml, idx) in pages" :key="idx">
             <div
               v-if="isPageVisible(idx)"
               class="page-host"
+              :data-page-idx="idx"
               v-html="pageHtml"
             ></div>
             <div
               v-else
               class="page-placeholder"
+              :data-page-idx="idx"
               :style="{ height: getPagePlaceholderHeight(idx) + 'px' }"
             ></div>
           </template>
@@ -3059,7 +2216,7 @@ defineExpose({ reload, getPlainText, focusContent })
       <CollapsiblePanel
         v-if="storySections.length > 0"
         v-model="showStories"
-        :title="`${t('story.title')}（${storySections.length}）`"
+        :title="panelTitle('story.title', storySections.length)"
         :summary="storySections.map((s: StorySection) => s.label).join(' · ')"
         panel-class="stories-panel"
       >
@@ -3079,15 +2236,17 @@ defineExpose({ reload, getPlainText, focusContent })
             >
               <img
                 :src="img.dataUrl"
-                :alt="`图片 ${idx + 1}`"
+                :alt="t('images.alt', { n: idx + 1 })"
                 :style="{
                   maxWidth: '100%',
                   height: 'auto',
                   maxHeight: '200px',
                 }"
+                loading="lazy"
+                decoding="async"
                 class="story-image"
               />
-              <span class="story-image-caption">{{ img.format?.toUpperCase() || '图片' }}</span>
+              <span class="story-image-caption">{{ img.format?.toUpperCase() || t('story.image.caption', { fmt: '' }) }}</span>
             </div>
           </div>
         </div>
@@ -3265,7 +2424,7 @@ defineExpose({ reload, getPlainText, focusContent })
       <CollapsiblePanel
         v-if="toc.length > 0"
         v-model="showToc"
-        :title="`${t('toc.title')}（${toc.length}）`"
+        :title="panelTitle('toc.title', toc.length)"
         panel-class="toc-panel"
       >
         <div class="toc-content">
@@ -3287,7 +2446,7 @@ defineExpose({ reload, getPlainText, focusContent })
       <CollapsiblePanel
         v-if="index.length > 0"
         v-model="showIndex"
-        :title="`${t('index.title')}（${index.length}）`"
+        :title="panelTitle('index.title', index.length)"
         panel-class="toc-panel"
       >
         <div class="toc-content">
@@ -3310,12 +2469,13 @@ defineExpose({ reload, getPlainText, focusContent })
       <CollapsiblePanel
         v-if="revisions.length > 0"
         v-model="showRevisions"
-        :title="`${t('revisions.title')}（${revisions.length}）`"
+        :title="panelTitle('revisions.title', revisions.length)"
         :summary="t('revisions.count', { n: revisionItems.length })"
         panel-class="revisions-panel"
       >
         <div class="revision-mode-toolbar" role="group" :aria-label="t('revisions.title')">
           <button
+            type="button"
             class="revision-mode-btn"
             :class="{ active: revisionMode === 'marks' }"
             :aria-pressed="revisionMode === 'marks'"
@@ -3323,6 +2483,7 @@ defineExpose({ reload, getPlainText, focusContent })
             :title="t('revisions.marks')"
           >{{ t('revisions.marks') }}</button>
           <button
+            type="button"
             class="revision-mode-btn"
             :class="{ active: revisionMode === 'accepted' }"
             :aria-pressed="revisionMode === 'accepted'"
@@ -3330,6 +2491,7 @@ defineExpose({ reload, getPlainText, focusContent })
             :title="t('revisions.accept')"
           >{{ t('revisions.accept') }}</button>
           <button
+            type="button"
             class="revision-mode-btn"
             :class="{ active: revisionMode === 'rejected' }"
             :aria-pressed="revisionMode === 'rejected'"
@@ -3354,7 +2516,7 @@ defineExpose({ reload, getPlainText, focusContent })
       <CollapsiblePanel
         v-if="bookmarks.length > 0"
         v-model="showBookmarks"
-        :title="`${t('bookmarks.title')}（${bookmarks.length}）`"
+        :title="panelTitle('bookmarks.title', bookmarks.length)"
         :summary="t('bookmarks.summary')"
         panel-class="bookmarks-panel"
       >
@@ -3374,7 +2536,7 @@ defineExpose({ reload, getPlainText, focusContent })
       <CollapsiblePanel
         v-if="sections.length > 0"
         v-model="showSections"
-        :title="`${t('sections.title')}（${sections.length}）`"
+        :title="panelTitle('sections.title', sections.length)"
         :summary="t('sections.summary')"
         panel-class="sections-panel"
       >
@@ -3385,7 +2547,7 @@ defineExpose({ reload, getPlainText, focusContent })
             class="section-item"
           >
             <div class="section-header">
-              <span class="section-index">节 {{ sec.index + 1 }}</span>
+              <span class="section-index">{{ t('sections.index', { n: sec.index }) }}</span>
               <span v-if="sec.breakType" class="section-break">
                 {{ t('sections.break.' + sec.breakType) || sec.breakType }}
               </span>
@@ -3440,7 +2602,7 @@ defineExpose({ reload, getPlainText, focusContent })
       <CollapsiblePanel
         v-if="pageFields.length > 0"
         v-model="showPageFields"
-        :title="`${t('pageFields.title')}（${pageFields.length}）`"
+        :title="panelTitle('pageFields.title', pageFields.length)"
         summary="PAGE / NUMPAGES"
         panel-class="page-fields-panel"
       >
@@ -3466,7 +2628,7 @@ defineExpose({ reload, getPlainText, focusContent })
       <CollapsiblePanel
         v-if="crossReferences.length > 0"
         v-model="showCrossReferences"
-        :title="`${t('crossRefs.title')}（${crossReferences.length}）`"
+        :title="panelTitle('crossRefs.title', crossReferences.length)"
         summary="REF / NOTEREF"
         panel-class="cross-refs-panel"
       >
@@ -3483,11 +2645,11 @@ defineExpose({ reload, getPlainText, focusContent })
               <span v-if="cr.result" class="cross-ref-result">{{ t('crossRefs.show', { v: cr.result }) }}</span>
             </div>
             <div class="cross-ref-target">
-              {{ t('crossRefs.target') }}：<code>{{ cr.targetBookmarkName }}</code>
+              {{ t('crossRefs.target') }}: <code>{{ cr.targetBookmarkName }}</code>
             </div>
             <div class="cross-ref-instruction">{{ t('crossRefs.instruction', { inst: cr.instruction }) }}</div>
             <div v-if="cr.switches.length > 0" class="cross-ref-switches">
-              {{ t('crossRefs.switches') }}：
+              {{ t('crossRefs.switches') }}:
               <span
                 v-for="sw in cr.switches"
                 :key="sw"
@@ -3504,7 +2666,7 @@ defineExpose({ reload, getPlainText, focusContent })
       <CollapsiblePanel
         v-if="shapes.length > 0"
         v-model="showShapes"
-        :title="`${t('shapes.title')}（${shapes.length}）`"
+        :title="panelTitle('shapes.title', shapes.length)"
         :summary="t('shapes.summary')"
         panel-class="shapes-panel"
       >
@@ -3544,7 +2706,7 @@ defineExpose({ reload, getPlainText, focusContent })
       <CollapsiblePanel
         v-if="equations.length > 0"
         v-model="showEquations"
-        :title="`${t('equations.title')}（${equations.length}）`"
+        :title="panelTitle('equations.title', equations.length)"
         :summary="t('equations.summary')"
         panel-class="equations-panel"
       >
@@ -3575,7 +2737,7 @@ defineExpose({ reload, getPlainText, focusContent })
       <CollapsiblePanel
         v-if="charts.length > 0"
         v-model="showCharts"
-        :title="`${t('charts.title')}（${charts.length}）`"
+        :title="panelTitle('charts.title', charts.length)"
         :summary="t('charts.summary')"
         panel-class="charts-panel"
       >
@@ -3612,7 +2774,7 @@ defineExpose({ reload, getPlainText, focusContent })
       <CollapsiblePanel
         v-if="wordArts.length > 0"
         v-model="showWordArts"
-        :title="`${t('wordart.title')}（${wordArts.length}）`"
+        :title="panelTitle('wordart.title', wordArts.length)"
         :summary="t('wordart.summary')"
         panel-class="wordart-panel"
       >
@@ -3657,7 +2819,7 @@ defineExpose({ reload, getPlainText, focusContent })
       <CollapsiblePanel
         v-if="pictures.length > 0 || images.length > 0"
         v-model="showImages"
-        :title="`${t('images.title')}（${pictures.length > 0 ? pictures.length : images.length}）`"
+        :title="panelTitle('images.title', pictures.length > 0 ? pictures.length : images.length)"
         :summary="t('images.summary')"
         panel-class="images-panel"
       >
@@ -3668,13 +2830,13 @@ defineExpose({ reload, getPlainText, focusContent })
               :key="idx"
               class="image-item"
             >
-              <img :src="pic.dataUrl" :alt="`图片 ${idx + 1}`" loading="lazy" />
+              <img :src="pic.dataUrl" :alt="t('images.alt', { n: idx + 1 })" loading="lazy" />
               <div class="image-meta">
                 <span class="image-format">{{ pic.format.toUpperCase() }}</span>
                 <template v-if="pic.widthPx && pic.heightPx">
                   <span class="image-size">{{ pic.widthPx }} × {{ pic.heightPx }}</span>
                 </template>
-                <span v-if="pic.floating" class="image-floating">浮动</span>
+                <span v-if="pic.floating" class="image-floating">{{ t('images.floating') }}</span>
               </div>
             </div>
           </template>
@@ -3692,7 +2854,6 @@ defineExpose({ reload, getPlainText, focusContent })
       -->
 
       <!-- Document statistics -->
-      <!-- <DocStatsPanel v-model="showStats" :stats="docStats" /> -->
 
       <!-- Keyboard shortcuts panel -->
       <ShortcutsPanel v-model="showShortcuts" />
@@ -4238,9 +3399,14 @@ defineExpose({ reload, getPlainText, focusContent })
   box-shadow: var(--paper-shadow);
   min-height: 400px;
   border-radius: 2px;
-  transform: scale(var(--zoom, 1));
-  transform-origin: top center;
-  transition: transform 0.2s ease, background 0.3s;
+  /* FIX-VUEW：缩放改用真实回流布局的 zoom（CSS Baseline 2024），替代不参与
+     布局的 transform: scale。旧实现的布局盒恒为 800px，≥150% 时视觉盒向四周
+     溢出——横向被容器/视口裁切、纵向压过后续面板，且 transform-origin center
+     使左缘侵入 float 左浮的大纲侧栏形成重叠。zoom 使布局盒随缩放同步伸缩、
+     margin:auto 保持居中，两类缺陷从根消除；空间不足时浏览器给出原生滚动条
+     而非裁切。兼容性：Chrome/Edge/Safari 长期支持，Firefox 126+（2024-05）。 */
+  zoom: var(--zoom, 1);
+  transition: background 0.3s;
 }
 
 /* ==================== Document content ==================== */
@@ -4401,6 +3567,13 @@ defineExpose({ reload, getPlainText, focusContent })
   color: var(--accent);
 }
 
+.outline-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  background: var(--bg-tertiary);
+  color: var(--accent);
+}
+
 .outline-level-1 {
   --level: 1;
   font-weight: 600;
@@ -4435,7 +3608,7 @@ defineExpose({ reload, getPlainText, focusContent })
   overflow: hidden;
 }
 
-.stories-toggle {
+:deep(.stories-toggle) {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -4450,18 +3623,18 @@ defineExpose({ reload, getPlainText, focusContent })
   transition: background 0.15s;
 }
 
-.stories-toggle:hover {
+:deep(.stories-toggle:hover) {
   background: var(--bg-tertiary);
 }
 
-.stories-toggle-icon {
+:deep(.stories-toggle-icon) {
   display: inline-block;
   width: 12px;
   color: var(--text-muted);
   font-size: 0.75rem;
 }
 
-.stories-toggle-summary {
+:deep(.stories-toggle-summary) {
   margin-left: auto;
   color: var(--text-muted);
   font-size: 0.78rem;

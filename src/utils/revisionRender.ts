@@ -28,13 +28,16 @@ export interface AppliedRevisionResult {
  *
  * 纯函数实现，不依赖 DOM，便于在 Node 环境下测试。
  */
+const HTML_ESCAPE_MAP: Record<string, string> = {
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;',
+}
+
 export function escapeHtmlSimple(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
+  return text.replace(/[&<>"']/g, char => HTML_ESCAPE_MAP[char])
 }
 
 /**

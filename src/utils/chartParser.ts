@@ -182,50 +182,40 @@ export function extractChartsFromDirectory(
 }
 /* v8 ignore stop */
 
-const CHART_STREAM_MAGIC_PATTERNS = [
-  new Uint8Array([0xD0, 0xCF, 0x11, 0xE0]),
-  new Uint8Array([0x50, 0x4B, 0x03, 0x04]),
-]
-
 export function extractChartsFromWordDocumentStream(data: Uint8Array): ChartInfo[] {
   const charts: ChartInfo[] = []
 
   for (let offset = 0; offset < data.length - 100; offset++) {
-    for (const magic of CHART_STREAM_MAGIC_PATTERNS) {
-      let match = true
-      for (let i = 0; i < magic.length; i++) {
-        if (data[offset + i] !== magic[i]) {
-          match = false
-          break
-        }
-      }
-      if (!match) continue
+    const firstByte = data[offset]
+    let type: 'oleobject' | 'excel' | undefined
+    if (firstByte === 0xD0 && data[offset + 1] === 0xCF && data[offset + 2] === 0x11 && data[offset + 3] === 0xE0) {
+      type = 'oleobject'
+    } else if (firstByte === 0x50 && data[offset + 1] === 0x4B && data[offset + 2] === 0x03 && data[offset + 3] === 0x04) {
+      type = 'excel'
+    }
+    if (!type) continue
 
-      let endOffset = offset + 100
-      while (endOffset < data.length && endOffset - offset < 10000) {
-        if (data[endOffset] === 0 && data[endOffset + 1] === 0 && 
-            data[endOffset + 2] === 0 && data[endOffset + 3] === 0) {
-          break
-        }
-        endOffset++
-      }
-
-      const chartSize = endOffset - offset
-      if (chartSize > 500) {
-        const type = magic[0] === 0xD0 ? 'oleobject' : 'excel'
-        
-        charts.push({
-          id: charts.length + 1,
-          name: `Embedded ${type === 'excel' ? 'Excel' : 'OLE'} Object ${charts.length + 1}`,
-          type: type as ChartType,
-          subtype: 'chart',
-          hasData: true,
-          dataSize: chartSize,
-        })
-
-        offset = endOffset + 4
+    let endOffset = offset + 100
+    while (endOffset < data.length && endOffset - offset < 10000) {
+      if (data[endOffset] === 0 && data[endOffset + 1] === 0 &&
+          data[endOffset + 2] === 0 && data[endOffset + 3] === 0) {
         break
       }
+      endOffset++
+    }
+
+    const chartSize = endOffset - offset
+    if (chartSize > 500) {
+      charts.push({
+        id: charts.length + 1,
+        name: `Embedded ${type === 'excel' ? 'Excel' : 'OLE'} Object ${charts.length + 1}`,
+        type,
+        subtype: 'chart',
+        hasData: true,
+        dataSize: chartSize,
+      })
+
+      offset = endOffset + 4
     }
   }
 

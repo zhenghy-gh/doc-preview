@@ -15,25 +15,25 @@ export class Logger {
     this._enabled = value
   }
 
-  log(message: string, data?: any) {
+  log(message: string, data?: unknown) {
     if (this._enabled) {
       console.log(`[DOC Parser] ${message}`, data || '')
     }
   }
 
-  error(message: string, data?: any) {
+  error(message: string, data?: unknown) {
     if (this._enabled) {
       console.error(`[DOC Parser ERROR] ${message}`, data || '')
     }
   }
 
-  warn(message: string, data?: any) {
+  warn(message: string, data?: unknown) {
     if (this._enabled) {
       console.warn(`[DOC Parser WARN] ${message}`, data || '')
     }
   }
 
-  info(message: string, data?: any) {
+  info(message: string, data?: unknown) {
     if (this._enabled) {
       console.info(`[DOC Parser INFO] ${message}`, data || '')
     }

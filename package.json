@@ -1,37 +1,57 @@
 {
   "name": "@zhenghy/doc-preview",
-  "version": "0.7.3",
+  "version": "0.7.4",
   "description": "Vue 3 component for previewing Microsoft Word .doc files (OLE2/CFB) in the browser. Pure frontend, no server, no backend. Supports search, zoom, print, dark mode.",
   "type": "module",
-  "main": "./dist/doc-preview.umd.cjs",
-  "module": "./dist/doc-preview.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "main": "./dist-lib/doc-preview.umd.cjs",
+  "module": "./dist-lib/doc-preview.js",
+  "types": "./dist-lib/index.d.ts",
+  "sideEffects": [
+    "*.css"
+  ],
   "exports": {
     ".": {
-      "import": "./dist/doc-preview.js",
-      "require": "./dist/doc-preview.umd.cjs",
-      "types": "./dist/index.d.ts"
+      "import": {
+        "types": "./dist-lib/index.d.ts",
+        "default": "./dist-lib/doc-preview.js"
+      },
+      "require": {
+        "types": "./dist-lib/index.d.ts",
+        "default": "./dist-lib/doc-preview.umd.cjs"
+      },
+      "types": "./dist-lib/index.d.ts"
     },
-    "./dist/style.css": "./dist/style.css"
+    "./style.css": "./dist-lib/style.css",
+    "./dist/style.css": "./dist-lib/style.css"
   },
   "files": [
-    "dist"
+    "dist-lib"
   ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc && vite build",
     "build:lib": "vue-tsc && vite build --mode lib",
+    "prepublishOnly": "npm run build:lib",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "release": "node scripts/publish.mjs",
+    "release:dry": "node scripts/publish.mjs --dry-run"
   },
   "keywords": [
     "doc",
     "doc-preview",
     "doc-viewer",
-    "docx",
-    "docx-preview",
-    "docx-viewer",
     "word",
     "word-preview",
     "word-viewer",
@@ -61,7 +81,7 @@
     "type": "git",
     "url": "git+https://github.com/zhenghy-gh/doc-preview.git"
   },
-  "homepage": "https://github.com/zhenghy-gh/doc-preview#readme",
+  "homepage": "https://zhenghy-gh.github.io/doc-preview/",
   "bugs": {
     "url": "https://github.com/zhenghy-gh/doc-preview/issues"
   },
@@ -72,10 +92,14 @@
     "@types/node": "^20.0.0",
     "@vitejs/plugin-vue": "^5.0.0",
     "@vitest/coverage-v8": "^3.0.0",
+    "@vue/eslint-config-typescript": "^14.9.0",
     "@vue/test-utils": "^2.4.11",
+    "eslint": "^10.9.1",
+    "eslint-plugin-vue": "^10.10.0",
     "happy-dom": "^15.11.7",
     "playwright": "^1.40.0",
     "typescript": "^5.4.5",
+    "typescript-eslint": "^8.68.0",
     "vite": "^5.2.0",
     "vite-plugin-dts": "^3.8.0",
     "vitest": "^3.0.0",

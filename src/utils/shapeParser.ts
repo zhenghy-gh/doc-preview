@@ -286,22 +286,21 @@ function parseFdg(data: Uint8Array, offset: number): ShapeInfo[] {
   return shapes
 }
 
-export function extractShapesFromDataStream(dataStream: Uint8Array): ShapeInfo[] {
-  if (!dataStream || dataStream.length < 64) return []
+function extractShapes(data: Uint8Array): ShapeInfo[] {
+  if (!data || data.length < 64) return []
 
   const shapes: ShapeInfo[] = []
   const seenSpid = new Set<number>()
 
-  for (let offset = 0; offset < dataStream.length - 8; offset++) {
-    const magic = readUint16(dataStream, offset)
+  for (let offset = 0; offset < data.length - 8; offset++) {
+    const magic = readUint16(data, offset)
     if ((magic & 0xC000) !== 0xC000) continue
 
-    // 防御：循环上界 offset < length-8 已保证记录头完整，解析失败正常不可达
-    const header = parseOfficeArtRecordHeader(dataStream, offset)
+    const header = parseOfficeArtRecordHeader(data, offset)
     if (!header) continue
 
     if (header.recType === OFFICE_ART_FDG) {
-      const found = parseFdg(dataStream, offset)
+      const found = parseFdg(data, offset)
       for (const shape of found) {
         if (!seenSpid.has(shape.spid)) {
           seenSpid.add(shape.spid)
@@ -314,30 +313,10 @@ export function extractShapesFromDataStream(dataStream: Uint8Array): ShapeInfo[]
   return shapes
 }
 
+export function extractShapesFromDataStream(dataStream: Uint8Array): ShapeInfo[] {
+  return extractShapes(dataStream)
+}
+
 export function extractShapesFromWordDocumentStream(wordDocData: Uint8Array): ShapeInfo[] {
-  if (!wordDocData || wordDocData.length < 64) return []
-
-  const shapes: ShapeInfo[] = []
-  const seenSpid = new Set<number>()
-
-  for (let offset = 0; offset < wordDocData.length - 8; offset++) {
-    const magic = readUint16(wordDocData, offset)
-    if ((magic & 0xC000) !== 0xC000) continue
-
-    // 防御：循环上界 offset < length-8 已保证记录头完整，解析失败正常不可达
-    const header = parseOfficeArtRecordHeader(wordDocData, offset)
-    if (!header) continue
-
-    if (header.recType === OFFICE_ART_FDG) {
-      const found = parseFdg(wordDocData, offset)
-      for (const shape of found) {
-        if (!seenSpid.has(shape.spid)) {
-          seenSpid.add(shape.spid)
-          shapes.push(shape)
-        }
-      }
-    }
-  }
-
-  return shapes
+  return extractShapes(wordDocData)
 }

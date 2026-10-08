@@ -111,24 +111,22 @@ function parseSttbfBkmk(
     // cch 包含终止符，实际字符数 = cch - 1
     const actualLen = Math.max(0, cch - 1)
     if (isUtf16) {
-      let str = ''
+      const chars: string[] = []
       for (let j = 0; j < actualLen && offset + 1 < fc + lcb; j++) {
         const charCode = data[offset] | (data[offset + 1] << 8)
-        str += String.fromCharCode(charCode)
+        chars.push(String.fromCharCode(charCode))
         offset += 2
       }
-      // 跳过终止符
       offset += 2
-      names.push(str)
+      names.push(chars.join(''))
     } else {
-      let str = ''
+      const chars: string[] = []
       for (let j = 0; j < actualLen && offset < fc + lcb; j++) {
-        str += String.fromCharCode(data[offset])
+        chars.push(String.fromCharCode(data[offset]))
         offset += 1
       }
-      // 跳过终止符
       offset += 1
-      names.push(str)
+      names.push(chars.join(''))
     }
   }
 

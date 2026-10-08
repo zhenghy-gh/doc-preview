@@ -1,3 +1,10 @@
+/**
+ * 跨模块共享类型单一事实源（contract-split-r1 §〇）。
+ * 此处仅做 type-only 引用，运行时零依赖，不产生模块环。
+ */
+import type { DocumentProperties } from './propertyParser'
+import type { StyleDefinition } from './styleParser'
+
 /** 字符级样式 */
 export interface CharStyle {
   fontName?: string
@@ -89,8 +96,8 @@ export interface ParagraphFormat {
   listStyle?: string
   /** 列表层级（0 起算，按前导缩进推断）。同一连续块内 listLevel 不同的项会被渲染为嵌套列表。 */
   listLevel?: number
-  /** 列表唯一标识符（ilst 或 ilfo 派生），用于跨非列表段落的编号续接。 */
-  listId?: number
+  /** 列表唯一标识符（ilst 或 ilfo 派生），用于跨非列表段落的编号续接；启发层可用字符串哨兵（如 'structural-list'）。 */
+  listId?: number | string
   /** 大纲级别（0-8，来自 sprmPOutlineLvl） */
   outlineLevel?: number
   /** 段落背景色（来自 sprmPShd） */
@@ -351,18 +358,14 @@ export interface ParsedDocument {
     time?: string
     revisionNumber?: string
   }
-  /** 文档属性（标题/作者等），无属性数据时为 undefined。 */
-  properties?: {
-    title?: string
-    subject?: string
-    author?: string
-    keywords?: string
-    comments?: string
-    lastAuthor?: string
-    pageCount?: number
-    wordCount?: number
-    charCount?: number
-  }
+  /** 文档属性（标题/作者等，来自 SummaryInformation 流），无属性数据时为 undefined。 */
+  properties?: DocumentProperties
+  /**
+   * 样式表定义（来自 STSH 解析）。
+   * 仅当走 tryParseFormatsFromTableStream 回退路径（非标准 FIB 文件）时附带；
+   * 主 CLX 路径的样式已内联进各段落格式，此字段仅供调试/展示。
+   */
+  styles?: StyleDefinition[]
   /** 书签列表（来自 PlcfBkf/PlcfBkl/SttbfBkmk），无书签时为 undefined。 */
   bookmarks?: BookmarkRange[]
   /** 节列表（来自 PlcfSed/SEPX），包含页面布局与分节信息，无节数据时为 undefined。 */
@@ -683,7 +686,26 @@ export interface ParseResult {
   document?: ParsedDocument
   text?: string
   error?: string
+  /**
+   * 结构化错误码（ERR-CODE）。
+   *
+   * 中文错误文案无法稳定参与关键字分类（classifyError 漏判落 unknown 的根治方案 b）：
+   * 解析器在失败出口处附带机器可读代码，classifyError 按 code 优先判定，
+   * 关键字匹配仅作为无 code 时的兼容回退。
+   */
+  errorCode?: ParseErrorCode
 }
+
+/**
+ * 解析失败的结构化错误码。
+ * 与 classifyError 的类别映射保持一对一；新增值须同步 errorClassifier.ts 的 PARSE_ERROR_CATEGORY。
+ */
+export type ParseErrorCode =
+  | 'OLE_FORMAT'
+  | 'NO_WORDDOCUMENT_STREAM'
+  | 'EMPTY_DOCUMENT'
+  | 'PARSE_FAILED'
+  | 'FILE_READ_FAILED'
 
 /** 解析器选项 */
 export interface DocParserOptions {
@@ -695,3 +717,55 @@ export interface DocParserOptions {
 export type CHP = CharacterFormat
 /** @deprecated 使用 ParagraphFormat 替代 */
 export type PAP = ParagraphFormat
+
+// ═══ T3 渲染管线抽离共享类型（contract-split-r1 v1.0 §1.2「共享类型先行」，architect 2026-08-25）═══
+
+/** 渲染层消费的段落视图（提升自 DocPreview.vue 本地 ParaWithList/FormattedParagraphOutput） */
+export interface RenderParagraph extends FormattedParagraph {
+  listId?: number
+  listLevel?: number
+  listType?: string
+  listStyle?: string
+  tableDepth?: number
+  headingLevel?: number
+  /** 段落在文档字符流中的起始 CP（解析器内部字段） */
+  _cpStart?: number
+  _cpEnd?: number
+}
+
+/**
+ * 解析器内部段落对象（启发层/过滤层消费）：
+ * 在 RenderParagraph 基础上补充解析期临时标记字段。
+ */
+export interface ParserParagraph extends RenderParagraph {
+  /** 段落文本内嵌有图片占位符 0x01（解析器内部标记） */
+  __hasEmbeddedPic?: boolean
+  /** 段落/字符格式来自真实格式表（而非启发式推断）的解析期标记 */
+  paraFormatFromReal?: boolean
+  charFormatFromReal?: boolean
+}
+
+/** Web 字体族解析器（由宿主注入，替代对组件内 getWebFontFamily 的闭包依赖） */
+export interface FontResolver {
+  (fontName?: string): string
+}
+
+/** i18n 翻译函数（由宿主注入，替代对 utils/locale 单例的模块级依赖） */
+export type Translator = (key: string) => string
+
+/**
+ * collectTableBlock 的返回形状（contract-split-r1 §1.2 W1 · T3-W1b）。
+ * 字段可选性与 DocPreview.vue 原内联返回类型逐字段一致。
+ */
+export interface TableBlockResult {
+  /** 收集到的表格行（每行为单元格文本数组，多行合并段内已按最大列数补齐空串） */
+  rows: string[][]
+  /** 与 rows 按下标对齐的行级表格属性；仅当至少一行携带真实 TableInfo 时提供，否则 undefined */
+  rowsTableInfo?: TableInfo[]
+  /** 与 rows 按下标对齐的嵌套深度（sprmPTableDepth，1=顶层；无信息时默认 1） */
+  rowsDepth?: number[]
+  /** 启发式识别的表头行数（当前为 0 或 1） */
+  headerRowCount: number
+  /** 收集结束后的下一个段落索引（指向第一个未消费的段落） */
+  nextIndex: number
+}

@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   escapeRegExp,
   buildWordRegex,
@@ -147,6 +147,33 @@ describe('highlightTextMatches', () => {
 })
 
 describe('clearSearchHighlights', () => {
+  it('normalizes a parent once after restoring many sibling highlights', () => {
+    const container = document.createElement('div')
+    container.innerHTML = `<p>${Array.from({ length: 100 }, () => 'cat').join(' ')}</p>`
+    const paragraph = container.querySelector('p')!
+    const normalize = vi.spyOn(paragraph, 'normalize')
+    const original = paragraph.textContent
+
+    highlightTextMatches(container, 'cat', ci)
+    clearSearchHighlights(container)
+
+    expect(container.querySelectorAll('.search-highlight')).toHaveLength(0)
+    expect(paragraph.textContent).toBe(original)
+    expect(paragraph.childNodes).toHaveLength(1)
+    expect(normalize).toHaveBeenCalledTimes(1)
+  })
+
+  it('restores nested highlights in their original text order', () => {
+    const container = document.createElement('div')
+    container.innerHTML = '<p><span class="search-highlight">outer <span class="search-highlight">inner</span></span></p>'
+
+    clearSearchHighlights(container)
+
+    expect(container.querySelectorAll('.search-highlight')).toHaveLength(0)
+    expect(container.textContent).toBe('outer inner')
+    expect(container.querySelector('p')!.childNodes).toHaveLength(1)
+  })
+
   it('restores the original text content', () => {
     const container = document.createElement('div')
     container.innerHTML = '<p>cat cat cat</p>'

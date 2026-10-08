@@ -4,7 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { execSync } from 'child_process';
-import { DocParser } from './dist/doc-preview.js';
+import { DocParser } from './dist-lib/doc-preview.js';
 
 const CYCLE = process.argv[2] || '1';
 const ROOT = process.cwd();
@@ -19,6 +19,11 @@ console.log(`📂 扫描到 ${files.length} 个样本`);
 
 function sha256(buf) { return crypto.createHash('sha256').update(buf).digest('hex'); }
 function readTextSafe(p) { try { return fs.readFileSync(p, 'utf8'); } catch { return null; } }
+
+// 域代码剥离正则（normalizeForSim 使用；须在主循环前初始化——脚本顶层自上而下执行）
+// 两类：① 关键字 + 引号串（HYPERLINK "url"）；② OLE 对象引用（EMBED Excel.Sheet.8、
+// LINK Word.Document.8 "c:\..." \s 等， ProgID 无引号形态）。均为 Word 界面不可见的 instruction 文本。
+const FIELD_CODE_RE = /\b(?:HYPERLINK|PAGEREF|STYLEREF|NOTEREF|INCLUDEPICTURE|INCLUDETEXT|IMPORT|DATAFILE|MXML)\s*"[^"\n]*"|\b(?:EMBED|LINK)\s+[\w.]+(?:\s+"[^"\n]*")*(?:\s+\\\w)*/g;
 
 // ── 1) 基准生成（textutil） ────────────────────────
 console.log('\n📐 阶段 B: 生成 textutil 基准…');
@@ -43,7 +48,7 @@ for (const name of files) {
         fs.renameSync(tmp, out);
         baseNew++;
       }
-    } catch (e) {
+    } catch {
       text = null;
     }
   }
@@ -68,7 +73,16 @@ for (const name of files) {
     parseOK++;
     r.parse = { ok: true, paragraphs: parsed.document?.paragraphs?.length || 0 };
     // 还原成纯文本：parseWithFormat 返回 { document: { paragraphs: [{text,...}] } }
-    r.renderText = (parsed.document?.paragraphs || []).map(p => (p && p.text) || '').join('\n');
+    // 用户可见口径归一化：\u0001（图片占位）渲染为 <img> 不占文本；\u0007（单元格标记）
+    // 渲染为表格结构——纯文本视角下每个单元格（含空单元格）独占一行，与 textutil 表格输出对齐。
+    // story 文本（脚注/尾注/页眉页脚/批注/文本框）同样并入——textutil 基线将 story 内容
+    // 展开进纯文本，charSim/tokenSim 均不依赖顺序，尾部追加即可对齐（如 unicode-01022 脚注）。
+    r.renderText = [
+      (parsed.document?.paragraphs || []).flatMap(p => toTextLines((p && p.text) || '')).join('\n'),
+      ...Object.values(parsed.document?.stories || {})
+        .filter(v => typeof v === 'string' && v)
+        .flatMap(v => toTextLines(v)),
+    ].filter(Boolean).join('\n');
     if (!r.renderText && parsed.text) r.renderText = parsed.text;
   } catch (e) {
     parseFail++;
@@ -148,7 +162,43 @@ if (failures.length > 0) {
 }
 
 // ── helpers ────────────────────────────────────────
+// sim 对比前双边归一化（对称噪声消除，不偏袒任何一方）：
+// 行尾空白（textutil 保留 vs 解析器 strip）与连续空行（空段落呈现差异）
+// 均不属于"文本内容"信号，归一化后测量聚焦真实内容差异。
+// 域代码剥离：textutil 会把字段 instruction 文本（如 HYPERLINK "url"）展开进
+// 纯文本基线，而 Word 界面只显示域结果（链接文字），instruction 非用户可见内容。
+// 白名单仅收录已知 Word 域指令关键字 + 引号串，避免误伤正文引号文本。
+// （FIELD_CODE_RE 定义在文件顶部——主循环调用前须完成初始化）
+// 单元格拆平：textutil 基线会把表格单元格标记 \u0007 内联保留在一行里，与 R 侧
+// （renderText 已按单元格拆行）口径不对称；双边统一拆平保证对称比较（R 侧无 \u0007 时 no-op）。
+// 行内连续空白折叠为单空格：表格单元格 padding（'  N4250 –   N4350' vs ' N4250 –  N4350'）
+// 属对齐噪声而非内容信号。
+// 段落/story 文本 → 用户可见纯文本行：\u0007 单元格拆平（Word 行尾以单元格终结符结束，
+// split 后最后一个空 fragment 是标记产物而非空单元格，丢弃；含文本行过滤空格子、
+// 全空行（form 待填空白）逐格保留），\u000b soft return → 空格（textutil 口径），\u0001 图片占位剥离。
+function toTextLines(t) {
+  if (t.includes('\u0007')) {
+    const cells = t.split('\u0007');
+    if (cells[cells.length - 1] === '') cells.pop();
+    return cells.some(c => c !== '') ? cells.filter(c => c !== '') : cells;
+  }
+  return [t.replace(/\u000b/g, ' ').replace(/\u0001/g, '')];
+}
+function flattenCells(s) {
+  return s.split('\n').flatMap(l => {
+    if (!l.includes('\u0007')) return [l];
+    const cells = l.split('\u0007');
+    if (cells[cells.length - 1] === '') cells.pop();
+    return cells.some(c => c !== '') ? cells.filter(c => c !== '') : cells;
+  }).map(l => l.replace(/\s+/g, ' ').trim()).join('\n');
+}
+function normalizeForSim(s) {
+  return flattenCells(s.replace(FIELD_CODE_RE, ''))
+    .split('\n').map(l => l.replace(/\s+$/, '')).join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
 function sim(a, b) {
+  a = normalizeForSim(a);
+  b = normalizeForSim(b);
   if (a === b) return 1;
   if (!a || !b) return 0;
   const charSim = charSimilarity(a, b);
@@ -194,7 +244,6 @@ function pct(sorted, p) {
 }
 function classify(baseline, render) {
   if (!baseline) return 'no_baseline';
-  const head = baseline.slice(0, 80);
   const rHead = render.slice(0, 80);
   if (render.length > baseline.length * 1.1 && /[\x00-\x08\x0B-\x1F]/.test(rHead)) {
     return 'prefix_noise';

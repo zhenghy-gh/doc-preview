@@ -45,6 +45,14 @@ describe('applyTabStops', () => {
     expect(html).toBe('a<span style="display: inline-block; width: 44.5pt;"></span>b')
   })
 
+  it('walks sorted stops across tabs and keeps duplicate stops equivalent', () => {
+    const html = applyTabStops('a\tb\tc', [50, 50, 100], 10, '宋体')
+    expect(html).toBe(
+      'a<span style="display: inline-block; width: 44.5pt;"></span>b' +
+      '<span style="display: inline-block; width: 44.5pt;"></span>c',
+    )
+  })
+
   it('skips tab stops already passed and extends past the last one by default intervals', () => {
     // "aaaaaaaa" 宽 8*10*0.55=44pt，唯一制表位 30 已过 → 30+ceil(14/36)*36=66 → gap 22pt
     const html = applyTabStops('aaaaaaaa\tb', [30], 10, '宋体')

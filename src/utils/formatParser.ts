@@ -1304,7 +1304,7 @@ export function parsePapxRunsFromFkp(
 
       // PapxInFkp: cb (1 byte). cb != 0 → payload 2*cb-1 bytes; cb == 0 →
       // read cb' (next byte), payload 2*cb' bytes. Payload = istd(2) + grpprl.
-      let cb = wordDocData[papxOffset]
+      const cb = wordDocData[papxOffset]
       let payloadLen: number
       if (cb === 0) {
         const cbPrime = wordDocData[papxOffset + 1]

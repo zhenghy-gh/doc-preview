@@ -36,8 +36,6 @@ function decodeUtf16Le(data: Uint8Array, offset: number, length: number): string
 export function eqnToLatex(eqnText: string): string {
   let latex = eqnText
 
-  latex = latex.replace(/\\frac\{([^}]+)\}\{([^}]+)\}/g, '\\frac{$1}{$2}')
-  latex = latex.replace(/\\sqrt\{([^}]+)\}/g, '\\sqrt{$1}')
   latex = latex.replace(/\\sumfrom\{([^}]+)\}\{([^}]+)\}/g, '\\sum_{$1}^{$2}')
   latex = latex.replace(/\\prodfrom\{([^}]+)\}\{([^}]+)\}/g, '\\prod_{$1}^{$2}')
   latex = latex.replace(/\\intfrom\{([^}]+)\}\{([^}]+)\}/g, '\\int_{$1}^{$2}')

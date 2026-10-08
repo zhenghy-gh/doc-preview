@@ -22,6 +22,12 @@ const emit = defineEmits<{
 
 const isOpen = computed(() => props.modelValue)
 
+// A monotonic ID avoids hydration mismatches caused by Math.random() in SSR.
+let nextPanelId = 0
+const panelInstanceId = `collapsible-panel-${++nextPanelId}`
+const titleId = `${panelInstanceId}-title`
+const contentId = `${panelInstanceId}-content`
+
 function toggle() {
   emit('update:modelValue', !props.modelValue)
 }
@@ -30,15 +36,24 @@ function toggle() {
 <template>
   <div :class="['collapsible-panel', panelClass]">
     <button
+      type="button"
       class="stories-toggle"
       @click="toggle"
+      :id="titleId"
       :aria-expanded="isOpen"
+      :aria-controls="contentId"
     >
-      <span class="stories-toggle-icon">{{ isOpen ? '▾' : '▸' }}</span>
+      <span class="stories-toggle-icon" aria-hidden="true">{{ isOpen ? '▾' : '▸' }}</span>
       <span>{{ title }}</span>
       <span v-if="summary" class="stories-toggle-summary">{{ summary }}</span>
     </button>
-    <div v-if="isOpen" class="stories-content">
+    <div
+      v-if="isOpen"
+      :id="contentId"
+      class="stories-content"
+      role="region"
+      :aria-labelledby="titleId"
+    >
       <slot />
     </div>
   </div>

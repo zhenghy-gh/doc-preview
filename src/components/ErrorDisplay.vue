@@ -20,8 +20,8 @@ const icon = computed(() => ERROR_CATEGORY_ICON[classified.value.category])
 </script>
 
 <template>
-  <div class="error-container enhanced-error">
-    <div class="error-icon">{{ icon }}</div>
+  <div class="error-container enhanced-error" role="alert">
+    <div class="error-icon" aria-hidden="true">{{ icon }}</div>
     <div class="error-body">
       <div class="error-title">{{ classified.title }}</div>
       <div class="error-detail">{{ classified.detail }}</div>
@@ -31,6 +31,7 @@ const icon = computed(() => ERROR_CATEGORY_ICON[classified.value.category])
       <div class="error-actions">
         <button
           v-if="classified.retryable"
+          type="button"
           class="error-retry-btn"
           @click="emit('retry')"
         >
