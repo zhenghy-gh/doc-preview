@@ -253,50 +253,74 @@ function findGifEnd(data: Uint8Array, start: number): number {
  *
  * Returns an empty array if no images are found.
  */
+/**
+ * 四个签名各自的**首字节**。四者互不相同（0x89 / 0xFF / 0x47 / 0x42），
+ * 因此任一偏移至多只会命中其中一个签名。
+ *
+ * 用途见 `extractImagesFromStream`：原实现在每个字节上依次调用 4 次
+ * `bytesEqual`（每次都是一次函数调用 + 长度检查 + 首字节比较），对 7.65 MB
+ * 的真实样本合计约 3060 万次调用，而其中 98% 的字节根本不可能匹配任何签名。
+ * 先按首字节分流后，绝大多数位置只需一次数组读取 + 一次跳转。
+ */
+const PNG_LEAD = PNG_SIGNATURE[0]
+const JPEG_LEAD = JPEG_SOI[0]
+const GIF_LEAD = GIF_SIGNATURE_87[0]
+const BMP_LEAD = BMP_SIGNATURE[0]
+
 export function extractImagesFromStream(data: Uint8Array): ExtractedImage[] {
   if (!data || data.length < 8) return []
 
   const images: ExtractedImage[] = []
-  let i = 0
+  const len = data.length
 
-  while (i < data.length) {
-    // PNG
-    if (bytesEqual(data, i, PNG_SIGNATURE)) {
-      const end = findPngEnd(data, i)
-      if (end > i) {
-        images.push({ format: 'png', data: data.subarray(i, end) })
-        i = end
+  for (let i = 0; i < len; i++) {
+    // 按首字节分流。四个首字节互不相同，所以某个位置至多进入一个分支 ——
+    // 与原先「依次 bytesEqual 四次、命中即 continue」的判定顺序等价，
+    // 但把 98% 的位置从 4 次函数调用降为 1 次数组读取 + 一次跳转。
+    // 每个分支末尾的 continue 让 for 的 i++ 生效（等价于原实现的 i++）；
+    // 命中时把 i 置为 end - 1，同样由 i++ 前进到 end。
+    switch (data[i]) {
+      case PNG_LEAD: {
+        if (bytesEqual(data, i, PNG_SIGNATURE)) {
+          const end = findPngEnd(data, i)
+          if (end > i) {
+            images.push({ format: 'png', data: data.subarray(i, end) })
+            i = end - 1
+          }
+        }
+        continue
+      }
+      case JPEG_LEAD: {
+        if (bytesEqual(data, i, JPEG_SOI) && i + 2 < len && data[i + 2] === 0xff) {
+          const end = findJpegEnd(data, i)
+          if (end > i) {
+            images.push({ format: 'jpeg', data: data.subarray(i, end) })
+            i = end - 1
+          }
+        }
+        continue
+      }
+      case GIF_LEAD: {
+        if (bytesEqual(data, i, GIF_SIGNATURE_87) || bytesEqual(data, i, GIF_SIGNATURE_89)) {
+          const end = findGifEnd(data, i)
+          if (end > i) {
+            images.push({ format: 'gif', data: data.subarray(i, end) })
+            i = end - 1
+          }
+        }
+        continue
+      }
+      case BMP_LEAD: {
+        if (bytesEqual(data, i, BMP_SIGNATURE)) {
+          const end = findBmpEnd(data, i)
+          if (end > i) {
+            images.push({ format: 'bmp', data: data.subarray(i, end) })
+            i = end - 1
+          }
+        }
         continue
       }
     }
-    // JPEG
-    if (bytesEqual(data, i, JPEG_SOI) && i + 2 < data.length && data[i + 2] === 0xFF) {
-      const end = findJpegEnd(data, i)
-      if (end > i) {
-        images.push({ format: 'jpeg', data: data.subarray(i, end) })
-        i = end
-        continue
-      }
-    }
-    // GIF (87a or 89a)
-    if (bytesEqual(data, i, GIF_SIGNATURE_87) || bytesEqual(data, i, GIF_SIGNATURE_89)) {
-      const end = findGifEnd(data, i)
-      if (end > i) {
-        images.push({ format: 'gif', data: data.subarray(i, end) })
-        i = end
-        continue
-      }
-    }
-    // BMP
-    if (bytesEqual(data, i, BMP_SIGNATURE)) {
-      const end = findBmpEnd(data, i)
-      if (end > i) {
-        images.push({ format: 'bmp', data: data.subarray(i, end) })
-        i = end
-        continue
-      }
-    }
-    i++
   }
 
   return images

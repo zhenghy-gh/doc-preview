@@ -1,0 +1,662 @@
+{
+ "doc-100kb.doc": [
+  {
+   "format": "jpeg",
+   "len": 70221,
+   "hash": "0c9ab50b"
+  }
+ ],
+ "doc-101.doc": [
+  {
+   "format": "png",
+   "len": 695,
+   "hash": "d2cbb399"
+  }
+ ],
+ "doc-161.doc": [
+  {
+   "format": "png",
+   "len": 695,
+   "hash": "d2cbb399"
+  }
+ ],
+ "doc-1mb.doc": [
+  {
+   "format": "jpeg",
+   "len": 987090,
+   "hash": "ccc5bd2f"
+  }
+ ],
+ "doc-261.doc": [
+  {
+   "format": "png",
+   "len": 695,
+   "hash": "d2cbb399"
+  }
+ ],
+ "doc-321.doc": [
+  {
+   "format": "png",
+   "len": 695,
+   "hash": "d2cbb399"
+  }
+ ],
+ "doc-500kb.doc": [
+  {
+   "format": "jpeg",
+   "len": 463393,
+   "hash": "d3882b81"
+  }
+ ],
+ "unicode-02006-zia.doc": [
+  {
+   "format": "png",
+   "len": 1731,
+   "hash": "388cd29c"
+  },
+  {
+   "format": "png",
+   "len": 192,
+   "hash": "b1f3521b"
+  },
+  {
+   "format": "png",
+   "len": 230,
+   "hash": "01f4ec36"
+  },
+  {
+   "format": "png",
+   "len": 271,
+   "hash": "f676e232"
+  },
+  {
+   "format": "png",
+   "len": 286,
+   "hash": "03dc4f12"
+  },
+  {
+   "format": "png",
+   "len": 282,
+   "hash": "d967c61c"
+  },
+  {
+   "format": "png",
+   "len": 355,
+   "hash": "b2d98b1e"
+  },
+  {
+   "format": "png",
+   "len": 236,
+   "hash": "0de09810"
+  },
+  {
+   "format": "png",
+   "len": 330,
+   "hash": "2d7451e9"
+  },
+  {
+   "format": "png",
+   "len": 321,
+   "hash": "9ab48c0a"
+  },
+  {
+   "format": "png",
+   "len": 273,
+   "hash": "5cf1fee2"
+  },
+  {
+   "format": "png",
+   "len": 1638,
+   "hash": "678690de"
+  },
+  {
+   "format": "png",
+   "len": 261,
+   "hash": "ce41a8f4"
+  },
+  {
+   "format": "png",
+   "len": 1844,
+   "hash": "0154c0df"
+  },
+  {
+   "format": "png",
+   "len": 2061,
+   "hash": "e4a28cd2"
+  },
+  {
+   "format": "png",
+   "len": 1645,
+   "hash": "9796ccec"
+  },
+  {
+   "format": "png",
+   "len": 2133,
+   "hash": "c9bf77d7"
+  },
+  {
+   "format": "png",
+   "len": 2546,
+   "hash": "e8a22894"
+  },
+  {
+   "format": "png",
+   "len": 2049,
+   "hash": "a4503d2d"
+  },
+  {
+   "format": "png",
+   "len": 1443,
+   "hash": "5f72706e"
+  },
+  {
+   "format": "png",
+   "len": 2718,
+   "hash": "889e2559"
+  },
+  {
+   "format": "png",
+   "len": 3213,
+   "hash": "494f3d16"
+  },
+  {
+   "format": "png",
+   "len": 3067,
+   "hash": "9a3e8c5d"
+  },
+  {
+   "format": "png",
+   "len": 2142,
+   "hash": "8d9a1628"
+  },
+  {
+   "format": "png",
+   "len": 2139,
+   "hash": "bfaaa49a"
+  },
+  {
+   "format": "png",
+   "len": 1942,
+   "hash": "c0b67ed4"
+  },
+  {
+   "format": "png",
+   "len": 2419,
+   "hash": "4cfd8dd7"
+  },
+  {
+   "format": "png",
+   "len": 168,
+   "hash": "fdd7795f"
+  },
+  {
+   "format": "png",
+   "len": 198,
+   "hash": "b000c6bf"
+  },
+  {
+   "format": "png",
+   "len": 231,
+   "hash": "72cf4c4a"
+  },
+  {
+   "format": "png",
+   "len": 276,
+   "hash": "1b14151c"
+  },
+  {
+   "format": "png",
+   "len": 298,
+   "hash": "c8e30ed7"
+  },
+  {
+   "format": "png",
+   "len": 322,
+   "hash": "771ea743"
+  },
+  {
+   "format": "png",
+   "len": 333,
+   "hash": "c73256a6"
+  },
+  {
+   "format": "png",
+   "len": 347,
+   "hash": "c8f92bc3"
+  },
+  {
+   "format": "png",
+   "len": 392,
+   "hash": "ee86991a"
+  },
+  {
+   "format": "png",
+   "len": 436,
+   "hash": "ca57bc86"
+  },
+  {
+   "format": "png",
+   "len": 364,
+   "hash": "fa5386c1"
+  },
+  {
+   "format": "png",
+   "len": 376,
+   "hash": "e175faad"
+  },
+  {
+   "format": "png",
+   "len": 232,
+   "hash": "3f310b75"
+  },
+  {
+   "format": "png",
+   "len": 290,
+   "hash": "db4c0d81"
+  },
+  {
+   "format": "png",
+   "len": 266,
+   "hash": "43a0e956"
+  },
+  {
+   "format": "png",
+   "len": 248,
+   "hash": "74aa6dd0"
+  },
+  {
+   "format": "png",
+   "len": 304,
+   "hash": "58d27ed1"
+  },
+  {
+   "format": "png",
+   "len": 283,
+   "hash": "70e532e1"
+  },
+  {
+   "format": "png",
+   "len": 319,
+   "hash": "aca0f3d6"
+  },
+  {
+   "format": "png",
+   "len": 349,
+   "hash": "4d313b7f"
+  },
+  {
+   "format": "png",
+   "len": 445,
+   "hash": "70a63373"
+  },
+  {
+   "format": "png",
+   "len": 406,
+   "hash": "cc4717c6"
+  },
+  {
+   "format": "png",
+   "len": 436,
+   "hash": "b7eac6fc"
+  },
+  {
+   "format": "png",
+   "len": 335,
+   "hash": "f7212f26"
+  },
+  {
+   "format": "png",
+   "len": 370,
+   "hash": "9b5d4f1e"
+  },
+  {
+   "format": "png",
+   "len": 381,
+   "hash": "2dba1384"
+  },
+  {
+   "format": "png",
+   "len": 414,
+   "hash": "ae8efa18"
+  },
+  {
+   "format": "png",
+   "len": 350,
+   "hash": "1701f87e"
+  },
+  {
+   "format": "png",
+   "len": 353,
+   "hash": "1cbe83b7"
+  },
+  {
+   "format": "png",
+   "len": 377,
+   "hash": "0696c952"
+  },
+  {
+   "format": "png",
+   "len": 432,
+   "hash": "395e5f11"
+  },
+  {
+   "format": "png",
+   "len": 283,
+   "hash": "ee57b8be"
+  },
+  {
+   "format": "png",
+   "len": 226,
+   "hash": "e51e4b11"
+  },
+  {
+   "format": "png",
+   "len": 271,
+   "hash": "336cfe03"
+  },
+  {
+   "format": "png",
+   "len": 303,
+   "hash": "7af1b5bd"
+  },
+  {
+   "format": "png",
+   "len": 268,
+   "hash": "2c91373c"
+  },
+  {
+   "format": "png",
+   "len": 303,
+   "hash": "13e25efa"
+  },
+  {
+   "format": "png",
+   "len": 229,
+   "hash": "b0eb5436"
+  },
+  {
+   "format": "png",
+   "len": 281,
+   "hash": "4ec5276a"
+  },
+  {
+   "format": "png",
+   "len": 204,
+   "hash": "04c902b5"
+  },
+  {
+   "format": "png",
+   "len": 2775,
+   "hash": "3e08256c"
+  },
+  {
+   "format": "png",
+   "len": 2311,
+   "hash": "7b546519"
+  },
+  {
+   "format": "png",
+   "len": 274,
+   "hash": "1eb1acfb"
+  },
+  {
+   "format": "png",
+   "len": 2496,
+   "hash": "21f80728"
+  },
+  {
+   "format": "png",
+   "len": 2251,
+   "hash": "0b35a441"
+  },
+  {
+   "format": "png",
+   "len": 2546,
+   "hash": "e8a22894"
+  },
+  {
+   "format": "png",
+   "len": 392,
+   "hash": "3325714a"
+  },
+  {
+   "format": "png",
+   "len": 3328,
+   "hash": "18594a54"
+  },
+  {
+   "format": "png",
+   "len": 983,
+   "hash": "1ba95fee"
+  },
+  {
+   "format": "png",
+   "len": 1051,
+   "hash": "b22f817c"
+  },
+  {
+   "format": "png",
+   "len": 205,
+   "hash": "b0f289bf"
+  },
+  {
+   "format": "png",
+   "len": 218,
+   "hash": "b5fee703"
+  },
+  {
+   "format": "png",
+   "len": 258,
+   "hash": "45bb064b"
+  },
+  {
+   "format": "png",
+   "len": 209,
+   "hash": "e71322ce"
+  },
+  {
+   "format": "png",
+   "len": 1993,
+   "hash": "381fff21"
+  },
+  {
+   "format": "png",
+   "len": 3948,
+   "hash": "407fed9b"
+  },
+  {
+   "format": "png",
+   "len": 2459,
+   "hash": "ff4f5771"
+  },
+  {
+   "format": "png",
+   "len": 2449,
+   "hash": "a3d668b6"
+  },
+  {
+   "format": "png",
+   "len": 2088,
+   "hash": "fa8041ae"
+  },
+  {
+   "format": "png",
+   "len": 2694,
+   "hash": "5521c61e"
+  },
+  {
+   "format": "png",
+   "len": 2609,
+   "hash": "86a07c64"
+  },
+  {
+   "format": "png",
+   "len": 355,
+   "hash": "aa33a151"
+  },
+  {
+   "format": "png",
+   "len": 1260,
+   "hash": "d87530cf"
+  },
+  {
+   "format": "png",
+   "len": 1731,
+   "hash": "388cd29c"
+  },
+  {
+   "format": "png",
+   "len": 1638,
+   "hash": "678690de"
+  },
+  {
+   "format": "png",
+   "len": 1844,
+   "hash": "0154c0df"
+  },
+  {
+   "format": "png",
+   "len": 2061,
+   "hash": "e4a28cd2"
+  },
+  {
+   "format": "png",
+   "len": 2133,
+   "hash": "c9bf77d7"
+  },
+  {
+   "format": "png",
+   "len": 2546,
+   "hash": "e8a22894"
+  },
+  {
+   "format": "png",
+   "len": 2049,
+   "hash": "a4503d2d"
+  },
+  {
+   "format": "png",
+   "len": 1443,
+   "hash": "5f72706e"
+  },
+  {
+   "format": "png",
+   "len": 2142,
+   "hash": "8d9a1628"
+  },
+  {
+   "format": "png",
+   "len": 2139,
+   "hash": "bfaaa49a"
+  },
+  {
+   "format": "png",
+   "len": 1942,
+   "hash": "c0b67ed4"
+  },
+  {
+   "format": "png",
+   "len": 983,
+   "hash": "1ba95fee"
+  },
+  {
+   "format": "png",
+   "len": 218,
+   "hash": "b5fee703"
+  },
+  {
+   "format": "png",
+   "len": 258,
+   "hash": "45bb064b"
+  },
+  {
+   "format": "png",
+   "len": 209,
+   "hash": "e71322ce"
+  },
+  {
+   "format": "png",
+   "len": 1993,
+   "hash": "381fff21"
+  },
+  {
+   "format": "png",
+   "len": 3948,
+   "hash": "407fed9b"
+  },
+  {
+   "format": "png",
+   "len": 2459,
+   "hash": "ff4f5771"
+  },
+  {
+   "format": "png",
+   "len": 2449,
+   "hash": "a3d668b6"
+  },
+  {
+   "format": "png",
+   "len": 2088,
+   "hash": "fa8041ae"
+  },
+  {
+   "format": "png",
+   "len": 2694,
+   "hash": "5521c61e"
+  },
+  {
+   "format": "png",
+   "len": 2609,
+   "hash": "86a07c64"
+  }
+ ],
+ "unicode-form.doc": [
+  {
+   "format": "bmp",
+   "len": 768,
+   "hash": "ccdcd541"
+  }
+ ],
+ "unicode-n1750w97.doc": [
+  {
+   "format": "png",
+   "len": 1499,
+   "hash": "71ed35fc"
+  }
+ ],
+ "unicode-n2298.doc": [
+  {
+   "format": "png",
+   "len": 2019,
+   "hash": "c991baae"
+  }
+ ],
+ "unicode-n4100.doc": [
+  {
+   "format": "jpeg",
+   "len": 2483,
+   "hash": "9473af3e"
+  }
+ ],
+ "unicode-n4250.doc": [
+  {
+   "format": "jpeg",
+   "len": 2483,
+   "hash": "9473af3e"
+  }
+ ],
+ "unicode-n4350.doc": [
+  {
+   "format": "jpeg",
+   "len": 2483,
+   "hash": "9473af3e"
+  }
+ ],
+ "unicode-n4400.doc": [
+  {
+   "format": "jpeg",
+   "len": 2483,
+   "hash": "9473af3e"
+  }
+ ]
+}
