@@ -1033,3 +1033,9 @@
 - 27/27 份真实样本完整 dump 一致；交错 4×NEW/4×OLD、每进程20轮：NEW 中位数 95.649/94.836/95.302/95.809 ms，OLD 92.663/94.702/94.717/94.006 ms，NEW 稳定退化，按硬纪律撤回。
 - 撤回后 `npm test` 75 文件 / 1446 项通过；`npm run build`、`build:lib`、`lint` 通过；`bench-diff 1140` 与既有基线逐字段一致。工作区干净，包体保持不变。详见 `docs/changelog/2026-10-10-round114-optimization.md`。
 - 下一轮：Round 115，重新做 `applyStructuralFormats` 调用点级剖析或其他尚未证伪候选，禁止重复本轮图片扫描变体。
+
+## Round 115/100 — 2026-10-10
+- 本轮候选全部否决，未落地生产代码、未升号、未发布；轮次计入完成计数。评估 `applyStructuralFormats` 列表候选组 CV 计算：用两遍 `Uint32Array` 数值累加替换每组临时 `lengths` 数组与 `reduce`。
+- 27/27 份真实样本完整 dump 逐文件一致；交错 4×NEW/4×OLD、每进程20轮：NEW 中位数 98.244/97.926/98.165/97.483 ms，OLD 97.395/96.465/97.758/97.269 ms，NEW 四组均未优于 OLD，按硬纪律撤回。
+- 撤回后 `npm test` 75 文件 / 1446 项、`vue-tsc`、`build`、`build:lib`、`lint` 均通过；`bench-diff 1150` 27/27 成功且与 cycle-1140 逐字段一致，中位数 0.950、p25 0.915、p10 0.897、min 0.812。工作区干净，版本保持 0.7.55。详见 `docs/changelog/2026-10-10-round115-optimization.md`。
+- 下一轮：Round 116，重新围绕 `createParagraphsWithRealFormats` 或其他尚未验证的真实热点做调用点级剖析，避免重复列表 CV 计算和图片扫描查表变体。
