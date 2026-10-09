@@ -1027,3 +1027,9 @@
 - 交错 4×NEW/4×OLD、每进程20轮：NEW 中位数 102.220/100.433/101.170/106.897 ms；OLD 97.287/100.363/100.363/98.980 ms；初始30轮 NEW 103.551、OLD 100.828 ms。无稳定收益且有退化，按硬纪律撤回。
 - 工作区干净，包体未改变。详见 `docs/changelog/2026-10-10-round113-optimization.md`。
 - 下一轮：Round 114，重新剖析 `applyStructuralFormats` 调用点或 `extractImagesFromStream` 多次调用权重，避免重复 pieceMap 候选。
+
+## Round 114/100 — 2026-10-10
+- 本轮候选全部否决，未落地生产代码、未升号、未发布；轮次计入完成计数。评估 `extractImagesFromStream` 中以两个 `LEAD_KIND` 查表替代现有 65536 项 `PAIR_HAS_LEAD` 查表。
+- 27/27 份真实样本完整 dump 一致；交错 4×NEW/4×OLD、每进程20轮：NEW 中位数 95.649/94.836/95.302/95.809 ms，OLD 92.663/94.702/94.717/94.006 ms，NEW 稳定退化，按硬纪律撤回。
+- 撤回后 `npm test` 75 文件 / 1446 项通过；`npm run build`、`build:lib`、`lint` 通过；`bench-diff 1140` 与既有基线逐字段一致。工作区干净，包体保持不变。详见 `docs/changelog/2026-10-10-round114-optimization.md`。
+- 下一轮：Round 115，重新做 `applyStructuralFormats` 调用点级剖析或其他尚未证伪候选，禁止重复本轮图片扫描变体。
