@@ -897,3 +897,15 @@
 - 清理的临时产物：`.bench103.ts`、`.bench103b.ts`、`.bench103c.ts`、`.bench103d.ts`、`.bench103e.ts`、`.bench103f.ts`、`.bisect103.mjs`、`.e2e103.ts`、`.neg103.mjs`、`.neg103b.mjs`、`.prof103.ts`、`.prof103/`、`.profan103.mjs`、`.profdiff103.mjs`（14 项）。`.profdiff103.mjs` 的第一版把 bundle 文件名也当成聚合键，导致前 25 名全是噪声——**按函数名聚合时不要带上 url**。
 - 发布：版本 `0.7.46 → 0.7.47`，双包已发布。
 - 下一轮：**`extractImagesFromStream`（7.17 %）** —— 图片扫描（找 JPEG 结尾、PNG 边界），本轮只动了它下游的 base64 编码；**OLE 层**（`readRegularStream` 12.8 % + `readStream` 2.6 % + `getFatSectors` 1.7 %，合计 **17.1 %**）本轮首次拿到干净占比，是除解码外最大的一块；**段落与格式装配层**（`detectCharacterStyles` 8.53 % / `createParagraphsWithRealFormats` 10.45 % / `guessCharFormat` 6.86 % / `applyStructuralFormats` 6.85 %）本轮首次拿到端到端占比（之前的剖析口径太窄，看不到它们）。**已被证伪、不要再动**：`decodeRangeWithoutGuard` 换「原生解码 + 原生正则过滤」（函数级 1.47x，端到端 −7 %）、压缩分支换 `windows-1252`（0.45x）、去掉字符类里的代理项区间（语义错误）、`TextDecoder('latin1')`（别名是 windows-1252）、纯 JS base64 查表（0.21x）、`Array.from(slice)`（0.21x）、解码循环的判定/分配/访存三处微优化（约 1.1x）、`extractTextWithFib`（2.5 %）、`splitPiecesByStory`、`extractChartsFromWordDocumentStream`。
+
+## Round 104/100 — 2026-10-09
+- 目标**转移**：重新用真实入口 `parseWithFormat()` 剖析后，OLE 层 `readRegularStream` 只占 **1.16 %**（不值得动），真正的热点落在段落 / 格式装配层；`shouldHaveUnderline` 在**每个数字字符**上调用（真实语料 158 937 次/轮），原写法每次 2 次 `substring` + 最多 5 次正则，自耗时（正则 3.89 % + 函数 1.09 %）合计约 **5 %** 端到端。
+- 三处等价化简：① `DATE_TIME_RE`（`/[0-9]{2,4}[年月日时分秒]/`）**可证明冗余** —— 匹配成功必含日期单位字符，故 `hasColonBefore || hasDatePattern || hasTimePattern` ≡ `hasColonBefore || hasDatePattern`；② 冒号判定「回扫跳过空白看落点」与 `/[：:]\s*$/` 等价（`isWhitespaceCode` 覆盖 = JS `\s`）；③ 零分配码点扫描 + 每段落一次日期单位位置表 + O(log n) 二分查询，`detectCharacterStyles` 懒加载一次透传。
+- 隔离基准（77 800 次调用，`true=115` 四个变体逐字节一致）：v0 10.12 ms → v1(零分配) 6.11 → v2(删冗余正则) 5.96 → **v3 2.24 ms（4.51x）**。
+- 端到端（27 份 / 7.6 MB，独立进程，120 轮最小，`git stash` 切换源码分别打包）：OLD 147.38 ms → NEW 133.79 ms（**1.10x**）。隔离 4.51x 折算端到端 1.10x，符合「shouldHaveUnderline 只占 ~5 % 端到端」的预期。
+- 护栏 bug 修复（非实现 bug）：第一版穷尽枚举用 24 字符 `ALPHA` 在第四层 `stack.push(...next)` 一次性 spread ~33 万串 → `RangeError: Maximum call stack size exceeded`（3 用例挂、4 通过）。改递归生成器 `forAllStrings`（生成时内部直接断言，深度=最大长度）并把 `ALPHA` 缩为类别代表 8 字符 → **7/7 全绿**。
+- 验证：`vue-tsc --noEmit` 0 错误；`lint` 0 错误；`build`/`build:lib` 通过；定向护栏 7/7；`npm test` **66 文件 / 1399 项**通过（较 103 的 65/1392 **+1 文件 +7 项**）；`node bench-diff.mjs 1040` 与 `cycle-1030` **除 `cycle`/`timestamp` 外全部字段逐位相同**（27/27 解析成功，13 失败样本完全一致，零新增回归）。
+- 指标：隔离 `shouldHaveUnderline` **4.51x**、端到端解析 **1.10x**；bundle 体积基本持平（主包 raw 317.25 → 317.61 kB、gzip 109.31 → 109.42 kB，噪声内）。
+- 清理的临时产物：`.bench104.ts`、`.bench104b.ts`、`.bench104.mjs`、`.bench104b.mjs`、`.prof104.ts`、`.prof104.mjs`、`.prof104/`、`.profan104.mjs`、`.e2e104.mjs`（9 项）。
+- 发布：版本 `0.7.47 → 0.7.48`，双包已发布。
+- 下一轮候选（来自本轮剖析）：`createParagraphsWithRealFormats`（12.03%）/ `detectCharacterStyles`（9.71%）/ `applyStructuralFormats`（7.81%）/ `extractImagesFromStream`（7.81%）/ `guessCharFormat`（7.57%）/ `parseFormatRuns`（5.36%）/ `detectParagraphFormat`（5.06%）。**已被证伪、不要动**：OLE 层 `readRegularStream`（仅 1.16%，优化 < 1% 端到端）；Round 103 的七条证伪项；`DATE_TIME_RE` 已删，其冗余证明见护栏。

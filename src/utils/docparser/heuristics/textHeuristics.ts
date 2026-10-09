@@ -42,13 +42,57 @@ function isWhitespaceCode(code: number): boolean {
 }
 
 /**
- * `shouldHaveUnderline` 用的三个模式。该函数在每个数字字符上被调用，
- * 原先三个正则都是函数体内的字面量（每次求值新建 RegExp 对象），现提升到模块级。
- * 三者均非全局（无 `g`），不涉及 `lastIndex`，跨调用共享安全。
+ * 日期单位字符（`[年日月时分秒]`）的码点判定。
+ *
+ * Round 104：`shouldHaveUnderline` 原有的两个 `substring` 与三个正则全部换成
+ * 码点扫描。该函数在**每个数字字符**上被调用（真实语料 158 937 次/轮），原写法
+ * 每次都要分配两个 ≤30 字符的子串，再做最多 5 次正则求值。
+ *
+ * 顺带发现 `DATE_TIME_RE`（`/[0-9]{2,4}[年月日时分秒]/`）是**可证明的冗余**：
+ * 它匹配成功时匹配串必然含有日期单位字符，因此 `DATE_UNIT_RE` 已经为真，
+ * `hasColonBefore || hasDatePattern || hasTimePattern` 与
+ * `hasColonBefore || hasDatePattern` 恒等。整个判定化简为
+ * 「窗口内是否含日期单位字符」+「紧邻前方是否为冒号（允许中间夹空白）」两条。
+ *
+ * 冒号那条依赖 `isWhitespaceCode` 与 JS `\s` 覆盖范围完全一致，
+ * 因此「从 index-1 起跳过空白后看落点是否为冒号」与
+ * `/[：:]\s*$/` 作用在 `text[max(0,index-30), index)` 上等价。
  */
-const DATE_COLON_BEFORE_RE = /[：:]\s*$/
-const DATE_UNIT_RE = /[年日月时分秒]/
-const DATE_TIME_RE = /[0-9]{2,4}[年月日时分秒]/
+function isDateUnitCode(code: number): boolean {
+  // 年 U+5E74 日 U+65E5 月 U+6708 时 U+65F6 分 U+5206 秒 U+79D2
+  return (
+    code === 0x5e74 ||
+    code === 0x65e5 ||
+    code === 0x6708 ||
+    code === 0x65f6 ||
+    code === 0x5206 ||
+    code === 0x79d2
+  )
+}
+
+/** `shouldHaveUnderline` 的观察窗口半径：只看 index 前后各 30 个字符。 */
+const UNDERLINE_WINDOW = 30
+
+/** 收集文本中所有日期单位字符的位置（升序）。整段无单位字符时返回空数组。 */
+function collectDateUnitPositions(text: string): number[] {
+  const positions: number[] = []
+  for (let i = 0; i < text.length; i++) {
+    if (isDateUnitCode(text.charCodeAt(i))) positions.push(i)
+  }
+  return positions
+}
+
+/** 升序数组里第一个 >= x 的下标。 */
+function lowerBound(sorted: readonly number[], x: number): number {
+  let lo = 0
+  let hi = sorted.length
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1
+    if (sorted[mid] < x) lo = mid + 1
+    else hi = mid
+  }
+  return lo
+}
 
 /** 统计与 `\s` 匹配的码点个数（等价于 `text.replace(/\s/g, '').length` 的差值）。 */
 function countWhitespaceChars(text: string): number {
@@ -190,6 +234,8 @@ export function detectCharacterStyles(text: string): CharStyleSegment[] {
     // Running count of CJK chars in text[0, i). Lets us decide the fallback Chinese
     // font in O(1) per char instead of re-scanning the whole prefix (was O(n^2)).
     let chineseSoFar = 0
+    // 日期单位位置表按需构建：整段没有数字字符时完全不付这份代价。
+    let dateUnitPositions: number[] | null = null
 
     for (let i = 0; i < text.length; i++) {
       const code = text.charCodeAt(i)
@@ -201,7 +247,10 @@ export function detectCharacterStyles(text: string): CharStyleSegment[] {
 
       let charStyle: CharStyle | null = null
       if (isWhitespace) charStyle = { underline: false }
-      else if (isDigit) charStyle = { fontName: 'Times New Roman', underline: shouldHaveUnderline(text, i) }
+      else if (isDigit) {
+        if (dateUnitPositions === null) dateUnitPositions = collectDateUnitPositions(text)
+        charStyle = { fontName: 'Times New Roman', underline: shouldHaveUnderline(text, i, dateUnitPositions) }
+      }
       else if (isUpperCase || isLowerCase) charStyle = { fontName: 'Times New Roman', underline: false }
       else if (isChinese) charStyle = { fontName: '仿宋', underline: false }
       else {
@@ -258,18 +307,41 @@ export function detectCharacterStyles(text: string): CharStyleSegment[] {
     return styles
   }
 
-export function shouldHaveUnderline(text: string, index: number): boolean {
-    // 原为 text[index] + /[0-9]/ 测试；本函数在每个数字字符上都会被调用，
-    // 改用码点判断可省掉一次单字符字符串分配与一次正则求值。
-    const code = text.charCodeAt(index)
-    if (!(code >= 0x30 && code <= 0x39)) return false
-    const before = text.substring(Math.max(0, index - 30), index)
-    const after = text.substring(index, Math.min(text.length, index + 30))
-    const hasColonBefore = DATE_COLON_BEFORE_RE.test(before)
-    const hasDatePattern = DATE_UNIT_RE.test(after) || DATE_UNIT_RE.test(before)
-    const hasTimePattern = DATE_TIME_RE.test(after) || DATE_TIME_RE.test(before)
-    return hasColonBefore || hasDatePattern || hasTimePattern
+/**
+ * 判断 `text[index]`（一个数字字符）是否应带下划线。
+ *
+ * @param dateUnitPositions - 可选的预计算日期单位位置表。`detectCharacterStyles`
+ *   对同一段落会调用本函数**每个数字字符一次**，传进来可把每次调用从 O(窗口) 降到
+ *   O(log n)。省略时内部自行收集，行为完全一致。
+ */
+export function shouldHaveUnderline(
+  text: string,
+  index: number,
+  dateUnitPositions?: readonly number[],
+): boolean {
+  const code = text.charCodeAt(index)
+  if (!(code >= 0x30 && code <= 0x39)) return false
+
+  const beforeStart = index - UNDERLINE_WINDOW > 0 ? index - UNDERLINE_WINDOW : 0
+  const afterEnd = index + UNDERLINE_WINDOW < text.length ? index + UNDERLINE_WINDOW : text.length
+
+  // 冒号：从 index-1 起跳过空白，看落点是否为全角/半角冒号。
+  // 等价于 /[：:]\s*$/ 作用在 text[beforeStart, index) 上。
+  let j = index - 1
+  while (j >= beforeStart && isWhitespaceCode(text.charCodeAt(j))) j--
+  if (j >= beforeStart) {
+    const colon = text.charCodeAt(j)
+    if (colon === 0xff1a || colon === 0x3a) return true
   }
+
+  // 日期单位字符：窗口 [beforeStart, afterEnd) 内是否存在（before 或 after 任一命中）。
+  const units = dateUnitPositions ?? collectDateUnitPositions(text)
+  if (units.length === 0) return false
+  const at = lowerBound(units, index)
+  if (at < units.length && units[at] < afterEnd) return true
+  if (at > 0 && units[at - 1] >= beforeStart) return true
+  return false
+}
 
 export function isSameStyle(style1: CharStyle | null, style2: CharStyle | null): boolean {
     if (!style1 || !style2) return false
