@@ -25,6 +25,8 @@ export default defineConfigWithVueTs(
       'scripts/**',
       'docs/wip-parking/**',
       '.qoder/**',
+      // 本地 agent 工具状态（已 gitignore）：剖析/基准脚手架，不进仓库
+      '.workbuddy-ai/**',
       'tests/_probe*.test.ts',
     ],
   },
