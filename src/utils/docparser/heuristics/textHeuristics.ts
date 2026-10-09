@@ -245,9 +245,14 @@ export function detectCharacterStyles(text: string): CharStyleSegment[] {
     let chineseSoFar = 0
     // 日期单位位置表按需构建：整段没有数字字符时完全不付这份代价。
     let dateUnitPositions: number[] | null = null
+    // 冒号位置与字符样式在同一次遍历里收集（Round 106：原先单独跑一趟 O(n)）。
+    // 冒号判定与循环内的 continue 无关（放在最前，每个 i 都经过），
+    // 故收集到的位置与单独一趟扫描完全一致。
+    const colonPositions: number[] = []
 
     for (let i = 0; i < text.length; i++) {
       const code = text.charCodeAt(i)
+      if (code === 0xff1a || code === 0x3a) colonPositions.push(i)
       const isDigit = code >= 0x30 && code <= 0x39
       const isChinese = code >= 0x4e00 && code <= 0x9fff
       const isUpperCase = code >= 0x41 && code <= 0x5a
@@ -283,13 +288,7 @@ export function detectCharacterStyles(text: string): CharStyleSegment[] {
 
     if (currentStyle) styles.push({ start: styleStart, end: text.length, style: currentStyle })
 
-    // 逐字符找冒号：改用 charCodeAt 避免每字符分配单字符字符串
-    // （'：' = U+FF1A，':' = U+003A）。
-    const colonPositions: number[] = []
-    for (let i = 0; i < text.length; i++) {
-      const code = text.charCodeAt(i)
-      if (code === 0xff1a || code === 0x3a) colonPositions.push(i)
-    }
+    // 冒号位置已在上面那次遍历里收集完（Round 106）。
     if (colonPositions.length > 0) {
       // 原实现为每个段落分配并填充一个 text.length 长的布尔数组 shouldUL，
       // 再把每个 style 段与它求交计数。这里直接按区间求交集长度：

@@ -921,3 +921,15 @@
 - 清理的临时产物：`.bench105.ts`、`.bench105b.ts`、`.bench105.run.mjs`、`.bench105b.run.mjs`、`.e2e105.mjs`（5 项）。
 - 发布：版本 `0.7.48 → 0.7.49`，双包已发布。
 - 下一轮候选（沿用本轮剖析）：`createParagraphsWithRealFormats`（12.03%）/ `applyStructuralFormats`（7.81%）/ `extractImagesFromStream`（7.81%）/ `detectParagraphFormat`（5.06%）/ `parseFormatRuns`（5.36%）。**已被证伪、不要动**：OLE 层 `readRegularStream`（1.16%）；Round 103 七条证伪项；`DATE_TIME_RE` 已删；计数扫描合并已完成。
+
+## Round 106/100 — 2026-10-09
+- 范围测定（33 819 段落）：`guessCharFormat` 53.02 ms 最大，其中 `detectCharacterStyles` 34.79 ms 占大头；`detectParagraphFormat` 18.13 ms（≈ `detectAlignment` 13.78 + `detectListInfo` 4.23）。
+- 改动：`detectCharacterStyles` 原先对每段做**两次全串遍历**（主样式遍历 + 单独一趟冒号扫描）。把冒号收集并进主遍历（放在循环体最前，早于 `continue`），删除独立循环。等价：主遍历对每个 i 恰好访问一次，冒号判定在 `continue` 前，故 `colonPositions` 内容与顺序完全一致。
+- 隔离基准：`detectCharacterStyles` 34.79 → 24.89 ms（**1.40x**）；`guessCharFormat` 53.02 → 40.23 ms（**1.32x**）。
+- 端到端（27 份 / 7.6 MB，独立进程，120 轮最小，交错 3×NEW / 2×OLD）：NEW 143.72/144.35/144.33 vs OLD 146.61/147.06 → **约 1.9%**。**隔离 1.40x 折算端到端预期 ~7%，实测仅 1.9%（约四分之一）**——又一次印证「隔离基准会系统性高估端到端收益」（Round 103 同源结论），已写入 changelog。
+- 护栏 `tests/textHeuristics.charStyles.test.ts`（**4 项**）：把改动前实现逐行转写为参照做差分（穷举长度≤4、随机 3000、冒号密集、边界）；**注入 bug（只在偶数下标收集冒号）→ 3/4 失败**，证明护栏有鉴别力（已还原）。
+- 验证：`vue-tsc` 0 错误；`lint` 0 错误；`build`/`build:lib` 通过；定向 4/4；`npm test` **68 文件 / 1407 项**通过（较 105 的 67/1403 **+1 文件 +4 项**）；`node bench-diff.mjs 1060` 与 `cycle-1050` **零新增回归**（27/27，13 失败样本一致）。
+- 指标：隔离 **1.40x**（detectCharacterStyles）、端到端 **约 1.9%**；bundle 体积基本持平（主包 raw 317.65 → 317.61 kB、gzip 109.46 → 109.45 kB）。
+- 清理的临时产物：`.bench106.ts`、`.bench106.run.mjs`、`.e2e106.mjs`（3 项）。
+- 发布：版本 `0.7.49 → 0.7.50`，双包已发布。
+- 下一轮候选：`detectAlignment`（13.78 ms）/ `detectParagraphFormat`（18.13 ms）/ `detectListInfo`（4.23 ms）；`detectParagraphFormat` 内部对同一文本先后调用 `detectAlignment` 与 `detectListInfo`（各一次 `trim()` + 前导空白扫描），存在跨函数重复遍历（需谨慎设计签名避免语义漂移）。**已被证伪、不要动**：OLE 层 `readRegularStream`（1.16%）；Round 103 七条证伪项；`DATE_TIME_RE` 已删；104/105/106 重复遍历合并已完成。
