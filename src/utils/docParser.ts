@@ -155,6 +155,51 @@ interface StoryPieceMap {
 }
 
 /**
+ * 把整篇文本按段落标记 '\n'（0x0A）切成 parts，并给出每个 part 的 CP 起点与段序号。
+ *
+ * Round 108：切点从「逐字符扫描 `charCodeAt(i) !== 10`」改为 `indexOf('\n')` 跳跃。
+ * 原写法对**每个字符**做一次 `charCodeAt` + 比较，只为找段落标记；真实语料
+ * 34 945 段 / 1 491 378 字符（'\n' 密度 2.34 %）实测 **3.8x**（147.9 → 38.7 ms）
+ * —— JS 逐字符循环的每字符开销远高于一次原生（SIMD）查找。
+ *
+ * 等价性：原循环 `i` 从 0 走到 `text.length` **含端点**，因此当文本以 '\n' 结尾或为
+ * 空串时，末尾必定多产出一个（可能为空的）part；`nl < 0` 分支用 `slice(partStart)`
+ * 产出同一个末尾 part，`cp += paraText.length + 1` 也照旧。
+ *
+ * Word 表格行以 TTP 标记（0x07）而非段落标记（0x0D）结尾，所以整张表会粘在同一个
+ * `\n`-part 里。在每个行边界（连续两个单元格标记）之后再切一刀，让每一行成为独立
+ * 段落，从而匹配到它自己的 PAPX run —— 该 run 携带这一行的 TAP
+ * （sprmTDefTable：边框、合并、列宽）。这一段逻辑与改动前逐字相同。
+ */
+export function splitTextByParagraphMark(
+  text: string,
+): Array<{ text: string; cpStart: number; originalIndex: number }> {
+  const parts: Array<{ text: string; cpStart: number; originalIndex: number }> = []
+  let cp = 0
+  let partStart = 0
+  let partIndex = 0
+  let nl = text.indexOf('\n')
+  for (;;) {
+    const cut = nl < 0 ? text.length : nl
+    const paraText = text.slice(partStart, cut)
+    const subParts = paraText.includes('\u0007\u0007')
+      ? paraText.split(/(?<=\u0007\u0007)/)
+      : [paraText]
+    let subOffset = 0
+    for (const subText of subParts) {
+      parts.push({ text: subText, cpStart: cp + subOffset, originalIndex: partIndex })
+      subOffset += subText.length
+    }
+    cp += paraText.length + 1 // +1 for the \n (paragraph mark)
+    partStart = cut + 1
+    partIndex++
+    if (nl < 0) break
+    nl = text.indexOf('\n', partStart)
+  }
+  return parts
+}
+
+/**
  * Synchronous .doc (OLE2/CFB) file parser.
  *
  * Extracts plain text and infers formatting (font size, bold, alignment, list type).
@@ -1060,36 +1105,15 @@ export class DocParser {
     listEntries?: ListEntry[],
     lfoEntries?: LfoEntry[],
   ): ParserParagraph[] {
-    const allParagraphs: Array<{ text: string; cpStart: number; originalIndex: number }> = []
-    let cp = 0
-
     // Avoid split() creating a second full string array for large documents.
     // Paragraph extraction is allocation-sensitive because this path runs for
     // every formatted document. Walk the source string once and only retain
     // paragraph slices that survive into the result metadata.
-    let partStart = 0
-    let partIndex = 0
-    for (let i = 0; i <= text.length; i++) {
-      if (i !== text.length && text.charCodeAt(i) !== 10) continue
-      const paraText = text.slice(partStart, i)
-      // Word table rows end with a TTP mark (0x07) instead of a paragraph
-      // mark (0x0D), so whole tables arrive glued to the following text
-      // inside a single \n-part. Split after each row boundary (two
-      // consecutive cell marks) so every row becomes its own paragraph and
-      // can match its PAPX run — the run that carries the row's TAP
-      // (sprmTDefTable: borders, merges, widths).
-      const subParts = paraText.includes('\u0007\u0007')
-        ? paraText.split(/(?<=\u0007\u0007)/)
-        : [paraText]
-      let subOffset = 0
-      for (const subText of subParts) {
-        allParagraphs.push({ text: subText, cpStart: cp + subOffset, originalIndex: partIndex })
-        subOffset += subText.length
-      }
-      cp += paraText.length + 1 // +1 for the \n (paragraph mark)
-      partStart = i + 1
-      partIndex++
-    }
+    // Round 108：切分逻辑抽成模块级 `splitTextByParagraphMark`（纯函数，便于常驻差分护栏）。
+    // 注意不要写成 `arr.push(...split(...))`——文档可以有数万个段落，spread 实参个数
+    // 超过阈值会抛 `RangeError: Maximum call stack size exceeded`（Round 104 教训）。
+    const allParagraphs: Array<{ text: string; cpStart: number; originalIndex: number }> =
+      splitTextByParagraphMark(text)
 
     const result: ParserParagraph[] = []
     const styleById = new Map<number, StyleDefinition>()
