@@ -1021,3 +1021,9 @@
 - 指标：**端到端 1.084x（约 +9 %）**。体积：主包 raw 318.88 → **318.98 kB**、gzip 109.83 → **109.87 kB**；库 js raw 352.75 → **352.93 kB**、gzip 94.86 → **94.91 kB**（**+0.05 kB gzip**）；库 UMD raw 263.50 → **263.59 kB**、gzip 83.05 → **83.10 kB**。**+0.05 kB gzip 换 9 % 端到端**，收益明确、增长已论证。
 - 发布：版本 `0.7.54 → 0.7.55`，双包已发布。
 - 下一轮候选：`createParagraphsWithRealFormats`（9.91 %，L7842 `mergeCharFormatForParagraph` 调用点 2.23 % + L7845–7847 spread/rest 1.86 %）；`applyStructuralFormats`（7.27 %，需调用点级归因）；`extractImagesFromStream`（5.07 %）；`bytesToBase64`（3.40 %，已排除原生方案）。**同源延伸**：`detectListInfo` 与 `detectAlignment` 仍对每段做 `text.trim()`（分配），可考察能否免掉；注意 `ALL_CAPS_LINE_RE` 带 `$`，直接在 `text` 上测**不等价**。**已被证伪、不要动**：Round 111 已记录的全部条目。
+## Round 113/100 — 2026-10-10
+- 本轮候选全部否决，未落地生产代码、未升号、未发布；轮次计入完成计数。基于真实 27 份样本 CPU 剖析（120 轮）选取 `createParagraphsWithRealFormats` 的 `overlapping.reduce` 显式循环改写。
+- 逐文件结果：27/27 份完整 dump 相同；撤回后 `npm test` 75 文件 / 1446 项通过。
+- 交错 4×NEW/4×OLD、每进程20轮：NEW 中位数 102.220/100.433/101.170/106.897 ms；OLD 97.287/100.363/100.363/98.980 ms；初始30轮 NEW 103.551、OLD 100.828 ms。无稳定收益且有退化，按硬纪律撤回。
+- 工作区干净，包体未改变。详见 `docs/changelog/2026-10-10-round113-optimization.md`。
+- 下一轮：Round 114，重新剖析 `applyStructuralFormats` 调用点或 `extractImagesFromStream` 多次调用权重，避免重复 pieceMap 候选。
