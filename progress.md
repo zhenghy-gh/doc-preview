@@ -909,3 +909,15 @@
 - 清理的临时产物：`.bench104.ts`、`.bench104b.ts`、`.bench104.mjs`、`.bench104b.mjs`、`.prof104.ts`、`.prof104.mjs`、`.prof104/`、`.profan104.mjs`、`.e2e104.mjs`（9 项）。
 - 发布：版本 `0.7.47 → 0.7.48`，双包已发布。
 - 下一轮候选（来自本轮剖析）：`createParagraphsWithRealFormats`（12.03%）/ `detectCharacterStyles`（9.71%）/ `applyStructuralFormats`（7.81%）/ `extractImagesFromStream`（7.81%）/ `guessCharFormat`（7.57%）/ `parseFormatRuns`（5.36%）/ `detectParagraphFormat`（5.06%）。**已被证伪、不要动**：OLE 层 `readRegularStream`（仅 1.16%，优化 < 1% 端到端）；Round 103 的七条证伪项；`DATE_TIME_RE` 已删，其冗余证明见护栏。
+
+## Round 105/100 — 2026-10-09
+- 范围测定：段落级热函数 `guessCharFormat` 51.2 ms/轮 > `detectCharacterStyles` 34.8 ms/轮（33 819 段落）。`guessCharFormat` 与 `detectAlignment` 各自对同一段文本跑**两次独立全串扫描**（`countChineseChars` + `countWhitespaceChars`）只为了拿两个标量计数。
+- 改动：新增导出 `countChineseAndWhitespace(text): [number, number]`（一趟合并扫描，中文字符判定 `[0x4e00,0x9fff]`、空白判定与 `isWhitespaceCode` 完全一致），替换两处调用点；删除不再引用的本地 `countWhitespaceChars` 与 `countChineseChars` import（encodingDetector 内部不受影响）。零语义风险。
+- 隔离基准（33 819 段落）：等价性自检 `mismatch=0`；separate 14.187 ms → merged 12.508 ms（**1.13x**）。
+- 端到端（27 份 / 7.6 MB，独立进程，120 轮最小，`git stash` 切换源码分别打包）：OLD 137.10 ms → NEW 130.97 ms（**1.05x**）。
+- 护栏 `tests/textHeuristics.counts.test.ts`（**4 项**）：穷举长度≤4 全串 + 交叉验证 `countChineseChars`、随机 4000、边界、NBSP/ZWNBSP/全角空格等。第一版手写字面量用例混入非空白字符（8 vs 7），改 `String.fromCharCode(...)` 显式码点构造 → 4/4 全绿。
+- 验证：`vue-tsc --noEmit` 0 错误；`lint` 0 错误（注意 esbuild 的 `.run.mjs` 临时 bundle 会被 `eslint .` 扫到报 34 error，删净即好）；`build`/`build:lib` 通过；定向 4/4；`npm test` **67 文件 / 1403 项**通过（较 104 的 66/1399 **+1 文件 +4 项**）；`node bench-diff.mjs 1050` 与 `cycle-1040` **零新增回归**（27/27，13 失败样本一致）。
+- 指标：隔离 **1.13x**、端到端 **1.05x**；bundle 体积基本持平（主包 raw 317.61 → 317.65 kB、gzip 109.42 → 109.46 kB）。
+- 清理的临时产物：`.bench105.ts`、`.bench105b.ts`、`.bench105.run.mjs`、`.bench105b.run.mjs`、`.e2e105.mjs`（5 项）。
+- 发布：版本 `0.7.48 → 0.7.49`，双包已发布。
+- 下一轮候选（沿用本轮剖析）：`createParagraphsWithRealFormats`（12.03%）/ `applyStructuralFormats`（7.81%）/ `extractImagesFromStream`（7.81%）/ `detectParagraphFormat`（5.06%）/ `parseFormatRuns`（5.36%）。**已被证伪、不要动**：OLE 层 `readRegularStream`（1.16%）；Round 103 七条证伪项；`DATE_TIME_RE` 已删；计数扫描合并已完成。

@@ -12,7 +12,6 @@
  */
 
 import type { CharacterFormat, ParagraphFormat, CharStyle, CharStyleSegment } from '../../docFormat'
-import { countChineseChars } from '../encodingDetector'
 
 /**
  * 与 JS `\s` 等价的码点判定（WhiteSpace + LineTerminator）。
@@ -94,13 +93,23 @@ function lowerBound(sorted: readonly number[], x: number): number {
   return lo
 }
 
-/** 统计与 `\s` 匹配的码点个数（等价于 `text.replace(/\s/g, '').length` 的差值）。 */
-function countWhitespaceChars(text: string): number {
-  let count = 0
+/**
+ * 一趟扫描同时统计「中文字符数」与「空白字符数」。
+ *
+ * `guessCharFormat` 与 `detectAlignment` 原先各对同一段文本跑两趟
+ * `countChineseChars` + `countWhitespaceChars`（两次独立 O(n) 扫描）。
+ * 合并成一趟后结果逐字相同：中文字符判定 `[0x4e00,0x9fff]`，空白判定与
+ * `isWhitespaceCode` 完全一致（见 Round 105 changelog）。
+ */
+export function countChineseAndWhitespace(text: string): [number, number] {
+  let chinese = 0
+  let whitespace = 0
   for (let i = 0; i < text.length; i++) {
-    if (isWhitespaceCode(text.charCodeAt(i))) count++
+    const code = text.charCodeAt(i)
+    if (code >= 0x4e00 && code <= 0x9fff) chinese++
+    else if (isWhitespaceCode(code)) whitespace++
   }
-  return count
+  return [chinese, whitespace]
 }
 
 /** 前导空白个数，等价于 `text.length - text.trimStart().length`。 */
@@ -174,11 +183,11 @@ const LIST_BULLET_SQUARE_RE = /^[▪▫◦‣⁃]\s/
 
 export function guessCharFormat(text: string, _paragraphIndex?: number): CharacterFormat {
     const charFormat: CharacterFormat = { styles: [] }
-    const chineseCount = countChineseChars(text)
+    const [chineseCount, whitespaceCount] = countChineseAndWhitespace(text)
     const totalLength = text.length
     const chineseRatio = chineseCount / totalLength
     // 原先 `text.replace(/\s/g, '')` 只为拿长度，现直接计数，省掉一次整串分配。
-    const strippedLength = totalLength - countWhitespaceChars(text)
+    const strippedLength = totalLength - whitespaceCount
     const trimmed = text.trim()
 
     // Default font: Chinese docs use Song, English use Times New Roman
@@ -464,8 +473,8 @@ export function detectAlignment(text: string, index: number, totalParagraphs: nu
     // stripped 只用到长度与其中的中文字数 —— 两者都可直接在 trimmed 上算。
     const leadingSpaces = leadingWhitespaceCount(text)
     const trailingSpaces = trailingWhitespaceCount(text, leadingSpaces)
-    const strippedLen = totalLen - countWhitespaceChars(trimmed)
-    const chineseCount = countChineseChars(trimmed)
+    const [chineseCount, whitespaceCount] = countChineseAndWhitespace(trimmed)
+    const strippedLen = totalLen - whitespaceCount
 
     // Detect centering by leading whitespace: if text is centered in the "page",
     // it will have roughly equal leading and trailing whitespace within the line.
