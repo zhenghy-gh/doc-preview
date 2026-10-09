@@ -1118,6 +1118,9 @@ export class DocParser {
     const result: ParserParagraph[] = []
     const styleById = new Map<number, StyleDefinition>()
     for (const style of styles) styleById.set(style.istd, style)
+    // Cache resolved paragraph styles: many paragraphs share the same istd, and
+    // resolving the inheritance chain repeatedly recreates identical objects.
+    const resolvedParagraphStyles = new Map<number, ReturnType<typeof resolveStyleFormat>>()
     // Keep piece lookup linear over the document instead of filtering every
     // paragraph. Large documents can contain tens of thousands of paragraphs.
     let pieceCursor = 0
@@ -1216,7 +1219,11 @@ export class DocParser {
               // Resolve the full style formatting along the istdBase
               // inheritance chain (e.g. Heading 3 → Heading 1 → Normal),
               // then let direct PAPX/CHPX overrides win.
-              const resolved = resolveStyleFormat(styles, papx.istd)
+              let resolved = resolvedParagraphStyles.get(papx.istd)
+              if (!resolved) {
+                resolved = resolveStyleFormat(styles, papx.istd)
+                resolvedParagraphStyles.set(papx.istd, resolved)
+              }
               if (resolved.paraFormat && Object.keys(resolved.paraFormat).length > 0) {
                 // Style base format → PAPX overrides (already applied above)
                 newPara.paraFormat = {

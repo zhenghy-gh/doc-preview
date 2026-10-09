@@ -1039,3 +1039,11 @@
 - 27/27 份真实样本完整 dump 逐文件一致；交错 4×NEW/4×OLD、每进程20轮：NEW 中位数 98.244/97.926/98.165/97.483 ms，OLD 97.395/96.465/97.758/97.269 ms，NEW 四组均未优于 OLD，按硬纪律撤回。
 - 撤回后 `npm test` 75 文件 / 1446 项、`vue-tsc`、`build`、`build:lib`、`lint` 均通过；`bench-diff 1150` 27/27 成功且与 cycle-1140 逐字段一致，中位数 0.950、p25 0.915、p10 0.897、min 0.812。工作区干净，版本保持 0.7.55。详见 `docs/changelog/2026-10-10-round115-optimization.md`。
 - 下一轮：Round 116，重新围绕 `createParagraphsWithRealFormats` 或其他尚未验证的真实热点做调用点级剖析，避免重复列表 CV 计算和图片扫描查表变体。
+
+## Round 116/100 — 2026-10-10
+- 采纳 1 项真实数据优化：`createParagraphsWithRealFormats` 按 `papx.istd` 缓存段落样式继承解析结果，避免重复 `resolveStyleFormat` 链遍历；新增 `tests/docParser.styleCache.test.ts` 护栏。
+- 真实 27 份完整 dump 逐文件一致；故意错误缓存键的负控检测到差异。
+- 独立进程交错 4×OLD/4×NEW、每进程20轮：OLD 中位数 98.481/98.641/98.656/98.927ms，NEW 94.795/95.670/95.670/96.532ms，四组均改善，约 2.4–3.9%。
+- `npm test` 76 文件 / 1447 项、`vue-tsc`、lint、build/build:lib、bench-diff 1160 均通过；bench 与 cycle-1150 逐字段一致，中位数 0.950、p25 0.915、p10 0.897、min 0.812。
+- 包体：主包 gzip 109.91 kB；库入口 gzip 94.95 kB、UMD gzip 83.11 kB。详见 `docs/changelog/2026-10-10-round116-optimization.md`。
+- 下一轮：Round 117，重新剖析尚未证伪的真实热点。
