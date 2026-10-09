@@ -34,6 +34,10 @@ const WEIRD_CHAR_RE = /[^\u4e00-\u9fff\u3400-\u4dbf\w\s,.!?，。！？；：""'
 const HYPERLINK_QUOTED_RE = /\bHYPERLINK\s+"[^"]*"[\s\u0001]*/g
 const HYPERLINK_BARE_RE = /\bHYPERLINK\s+\S+[\s\u0001]*/g
 const OTHER_FIELD_CODE_RE = /\b(?:EMBED|LIBREOFFICE|INCLUDEPICTURE|INCLUDETEXT)\s+\S+/g
+// Round 107：与 OTHER_FIELD_CODE_RE 同形但**不带 `g`**，只用于「是否值得做替换」的
+// 前置判断。带 `g` 的正则用 `test()` 会推进 lastIndex，跨调用产生状态，故必须分开。
+// 非全局版本命中 ⟺ 全局版本命中，因此该判断是 replace 的**必要条件**，跳过即等价。
+const OTHER_FIELD_CODE_TEST_RE = /\b(?:EMBED|LIBREOFFICE|INCLUDEPICTURE|INCLUDETEXT)\s+\S+/
 const PIC_PLACEHOLDER_RE = /\u0001/g
 
 // ---- applyStructuralFormats 用的模式（原先散落在逐段落循环体内）----
@@ -298,10 +302,21 @@ export function hasTooManyJunkChars(text: string): boolean {
       if (para.text && typeof para.text === 'string') {
         let cleanedText = para.text
         // Remove HYPERLINK field codes + trailing \u0001 field-result marker
-        cleanedText = cleanedText.replace(HYPERLINK_QUOTED_RE, '')
-        cleanedText = cleanedText.replace(HYPERLINK_BARE_RE, '')
+        // Round 107：三个 `replace` 都先做「字面量是否存在」的前置判断。
+        // `\bHYPERLINK` 与 `(?:EMBED|LIBREOFFICE|INCLUDEPICTURE|INCLUDETEXT)`
+        // 都要求对应字面量出现在待处理串里，故字面量不存在时 replace 必然是空操作，
+        // 直接跳过即逐字节等价。注意判断必须落在**该次 replace 的输入串**上
+        // （HYPERLINK 剥离可能让后续串不再含该字面量，也可能把被拆开的两段拼接起来）。
+        if (cleanedText.includes('HYPERLINK')) {
+          cleanedText = cleanedText.replace(HYPERLINK_QUOTED_RE, '')
+          if (cleanedText.includes('HYPERLINK')) {
+            cleanedText = cleanedText.replace(HYPERLINK_BARE_RE, '')
+          }
+        }
         // Remove other common field codes
-        cleanedText = cleanedText.replace(OTHER_FIELD_CODE_RE, '')
+        if (OTHER_FIELD_CODE_TEST_RE.test(cleanedText)) {
+          cleanedText = cleanedText.replace(OTHER_FIELD_CODE_RE, '')
+        }
         if (cleanedText !== para.text) {
           para.text = cleanedText
         }
@@ -354,8 +369,12 @@ export function hasTooManyJunkChars(text: string): boolean {
       // A paragraph may contain an embedded image placeholder mixed with other text
       // (e.g., a caption after a HYPERLINK field). We treat the visible text length
       // as the basis for list/title detection.
-      const textToCheck = text.replace(PIC_PLACEHOLDER_RE, '')
-      const len = textToCheck.length
+      // Round 107：只有长度被用到，且占位符极稀少 —— 先判断是否含 `\u0001`，
+      // 不含时直接用原串长度，跳过整串的全局正则替换（无匹配时 replace 返回原串，
+      // 故长度逐位相同）。
+      const len = text.includes('\u0001')
+        ? text.replace(PIC_PLACEHOLDER_RE, '').length
+        : text.length
       visibleTextLengths[i] = len
       const isShort = len >= LIST_ITEM_MIN_LEN && len <= LIST_ITEM_MAX_LEN
 

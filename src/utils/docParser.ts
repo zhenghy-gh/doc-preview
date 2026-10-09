@@ -1310,13 +1310,16 @@ export class DocParser {
           merged = mergeCharFormatForParagraph(chpxRuns, cpStart, cpEnd, fontNames, characterStyleFormats)
         }
         if (Object.keys(merged).length > 0) {
-          newPara.charFormat = {
+          // Clear heuristic styles array since real CHPX format is available.
+          // Round 107：原先先对象展开再 `delete newPara.charFormat.styles`，
+          // 而 `delete` 会把新建对象打成字典模式（V8 上比展开本身还贵）。
+          // 改用「解构 rest 时排除 styles」，键集合与顺序（除 styles 外）完全一致。
+          const { styles: _heuristicStyles, ...realCharFormat } = {
             ...newPara.charFormat,
             ...merged,
           }
+          newPara.charFormat = realCharFormat
           newPara.charFormatFromReal = true
-          // Clear heuristic styles array since real CHPX format is available
-          delete newPara.charFormat.styles
         }
 
         result.push(newPara)

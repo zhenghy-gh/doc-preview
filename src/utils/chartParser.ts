@@ -165,17 +165,70 @@ export function extractChartsFromDirectory(
 }
 /* v8 ignore stop */
 
+/**
+ * 在 WordDocument 流里扫描内嵌的 OLE / Excel 对象（图表容器）。
+ *
+ * Round 107：原实现逐字节遍历整条流（真实语料 5.50 MB/轮），每个偏移都要读一次
+ * `data[offset]` 再做两次比较。两个签名 `D0 CF 11 E0`（OLE）与 `50 4B 03 04`（ZIP）
+ * 的**首字节互不相同**（0xD0 / 0x50），因此任何不是这两个字节之一的偏移都不可能命中。
+ * 改为用 `Uint8Array.prototype.indexOf` 直接跳到下一个候选首字节：
+ *
+ * - 两个游标**只在被消费后**才刷新（`indexOf(byte, offset + 1)`），所以整趟仍是
+ *   线性扫描；若每次重新取两者最小值就会退化成二次方（Round 100 的教训）。
+ * - 「已耗尽」用 `data.length + 1` 而非 `-1` 表示，否则 `-1 < cursor` 恒真会让
+ *   每次迭代都重扫到末尾。
+ * - 命中并成功产出图表时，原实现把 `offset` 设为 `endOffset + 4`（for 的 `offset++`
+ *   再前进一格，即下一个考察位置是 `endOffset + 5`），这里用 `from` 表达同一跳过语义，
+ *   并在循环开头把落后的游标补齐到 `from`。
+ *
+ * 真实语料实测：0xD0 密度 0.115 %、0x50 密度 0.528 %（合计 0.64 %），
+ * 即约 99.4 % 的偏移被 `indexOf` 原生搜索一次性跨过。
+ */
 export function extractChartsFromWordDocumentStream(data: Uint8Array): ChartInfo[] {
   const charts: ChartInfo[] = []
 
-  for (let offset = 0; offset < data.length - 100; offset++) {
-    const firstByte = data[offset]
+  const limit = data.length - 100
+  if (limit <= 0) return charts
+
+  // 耗尽哨兵：必须大于任何合法偏移与 limit。
+  const EXHAUSTED = data.length + 1
+  let oleAt = data.indexOf(0xD0, 0)
+  if (oleAt < 0) oleAt = EXHAUSTED
+  let zipAt = data.indexOf(0x50, 0)
+  if (zipAt < 0) zipAt = EXHAUSTED
+  let from = 0
+
+  for (;;) {
+    // 产出图表后 from 会跳到 endOffset + 5，落后的游标需要补齐。
+    if (oleAt < from) {
+      oleAt = data.indexOf(0xD0, from)
+      if (oleAt < 0) oleAt = EXHAUSTED
+    }
+    if (zipAt < from) {
+      zipAt = data.indexOf(0x50, from)
+      if (zipAt < 0) zipAt = EXHAUSTED
+    }
+
+    const offset = oleAt < zipAt ? oleAt : zipAt
+    if (offset >= limit) break
+
     let type: 'oleobject' | 'excel' | undefined
-    if (firstByte === 0xD0 && data[offset + 1] === 0xCF && data[offset + 2] === 0x11 && data[offset + 3] === 0xE0) {
+    if (offset === oleAt && data[offset + 1] === 0xCF && data[offset + 2] === 0x11 && data[offset + 3] === 0xE0) {
       type = 'oleobject'
-    } else if (firstByte === 0x50 && data[offset + 1] === 0x4B && data[offset + 2] === 0x03 && data[offset + 3] === 0x04) {
+    } else if (offset === zipAt && data[offset + 1] === 0x4B && data[offset + 2] === 0x03 && data[offset + 3] === 0x04) {
       type = 'excel'
     }
+
+    // 消费游标（两个首字节不同，故至多命中一个分支）。
+    if (offset === oleAt) {
+      oleAt = data.indexOf(0xD0, offset + 1)
+      if (oleAt < 0) oleAt = EXHAUSTED
+    }
+    if (offset === zipAt) {
+      zipAt = data.indexOf(0x50, offset + 1)
+      if (zipAt < 0) zipAt = EXHAUSTED
+    }
+
     if (!type) continue
 
     let endOffset = offset + 100
@@ -198,7 +251,7 @@ export function extractChartsFromWordDocumentStream(data: Uint8Array): ChartInfo
         dataSize: chartSize,
       })
 
-      offset = endOffset + 4
+      from = endOffset + 5
     }
   }
 
