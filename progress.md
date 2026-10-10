@@ -1090,6 +1090,13 @@
 - 详见 `docs/changelog/2026-10-10-round122-optimization.md`。
 - 下一轮：Round 123，重新剖析真实语料，优先审计剩余高占比路径，避免重复已验证候选。
 
+## Round 123/100 — 2026-10-10
+- 本轮基于真实 CPU profile 与字符分布审计 `createParagraphsWithRealFormats`、`applyStructuralFormats`、图片扫描、base64 和字符样式路径；未找到满足语义可证明、真实数据稳定收益且低风险的新增候选，未修改生产代码。
+- profile 总样本 873：GC 10.42%、`createParagraphsWithRealFormats` 10.42%、`applyStructuralFormats` 合计 8.93%、图片扫描 4.47%、base64 4.12%；真实字符 1,456,460，ASCII 99.869%、CJK 0.003%。
+- 27 份真实样本 dump 基线保持一致；`npm test` 76/1448、类型检查、lint、双构建全部通过；bench-diff 123 与 cycle-122 除 cycle/timestamp 外逐字段一致。
+- 按硬纪律本轮为否决/无候选轮：版本保持 0.7.57，不升号、不提交、不发布双包。详见 `docs/changelog/2026-10-10-round123-optimization.md`。
+- 下一轮：Round 124，重新实时剖析剩余高占比路径。
+
 ## Round 118/100 — 2026-10-10
 - 本轮候选否决，未落地生产代码、未升号、未发布；轮次计入完成计数。候选为在 `mergeCharFormatForParagraph` 中预计算每个 CHPX run 的合并样式，避免段落级回退路径重复创建 style spread 对象。
 - 27/27 份真实样本完整 `parseWithFormat()` dump 逐字节一致；全量 `npm test` 76 文件 / 1448 项通过，`vue-tsc`、lint、build/build:lib、bench-diff 118 均通过。
