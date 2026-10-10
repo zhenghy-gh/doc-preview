@@ -1112,3 +1112,11 @@
 - 全量76文件/1452项测试、vue-tsc、lint、双构建通过；bench-diff124与123除cycle/timestamp外逐字段一致。主包/ESM/UMD gzip保持109.91/94.95/83.12kB。
 - 详见 `docs/changelog/2026-10-10-round124-optimization.md`；下一轮Round125，重新剖析避免重复已否决方案。
 
+## Round 125/100 — 2026-10-11
+- 采纳JPEG熵编码段indexOf跳跃搜索；仅跳过非FF空转字节，保留填充/转义/标记/截断回退语义。版本0.7.57→0.7.58，按协议提交并双包发布，完成详情以optimization-loop.json/audit为准。
+- CPU profile2873采样点，findJpegEnd自耗1.46%，主要在熵段逐字节扫描；45条真实流共6,455,182字节，提取125图/7JPEG。隔离6组150轮，上中位OLD730.217ms、NEW665.942ms，耗时降低8.80%。
+- git stash仅切候选源码构建基线后恢复，双bundle预构建；交错4×NEW/4×OLD每进程50轮，NEW/OLD中位95.572/95.919、97.306/98.467、97.419/98.405、96.855/98.039ms，四组改善0.36%–1.21%。
+- 27份候选及最终生产构建完整dump系统cmp通过；新增15项JPEG真实产出/65536穷尽/边界护栏，旧oracle逐行机器对照通过；3个错误负控失败、慢但等价对照通过。
+- 全量76文件/1467项、类型/lint/双构建通过；bench-diff125与124除cycle/timestamp外逐字段相同。主包/ESM/UMD gzip109.94/94.98/83.14kB，分别+0.03/+0.03/+0.02kB。
+- 详见 `docs/changelog/2026-10-11-round125-optimization.md`；下一轮Round126，目标Round208。
+

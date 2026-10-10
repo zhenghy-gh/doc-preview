@@ -121,6 +121,13 @@ function findJpegEnd(data: Uint8Array, start: number): number {
         // Now we're in the entropy-coded segment. We scan for the next
         // marker (0xFF followed by non-0x00 and non-0xFF).
         while (offset + 1 < data.length) {
+          const markerOffset = data.indexOf(0xFF, offset)
+          // 无可读的两字节标记时，旧逐字节循环停在末字节（或流尾）。
+          if (markerOffset < 0 || markerOffset + 1 >= data.length) {
+            offset = data.length - 1
+            break
+          }
+          offset = markerOffset
           if (data[offset] === 0xFF) {
             let next = data[offset + 1]
             // Skip filler 0xFF

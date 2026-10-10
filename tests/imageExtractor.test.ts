@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest'
+import { readFileSync, readdirSync } from 'node:fs'
+import { OleParser } from '../src/utils/oleParser'
 import {
   extractImagesFromStream,
   imagesToDataUrls,
@@ -501,5 +503,206 @@ describe('imageExtractor byte-stuffed markers', () => {
     expect(images.length).toBe(1)
     expect(images[0].format).toBe('jpeg')
     expect(images[0].data.length).toBe(6)
+  })
+})
+
+// Round 125：由 git show HEAD:src/utils/imageExtractor.ts 中改动前的 findJpegEnd
+// 逐行转写；只重命名函数并将 JPEG_SOI.length 固定为 2（FFD8 的常量边界），
+// 保留逐字节熵扫描，不调用生产末端扫描，也不共享新的 indexOf 跳跃逻辑。
+function referenceFindJpegEnd(data: Uint8Array, start: number): number {
+  let offset = start + 2
+  let sosOffset = -1   // SOS 标记位置，用于截断回退
+
+  while (offset + 1 < data.length) {
+    if (data[offset] === 0xFF) {
+      // 跳过填充的 0xFF 字节。
+      let marker = data[offset + 1]
+      while (marker === 0xFF && offset + 2 < data.length) {
+        offset++
+        marker = data[offset + 1]
+      }
+
+      // 0xFF00 是熵数据中的转义字节，不是标记。
+      if (marker === 0x00) {
+        offset += 2
+        continue
+      }
+
+      if (marker === 0xD9) {
+        return offset + 2
+      }
+
+      // SOS 标记之后是熵编码数据。
+      if (marker === 0xDA) {
+        sosOffset = offset
+        // 跳过 SOS 的长度字段及载荷。
+        if (offset + 3 >= data.length) break
+        const segLen = (data[offset + 2] << 8) | data[offset + 3]
+        if (segLen < 2) break
+        offset += 2 + segLen
+        // 逐字节寻找下一个标记：0xFF 后跟非 0x00、非 0xFF 字节。
+        while (offset + 1 < data.length) {
+          if (data[offset] === 0xFF) {
+            let next = data[offset + 1]
+            // 跳过填充的 0xFF。
+            while (next === 0xFF && offset + 2 < data.length) {
+              offset++
+              next = data[offset + 1]
+            }
+            // 0xFF00 是转义的 0xFF 字节，不是标记。
+            if (next === 0x00) {
+              offset += 2
+              continue
+            }
+            // 找到真实标记，交回外层循环处理。
+            break
+          }
+          offset++
+        }
+        // 下一轮重新进入标记处理。
+        continue
+      }
+
+      // 无长度载荷的独立标记。
+      if (marker === 0xD0 || marker === 0xD1 || marker === 0xD2 || marker === 0xD3 ||
+          marker === 0xD4 || marker === 0xD5 || marker === 0xD6 || marker === 0xD7 ||
+          marker === 0x01) {
+        offset += 2
+        continue
+      }
+      // 其他标记携带两字节长度（含长度字段本身）。
+      if (offset + 3 >= data.length) break
+      const segLen = (data[offset + 2] << 8) | data[offset + 3]
+      if (segLen < 2) break
+      offset += 2 + segLen
+    } else {
+      offset++
+    }
+  }
+
+  // 看见 SOS 但没有 EOI 时，以当前视图末端作为截断回退。
+  if (sosOffset >= 0) {
+    return data.length
+  }
+
+  return -1
+}
+
+function expectJpegEndsMatchOracle(data: Uint8Array): number {
+  const images = extractImagesFromStream(data).filter(image => image.format === 'jpeg')
+  for (const image of images) {
+    expect(image.data.buffer).toBe(data.buffer)
+    const start = image.data.byteOffset - data.byteOffset
+    expect(start + image.data.length).toBe(referenceFindJpegEnd(data, start))
+    expect(image.data).toEqual(data.subarray(start, referenceFindJpegEnd(data, start)))
+  }
+  return images.length
+}
+
+const JPEG_SOS_HEADER = [
+  0xFF, 0xD8,
+  0xFF, 0xDA, 0x00, 0x08,
+  0x01, 0x01, 0x00, 0x00, 0x3F, 0x00,
+]
+
+const JPEG_ENTROPY_BOUNDARIES = [
+  { name: '连续FF填充后EOI', entropy: [0x11, 0xFF, 0xFF, 0xFF, 0xD9, 0x22], end: 5 },
+  { name: 'FF00转义后EOI', entropy: [0xFF, 0x00, 0x11, 0xFF, 0xD9, 0x22], end: 5 },
+  { name: '连续FF后00转义', entropy: [0x11, 0xFF, 0xFF, 0x00, 0x22, 0xFF, 0xD9, 0x33], end: 7 },
+  { name: '无EOI的普通熵数据截断', entropy: [0x11, 0x22], end: 2 },
+  { name: '末尾单FF截断', entropy: [0x11, 0xFF], end: 2 },
+  { name: '末尾连续FF截断', entropy: [0xFF, 0xFF], end: 2 },
+  { name: '末尾FF00截断', entropy: [0x11, 0xFF, 0x00], end: 3 },
+  { name: 'SOS后无熵数据', entropy: [], end: 0 },
+  { name: '多SOS扫描', entropy: [0x11, 0xFF, 0xDA, 0x00, 0x02, 0x22, 0xFF, 0x00, 0x33, 0xFF, 0xD9, 0x44], end: 11 },
+  { name: 'RST和TEM独立标记', entropy: [0x11, 0xFF, 0xD0, 0x22, 0xFF, 0xD7, 0xFF, 0x01, 0x33, 0xFF, 0xD9, 0x44], end: 11 },
+  { name: '长非FF熵区后EOI', entropy: [...new Array<number>(4096).fill(0x11), 0xFF, 0xD9, 0x22], end: 4098 },
+]
+
+describe('Round 125 JPEG熵扫描与HEAD逐字节oracle等价性', () => {
+  it('27份真实DOC/DOT的Data和WordDocument流逐个JPEG末端相同且确有产出', () => {
+    const docs = new URL('../docs/', import.meta.url)
+    const files = readdirSync(docs).filter(name => /\.(doc|dot)$/.test(name)).sort()
+    expect(files).toHaveLength(27)
+    let jpegCount = 0
+    let streamCount = 0
+    for (const name of files) {
+      const bytes = readFileSync(new URL(name, docs))
+      const ole = new OleParser(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength))
+      const header = ole.parseHeader()
+      const directory = ole.getDirectorySectors(header, ole.getFatSectors(header))
+      const entries = directory.filter(entry => entry.objectType === 2 &&
+        (entry.name === 'Data' || entry.name === 'WordDocument'))
+      expect(entries.some(entry => entry.name === 'WordDocument')).toBe(true)
+      for (const entry of entries) {
+        const stream = ole.readStream(entry).data
+        jpegCount += expectJpegEndsMatchOracle(stream)
+        streamCount++
+      }
+    }
+    expect(streamCount).toBe(45)
+    expect(jpegCount).toBe(7)
+  })
+
+  it('SOS后的全部65536种两字节熵数据与旧oracle相同且每种都产出JPEG', () => {
+    const data = new Uint8Array([...JPEG_SOS_HEADER, 0, 0, 0x11, 0xFF, 0xD9])
+    let jpegCount = 0
+    for (let pair = 0; pair < 65536; pair++) {
+      data[JPEG_SOS_HEADER.length] = pair >>> 8
+      data[JPEG_SOS_HEADER.length + 1] = pair & 0xFF
+      const expectedEnd = referenceFindJpegEnd(data, 0)
+      expect(expectedEnd).toBeGreaterThan(0)
+      const images = extractImagesFromStream(data)
+      expect(images).toHaveLength(1)
+      expect(images[0].format).toBe('jpeg')
+      expect(images[0].data.length).toBe(expectedEnd)
+      expect(images[0].data).toEqual(data.subarray(0, expectedEnd))
+      jpegCount += images.length
+    }
+    expect(jpegCount).toBe(65536)
+  })
+
+  it.each(JPEG_ENTROPY_BOUNDARIES)('$name给出确定的非空产出和末端', ({ entropy, end }) => {
+    const data = new Uint8Array([...JPEG_SOS_HEADER, ...entropy])
+    expect(expectJpegEndsMatchOracle(data)).toBe(1)
+    const images = extractImagesFromStream(data)
+    expect(images[0].data.length).toBe(JPEG_SOS_HEADER.length + end)
+  })
+
+  it('SOS长度字段截断、过小或越界仍与旧oracle一致并实际回退产出', () => {
+    const cases = [
+      new Uint8Array([0x11, 0x11, 0x11, 0x11, 0xFF, 0xD8, 0xFF, 0xDA, 0x00]),
+      new Uint8Array([0xFF, 0xD8, 0xFF, 0xDA, 0x00, 0x01, 0x11, 0x22]),
+      new Uint8Array([0xFF, 0xD8, 0xFF, 0xDA, 0xFF, 0xFF, 0x11, 0x22]),
+    ]
+    for (const data of cases) {
+      expect(expectJpegEndsMatchOracle(data)).toBe(1)
+      const images = extractImagesFromStream(data)
+      const start = images[0].data.byteOffset - data.byteOffset
+      expect(start + images[0].data.length).toBe(data.length)
+    }
+  })
+
+  it('非零byteOffset视图以自身边界为准且非零JPEG起点末端相同', () => {
+    for (const byteOffset of [1, 2, 3, 7]) {
+      for (const complete of [false, true]) {
+        const prefix = [0x11, 0x22, 0x33]
+        const content = new Uint8Array([
+          ...prefix, ...JPEG_SOS_HEADER, 0x11, 0xFF, 0x00, 0x22,
+          ...(complete ? [0xFF, 0xD9, 0x33] : [0xFF]),
+        ])
+        const backing = new Uint8Array(byteOffset + content.length + 4)
+        backing.fill(0xFF, 0, byteOffset)
+        backing.set(content, byteOffset)
+        // 视图外的EOI不能结束视图内截断的JPEG。
+        backing.set([0xFF, 0xD9, 0xFF, 0xD9], byteOffset + content.length)
+        const data = backing.subarray(byteOffset, byteOffset + content.length)
+        expect(data.byteOffset).toBe(byteOffset)
+        expect(expectJpegEndsMatchOracle(data)).toBe(1)
+        const images = extractImagesFromStream(data)
+        expect(images[0].data.byteOffset).toBe(byteOffset + prefix.length)
+        expect(images[0].data.length).toBe(content.length - prefix.length - (complete ? 1 : 0))
+      }
+    }
   })
 })
