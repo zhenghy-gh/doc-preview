@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
+import { strictEqual } from 'node:assert'
+import { readFileSync } from 'node:fs'
 import { DocParser, parseDocFileFromBuffer, parseDocFileWithFormat, parseDocFile } from '../src/utils/docParser'
 
 describe('DocParser', () => {
@@ -2477,5 +2479,200 @@ describe('Round126 real character format merge guards', () => {
       }
     }
     expect(combinations).toBe(256)
+  })
+})
+
+describe('Round127 重复 trim 清洗差分护栏', () => {
+  // 逐句转写 HEAD d541539；常量也固定在测试内，避免与待测清洗/切分共用实现。
+  const legacyJunkChars = '伀倀藠俹醫蠀耀頀琀餀栀儀騀甀攀爀愀氀攀漀漀渀'
+  const legacyExtraJunkChars = '伇倈俼俿儀儜厬唀唕嘀噀圀堀嬀崀崜帀幀弰彀戀戀'
+  const legacyJunkPrefix = new RegExp(`^[${legacyJunkChars}]+`)
+  const legacyJunkAny = new RegExp(`[${legacyJunkChars}${legacyExtraJunkChars}]`, 'g')
+  const jsWhitespace = [
+    '\u0009', '\u000a', '\u000b', '\u000c', '\u000d', '\u0020', '\u00a0', '\u1680',
+    '\u2000', '\u2001', '\u2002', '\u2003', '\u2004', '\u2005', '\u2006', '\u2007',
+    '\u2008', '\u2009', '\u200a', '\u2028', '\u2029', '\u202f', '\u205f', '\u3000', '\ufeff',
+  ]
+  type LegacyParagraph = { text: string; _cpStart: number; pageBreakBefore: boolean }
+
+  function legacyCleanParagraph(p: string): string {
+    const t = p.trim()
+    const stripped = t.replace(legacyJunkPrefix, '')
+    return stripped === t ? t : stripped.trim()
+  }
+
+  function legacySkipParagraph(text: string): boolean {
+    const junkCount = (text.match(legacyJunkAny) || []).length
+    if (junkCount > 0) {
+      const totalLength = text.trim().length
+      if (junkCount > 2 || (totalLength > 0 && junkCount / totalLength > 0.2)) return true
+    }
+    return false
+  }
+
+  function legacyParagraphs(input: string): LegacyParagraph[] {
+    const result: LegacyParagraph[] = []
+    let cp = 0
+    // 用 split 独立计算 CP，不调用待测 splitTextByParagraphMark。
+    for (const paragraph of input.split('\n')) {
+      const subParts = paragraph.includes('\u0007\u0007')
+        ? paragraph.split(/(?<=\u0007\u0007)/)
+        : [paragraph]
+      let subOffset = 0
+      for (const rawText of subParts) {
+        let pageBreakBefore = false
+        let textToClean = rawText
+        if (rawText.startsWith('\f')) {
+          pageBreakBefore = true
+          textToClean = rawText.slice(1)
+        }
+        if (textToClean.includes('\f')) {
+          const firstPart = textToClean.split('\f')[0]
+          const remaining = textToClean.slice(firstPart.length + 1)
+          if (firstPart.trim().length > 0) {
+            textToClean = firstPart
+          } else {
+            pageBreakBefore = true
+            textToClean = remaining
+          }
+        }
+        const cleaned = legacyCleanParagraph(textToClean.trim())
+        if (!legacySkipParagraph(cleaned) && cleaned.length > 0) {
+          result.push({ text: cleaned, _cpStart: cp + subOffset, pageBreakBefore })
+        }
+        subOffset += rawText.length
+      }
+      cp += paragraph.length + 1
+    }
+    return result
+  }
+
+  function expectLegacyParagraphs(input: string, expected: LegacyParagraph[]): void {
+    const parser = new DocParser(new ArrayBuffer(512))
+    const paragraphs = (parser as any).createParagraphsWithRealFormats(input, [], [], [], [])
+    const actual = paragraphs.map((paragraph: {
+      text: string; _cpStart: number; paraFormat: { pageBreakBefore?: boolean }
+    }) => ({
+      text: paragraph.text,
+      _cpStart: paragraph._cpStart,
+      pageBreakBefore: paragraph.paraFormat.pageBreakBefore === true,
+    }))
+    expect(paragraphs).toHaveLength(expected.length)
+    expect(actual).toEqual(expected)
+    expect(actual).toEqual(legacyParagraphs(input))
+    for (let index = 0; index < paragraphs.length; index++) {
+      expect(paragraphs[index].text.length).toBeGreaterThan(0)
+      expect(paragraphs[index].text).toBe(expected[index].text)
+      expect(paragraphs[index]._cpStart).toBe(expected[index]._cpStart)
+      if (expected[index].pageBreakBefore) {
+        expect(paragraphs[index].paraFormat.pageBreakBefore).toBe(true)
+      } else {
+        expect(paragraphs[index].paraFormat.pageBreakBefore).toBeUndefined()
+      }
+    }
+  }
+
+  const body = 'MiXeD ASCII 大小写 AbCd 正文内容'
+  const one = (text = body, pageBreakBefore = false): LegacyParagraph[] => [
+    { text, _cpStart: 0, pageBreakBefore },
+  ]
+
+  it('覆盖全部 25 种 JS whitespace，并区分段落标记与分页符', () => {
+    expect(jsWhitespace).toHaveLength(25)
+    for (const whitespace of jsWhitespace) {
+      const input = whitespace + body + whitespace
+      expectLegacyParagraphs(input, whitespace === '\n'
+        ? [{ text: body, _cpStart: 1, pageBreakBefore: false }]
+        : one(body, whitespace === '\f'))
+    }
+    const edges = jsWhitespace.filter(char => char !== '\n' && char !== '\f').join('')
+    expectLegacyParagraphs(edges + body + edges, one())
+  })
+
+  it('删除每一种垃圾前缀，并再次 trim 垃圾后的空白但不改变大小写', () => {
+    for (const junk of new Set(legacyJunkChars)) {
+      expectLegacyParagraphs('\ufeff\u3000' + junk + '\t\u2028\u2029' + body + '\u00a0', one())
+    }
+    expectLegacyParagraphs(' \t' + legacyJunkChars + '\ufeff\u3000' + body + '\u2029', one())
+    expectLegacyParagraphs('伀倀\t伀' + body, one('伀' + body))
+  })
+
+  it('保留非 JS whitespace 边界与正文内部空白、垃圾字符和 ASCII 大小写', () => {
+    for (const edge of ['\u0085', '\u180e', '\u200b', '\u2060', '\ud800', '\udfff']) {
+      expectLegacyParagraphs(' \t' + edge + body + edge + '\ufeff', one(edge + body + edge))
+    }
+    const internal = 'AbCd\t中文\u3000正文\ufeff大写Zz\u2028分隔\u2029伀结束'
+    expectLegacyParagraphs('\u3000' + internal + '\u3000', one(internal))
+  })
+
+  it('空、纯白、纯垃圾及真实 skip 路径不会产生空段落', () => {
+    const emptyInputs = ['', ...jsWhitespace, jsWhitespace.join(''), legacyJunkChars,
+      ' \ufeff' + legacyJunkChars + '\u3000', '伀倀 \t\ufeff', '\f伀倀\t', 'Ab伀倀藠Cd']
+    for (const input of emptyInputs) expectLegacyParagraphs(input, [])
+    expectLegacyParagraphs(' \t' + body + '\ufeff', one())
+  })
+
+  it('以分页符开头时保留 pageBreakBefore 与原始 CP', () => {
+    for (const input of ['\f' + body, '\f\ufeff伀倀\u3000' + body + '\u2029', '\f\f' + body]) {
+      expectLegacyParagraphs(input, one(body, true))
+    }
+    expectLegacyParagraphs('\f\f\f' + body + '\fDiscarded Tail', one(body + '\fDiscarded Tail', true))
+  })
+
+  it('段中与多处分页按旧分支选择 firstPart 或 remaining，不提前 trim', () => {
+    expectLegacyParagraphs(' \t伀倀\u3000' + body + '\fDiscarded Tail', one())
+    expectLegacyParagraphs(body + '\fDiscarded\fAnother Tail', one())
+    expectLegacyParagraphs(' \ufeff\u3000\f伀倀\t' + body, one(body, true))
+    expectLegacyParagraphs(' \f伀倀\t' + body + '\fKept Tail', one(body + '\fKept Tail', true))
+    expectLegacyParagraphs('\f伀倀\t' + body + '\fDiscarded Tail', one(body, true))
+    // 非空垃圾 firstPart 会被选中后清空，不能错误地改用 remaining。
+    expectLegacyParagraphs('伀倀\f' + body, [])
+  })
+
+  it('跳过段落后 CP 仍取原始文本长度，含 CR、代理对和表格行边界', () => {
+    const first = ' \ufeff伀倀\t' + body + '\u3000'
+    const skipped = '伀倀\t'
+    const second = '\f伀倀\u3000Second CASE 中文正文\ud83d\ude00\r'
+    const input = '\n' + first + '\n' + skipped + '\n' + second + '\n'
+    expectLegacyParagraphs(input, [
+      { text: body, _cpStart: 1, pageBreakBefore: false },
+      { text: 'Second CASE 中文正文\ud83d\ude00', _cpStart: first.length + skipped.length + 3, pageBreakBefore: true },
+    ])
+    const row = body + '\u0007\u0007'
+    expectLegacyParagraphs(row + '\ufeff伀倀\t' + body, [
+      { text: row, _cpStart: 0, pageBreakBefore: false },
+      { text: body, _cpStart: row.length, pageBreakBefore: false },
+    ])
+  })
+
+  it('真实 DOC 抽取的三段正文经过真实清洗路径仍非空且逐字保留', () => {
+    const data = readFileSync(new URL('../docs/doc-100kb.doc', import.meta.url))
+    const parsed = new DocParser(data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)).parse()
+    expect(parsed.success).toBe(true)
+    expect(parsed.text.length).toBeGreaterThan(0)
+    const texts = parsed.text.split('\n').filter(text =>
+      text.length >= 10 && text.length <= 300 && !/[\f\u0007]/.test(text)
+      && legacyCleanParagraph(text) === text && !legacySkipParagraph(text),
+    ).slice(0, 3)
+    expect(texts).toHaveLength(3)
+    for (const text of texts) {
+      expectLegacyParagraphs('\ufeff伀倀\u3000' + text + '\u2029', one(text))
+    }
+  })
+
+  it('穷尽 65536 首尾码元，直接清洗与旧重复 trim 调用逐字相等', () => {
+    const parser = new DocParser(new ArrayBuffer(512)) as any
+    let checked = 0
+    for (let code = 0; code <= 0xffff; code++) {
+      const char = String.fromCharCode(code)
+      for (const input of [char + body, body + char, char + '伀倀\ufeff\u3000' + body + char]) {
+        const expected = legacyCleanParagraph(input.trim())
+        strictEqual(parser.cleanParagraph(input), expected, `码元 ${code} 直接清洗`)
+        strictEqual(parser.cleanParagraph(input.trim()), expected, `码元 ${code} 旧重复 trim`)
+        checked++
+      }
+    }
+    expect(checked).toBe(65536 * 3)
+    expectLegacyParagraphs('伀倀\ufeff' + body + '\u3000', one())
   })
 })
