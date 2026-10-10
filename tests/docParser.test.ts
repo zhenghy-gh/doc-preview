@@ -2676,3 +2676,159 @@ describe('Round127 重复 trim 清洗差分护栏', () => {
     expectLegacyParagraphs('伀倀\ufeff' + body + '\u3000', one())
   })
 })
+
+describe('Round128 resolved style presence guards', () => {
+  type Style = import('../src/utils/styleParser').StyleDefinition
+  type Papx = import('../src/utils/formatParser').PapxRun
+  const basePara = { alignment: 'left', spaceBefore: 2 }
+  const baseChar = { fontName: 'Base', bold: true, styles: ['bold'] }
+  const style = (istd: number, paraFormat?: Style['paraFormat'], charFormat?: Style['charFormat'],
+    istdBase?: number): Style => ({ istd, name: `Custom ${istd}`, type: 'paragraph',
+    istdBase, paraFormat, charFormat })
+
+  // 独立旧 oracle：每段重新解析受控继承链，并保留原有 Object.keys 判空与展开顺序。
+  function legacyFormats(styles: Style[], run: Papx, chpx: Record<string, unknown>) {
+    const chain: Style[] = []
+    let current = styles.find(candidate => candidate.istd === run.istd)
+    while (current) {
+      chain.unshift(current)
+      current = styles.find(candidate => candidate.istd === current!.istdBase)
+    }
+    let resolvedPara: Record<string, unknown> = {}
+    let resolvedChar: Record<string, unknown> = {}
+    for (const ancestor of chain) {
+      if (ancestor.paraFormat && Object.keys(ancestor.paraFormat).length > 0) {
+        resolvedPara = { ...resolvedPara, ...ancestor.paraFormat }
+      }
+      if (ancestor.charFormat && Object.keys(ancestor.charFormat).length > 0) {
+        resolvedChar = { ...resolvedChar, ...ancestor.charFormat }
+      }
+    }
+    let paraFormat: Record<string, unknown> = { ...basePara }
+    let charFormat: Record<string, unknown> = { ...baseChar }
+    if (Object.keys(run.format).length > 0) paraFormat = { ...paraFormat, ...run.format }
+    paraFormat.styleName = styles.find(candidate => candidate.istd === run.istd)!.name
+    if (Object.keys(resolvedPara).length > 0) paraFormat = { ...resolvedPara, ...paraFormat }
+    if (Object.keys(resolvedChar).length > 0) charFormat = { ...resolvedChar, ...charFormat }
+    if (Object.keys(chpx).length > 0) {
+      const { styles: _styles, ...real } = { ...charFormat, ...chpx }
+      charFormat = real
+    }
+    return { paraFormat, charFormat }
+  }
+
+  function check(styles: Style[], ids = [1, 1, 1], direct: Papx['format'][] = [],
+    chars: Record<string, unknown>[] = [], parser = new DocParser(new ArrayBuffer(512))) {
+    const before = structuredClone(styles)
+    const texts = ids.map((_, index) => `Valid Round128 paragraph ${index}`)
+    let cp = 0
+    const runs: Papx[] = ids.map((istd, index) => {
+      const cpStart = cp
+      cp += texts[index].length + 1
+      return { cpStart, cpEnd: cp, istd, format: direct[index] ?? {} }
+    })
+    const chpx = runs.map((run, index) => ({ cpStart: run.cpStart, cpEnd: run.cpEnd,
+      format: chars[index] ?? {} }))
+    const pieces = runs.map((run, index) => ({ start: run.cpStart,
+      end: run.cpEnd - 1, chpxIndex: index }))
+    const paraSpy = vi.spyOn(parser as any, 'detectParagraphFormat').mockImplementation(() => ({ ...basePara }))
+    const charSpy = vi.spyOn(parser as any, 'guessCharFormat').mockImplementation(() => ({ ...baseChar }))
+    try {
+      const paragraphs = (parser as any).createParagraphsWithRealFormats(
+        texts.join('\n'), chars.length ? chpx : [], runs, styles, [], chars.length ? pieces : undefined,
+      )
+      expect(paragraphs).toHaveLength(ids.length)
+      for (let index = 0; index < ids.length; index++) {
+        const actual = paragraphs[index]
+        const expected = legacyFormats(styles, runs[index], chars[index] ?? {})
+        expect(actual.text).toBe(texts[index])
+        expect(actual.text.length).toBeGreaterThan(0)
+        expect(actual._cpStart).toBe(runs[index].cpStart)
+        for (const key of ['paraFormat', 'charFormat'] as const) {
+          expect(actual[key]).toEqual(expected[key])
+          expect(Object.keys(actual[key])).toEqual(Object.keys(expected[key]))
+          expect(JSON.stringify(actual[key])).toBe(JSON.stringify(expected[key]))
+        }
+        expect(actual.paraFormatFromReal).toBe(Object.keys(runs[index].format).length ? true : undefined)
+        expect(actual.charFormatFromReal).toBe(Object.keys(chars[index] ?? {}).length ? true : undefined)
+      }
+      expect(paraSpy).toHaveBeenCalledTimes(ids.length)
+      expect(charSpy).toHaveBeenCalledTimes(ids.length)
+      expect(styles).toEqual(before)
+      expect(JSON.stringify(styles)).toBe(JSON.stringify(before))
+      return paragraphs
+    } finally {
+      paraSpy.mockRestore()
+      charSpy.mockRestore()
+    }
+  }
+
+  const paras: Style['paraFormat'][] = [undefined, {}, { spaceAfter: 9 }, { spaceAfter: undefined }]
+  const chars: Style['charFormat'][] = [undefined, {}, { italic: true }, { italic: undefined }]
+  const cases = paras.flatMap((para, p) => chars.map((char, c) => ({ p, c, para, char })))
+  it.each(cases)('段落/字符存在性组合 $p/$c 保持旧语义与重复样式结果', ({ para, char }) => {
+    const paragraphs = check([style(1, para, char)])
+    expect(Object.hasOwn(paragraphs[0].paraFormat, 'spaceAfter')).toBe(!!para && Object.hasOwn(para, 'spaceAfter'))
+    expect(Object.hasOwn(paragraphs[0].charFormat, 'italic')).toBe(!!char && Object.hasOwn(char, 'italic'))
+  })
+
+  it('首样式全空、第二样式非空，交错与连续重复缓存互不污染', () => {
+    const paragraphs = check([style(1, {}, {}), style(2, { spaceAfter: 19 }, { italic: true })],
+      [1, 2, 1, 2, 2])
+    expect(paragraphs[0].paraFormat.spaceAfter).toBeUndefined()
+    expect(paragraphs[1].paraFormat.spaceAfter).toBe(19)
+    expect(paragraphs[1].charFormat.italic).toBe(true)
+    expect(paragraphs[2].charFormat.italic).toBeUndefined()
+  })
+
+  it('不同非空样式的段落与字符值不能复用常数缓存键', () => {
+    const paragraphs = check([style(1, { spaceAfter: 3 }, { italic: false }),
+      style(2, { spaceAfter: 7 }, { italic: true })], [2, 1, 2, 1])
+    expect(paragraphs.map((p: any) => p.paraFormat.spaceAfter)).toEqual([7, 3, 7, 3])
+    expect(paragraphs.map((p: any) => p.charFormat.italic)).toEqual([true, false, true, false])
+  })
+
+  it('样式低于启发式与直接 PAPX/CHPX，键序及 false/0/undefined 覆盖保持不变', () => {
+    const paragraphs = check([style(1, { spaceAfter: 9, alignment: 'right', spaceBefore: 8 },
+      { italic: true, bold: false, fontName: 'Style' })], [1, 1, 1],
+    [{ alignment: 'center', spaceBefore: 0 }, {}, { spaceAfter: undefined }],
+    [{ bold: false, italic: undefined }, {}, { fontName: 'Direct', italic: false }])
+    expect(paragraphs[0].paraFormat.spaceBefore).toBe(0)
+    expect(paragraphs[0].paraFormat.alignment).toBe('center')
+    expect(paragraphs[1].paraFormat.alignment).toBe('left')
+    expect(paragraphs[1].charFormat.fontName).toBe('Base')
+    expect(paragraphs[0].charFormat.bold).toBe(false)
+    expect(Object.hasOwn(paragraphs[0].charFormat, 'italic')).toBe(true)
+    expect(paragraphs[2].charFormat.fontName).toBe('Direct')
+  })
+
+  it('空派生样式继承非空基样式，派生覆盖只影响自己的缓存项', () => {
+    const paragraphs = check([style(1, { spaceAfter: 4 }, { italic: true }), style(2, {}, {}, 1),
+      style(3, { spaceAfter: 0 }, { italic: false }, 2)], [2, 3, 1, 2, 3])
+    expect(paragraphs.map((p: any) => p.paraFormat.spaceAfter)).toEqual([4, 0, 4, 4, 0])
+    expect(paragraphs.map((p: any) => p.charFormat.italic)).toEqual([true, false, true, true, false])
+  })
+
+  it('同一 parser 两次调用间的样式变更重新计算存在性与内容', () => {
+    const parser = new DocParser(new ArrayBuffer(512))
+    const styles = [style(1, {}, {}), style(2, { spaceAfter: 11 }, { italic: true })]
+    check(styles, [1, 2, 1], [], [], parser)
+    styles[0].paraFormat = { spaceAfter: 23 }
+    styles[0].charFormat = { italic: false }
+    styles[1].paraFormat = {}
+    styles[1].charFormat = {}
+    const paragraphs = check(styles, [1, 2, 1], [], [], parser)
+    expect(paragraphs[0].paraFormat.spaceAfter).toBe(23)
+    expect(paragraphs[0].charFormat.italic).toBe(false)
+    expect(Object.hasOwn(paragraphs[1].paraFormat, 'spaceAfter')).toBe(false)
+    expect(Object.hasOwn(paragraphs[1].charFormat, 'italic')).toBe(false)
+  })
+
+  it('冻结的样式与继承格式不会被段落直接覆盖或缓存复用突变', () => {
+    const styles = [style(1, Object.freeze({ spaceAfter: undefined }), Object.freeze({ italic: undefined })),
+      style(2, Object.freeze({ spaceAfter: 12 }), Object.freeze({ italic: true }), 1)]
+    styles.forEach(Object.freeze)
+    check(styles, [1, 2, 2, 1], [{ spaceAfter: 0 }, { spaceAfter: 7 }, {}, {}],
+      [{ italic: false }, { italic: undefined }, {}, {}])
+  })
+})

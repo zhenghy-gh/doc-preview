@@ -2,22 +2,22 @@
   "series": "doc-preview 持续优化循环",
   "protocol": ".workbuddy-ai/optimization-loop.md",
   "targetRound": 208,
-  "completedRounds": 126,
-  "currentRound": 127,
+  "completedRounds": 127,
+  "currentRound": 128,
   "inFlight": true,
   "lastVersion": "0.7.58",
-  "lastCommit": "d541539",
-  "updatedAt": "2026-10-11T05:41:52+08:00",
+  "lastCommit": "4c3501a",
+  "updatedAt": "2026-10-11T06:55:09+08:00",
   "audit": {
-    "at": "2026-10-11T02:28:39+08:00",
-    "completedRounds": 126,
-    "verdict": "Round 126 否决闭环独立审计通过，无本轮阻断；历史非阻断缺口及已披露收尾/交付物脏保留。progress最大126，共115条、114个唯一轮次；changelog115份、最大126。124/125/126的changelog、progress、每日memory与提交4331b8c/8cbb057/d541539齐全，提交版本依次0.7.57/0.7.58/0.7.58，当前package/lock及官方curl双包latest均0.7.58且版本元数据存在。本轮候选否决、不升号不发布，符合协议否决例外。独立读取round126-pairs.json确认32690组真实输入、merged含styles为0；重算6组隔离上中位OLD233.641458/NEW233.753959ms，增加0.048151129%，3/6组较慢。round126-timing.json原始8独立进程各60轮，交错NEW/OLD、OLD/NEW、NEW/OLD、OLD/NEW；重算上中位NEW/OLD为93.761/94.808、94.863/94.824、96.383/96.666、95.891/96.767ms，改善1.104337%、-0.041129%、0.292761%、0.905267%。第2组微量退化可能是噪声，不宣称统计显著，结合隔离无稳定收益支持保守否决。old/new/final-dump各27同名文件，监督实际系统cmp基线对候选和最终54次全部通过；bench cycle-126/125排除cycle/timestamp全部字段深相等，27/27解析成功。7项常驻护栏逐项读取，独立旧表达式oracle与非空真实路径断言存在；controls.json及日志确认三个错误负控退出1、分别6/6/5项失败，慢等价对照退出0且7项通过。test日志76文件/1474项通过；types日志无输出，lint无错误，应用/库构建日志完成且包括vue-tsc，结合记录核对，监督未重跑全量。生产src相对8cbb057 git diff为空，d541539仅护栏/记录/执行状态；实际git stash仅切候选文件构建OLD后恢复、预构建双bundle计时在本轮changelog:28及progress披露，不继承Round124偏差。根目录无.prof*、.bench*、.e2e-*；git status为状态提交后回写和有意未提交outputs/round126-report.md交付报告，均非源码脏。监督唯一写入audit四字段，未改其它状态、代码、测试、记录或提交。下一轮Round127，目标Round208。",
+    "at": "2026-10-11T05:51:07+08:00",
+    "completedRounds": 127,
+    "verdict": "Round 127 否决闭环独立审计通过，无本轮阻断；保留历史非阻断缺口及已披露收尾脏。progress最大127，共116条、115个唯一轮次；持续优化changelog116份、最大127，目录全部文件128份（另12份其它历史记录）。125/126/127的changelog、progress、每日memory及提交8cbb057/d541539/4c3501a五项齐全，提交版本均0.7.58；125由父提交0.7.57升号，126/127否决不升号不发布符合例外。实际curl官方双包latest均0.7.58且版本元数据存在，package及lock顶层/根包均0.7.58。独立CPU统计原profile4719样本，段落创建590/12.50%、目标行13/0.2755%。只读导入capture重新解析全部27真实DOC/DOT，34348输入/1604640码元与保存JSON逐项一致，10645输入首尾trim改变值；旧新清洗逐项相等。独立重算6组正反交错每次100遍隔离上中位OLD142.010625/NEW120.535333ms，耗时降低15.122313559%。round127-timing-recheck.json对应8独立进程各80轮，顺序NEW/OLD、OLD/NEW、NEW/OLD、OLD/NEW；上中位NEW/OLD93.193/94.468、96.580/95.108、96.074/96.568、96.515/97.320ms，第2组退化1.547714178%；原timing第4组也退化0.196703584%。不宣称统计显著，两次无稳定收益支持保守否决。实际系统cmp候选及最终各27份共54次通过，复建OLD/NEW对原bundle另2次cmp通过；双bundle仅调用点trim一行不同。只读导入当前dist-lib对final-dump27份JSON全部相同，bench127/126除cycle/timestamp全部字段深等，27/27解析成功。逐项读取9护栏，固定旧清洗/skip常量及独立split/CP oracle，非空指定正文/段数/CP/pageBreakBefore断言及196608组合存在；controls和原始日志三个错误负控退出1，失败9/6/9项，慢等价退出0且9项通过。全量日志76文件/1483项，类型日志无输出，lint无错误，双构建完成包含vue-tsc，gzip109.94/94.98/83.14kB；独立读取会话jsonl第177行YmU8sl串行验证完成回执确认全部链成功，监督未重跑全量。生产src/package/lock相对d541539无差异，4c3501a仅护栏/记录/执行状态。独立读取会话jsonl第14/17行及起始持久ps确认03:32:15占用到05:40:21已过128.1分钟，无活动优化进程、遗留197行护栏；接续同一Round127非并发新轮。jsonl第146行XdqrW2实际stash仅候选源码、构建OLD后pop并Dropped refs/stash，第155行QPABy3复建NEW及cmp成功；现stash list空。真实时序为遗留预构建bundle复测后再stash复建校验，字节一致，未宣称复测前重新stash或监督重放。根目录无.prof*/.bench*/.e2e-*，状态/memory收尾及三个有意未提交报告保留，整个工作区并非干净。监督唯一写入audit四字段，未改其它状态/代码/测试/记忆/报告/提交，未发布。下一轮Round128，目标Round208。",
     "gaps": [
-      "历史非阻断：progress缺Round6、7、8、9、10、27、32、33、49、50、51、55，并有Round67重复；changelog缺Round26、27、28、29、34、37、40、44、45、47、85。两份账本缺号集合不同，本次重新统计，不补造历史记录。",
-      "历史非阻断：Round123的progress.md:1097与当日memory:22仍写不提交，但git实际存在2240f0e文档提交；生产代码未改、未升号、未发布的否决结论不受影响。",
-      "历史非阻断：Round124 changelog:49将原始计时路径写作perf-harness/round124-timing.json，实际为.workbuddy-ai/perf-harness/round124-timing.json。",
-      "历史非阻断：Round124预构建双bundle计时但未执行协议第5项git stash切源码，保守否决不受影响；Round125/126实际切候选源码构建OLD后恢复且已披露，不继承该偏差。",
-      "本轮非阻断收尾：最终git status存在.workbuddy-ai/optimization-loop.json完成状态及audit回写、.workbuddy-ai/memory/2026-10-11.md提交后收尾追加、未跟踪outputs/round126-report.md；报告第41行明确为有意未提交交付物。memory第11行追加提交状态、后台监督派发和报告路径，没有将派发等同审计通过。均已披露，未修改或删除任何交付物，监督仅替换audit四字段。"
+      "历史非阻断：progress缺Round6、7、8、9、10、27、32、33、49、50、51、55，Round67重复；持续优化changelog缺Round26、27、28、29、34、37、40、44、45、47、85。两份账本缺号不同，独立重新统计，不混入其它历史记录，不补造。",
+      "历史非阻断：Round123 progress.md:1097及2026-10-10 memory:22写不提交，但实际2240f0e文档提交存在；不影响生产未改、不升号、不发布的否决结论。",
+      "历史非阻断：Round124 changelog:49计时路径遗漏.workbuddy-ai前缀；该轮预构建bundle计时未stash切源码。Round125/126已披露切源码；127实际stash动作有本会话持久工具回执、复建字节一致及无残留支持。",
+      "本轮非阻断时序披露：复测05:42完成使用03:34遗留预构建双bundle，之后05:43实际stash复建OLD/NEW并与计时bundle系统cmp一致；不是本会话复测前stash。原始历史动作可由本会话jsonl第146/155行独立读取，不以stash list现态替代历史证据；不影响保守否决。",
+      "本轮非阻断收尾：git status为optimization-loop.json完成状态/audit回写与2026-10-11.md提交后追加，outputs/round126-report.md及round127-report.md未跟踪；round125-report.md由.git/info/exclude:19忽略，三个报告均为有意未提交交付物。changelog:45、memory:19及report:39已披露，派发不等同审计通过。源码干净但不能称整个工作区干净；监督未修改或删除上述交付物。"
     ]
   },
   "notes": [
