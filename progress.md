@@ -1058,3 +1058,10 @@
 - 包体与 Round 116 一致：主包 gzip 109.91 kB；库入口 gzip 94.95 kB、UMD gzip 83.11 kB。版本保持 0.7.56。详见 `docs/changelog/2026-10-10-round117-optimization.md`。
 - 下一轮：Round 118，重新剖析真实热点，优先验证尚未证伪的调用点级候选。
 
+## Round 118/100 — 2026-10-10
+- 本轮候选否决，未落地生产代码、未升号、未发布；轮次计入完成计数。候选为在 `mergeCharFormatForParagraph` 中预计算每个 CHPX run 的合并样式，避免段落级回退路径重复创建 style spread 对象。
+- 27/27 份真实样本完整 `parseWithFormat()` dump 逐字节一致；全量 `npm test` 76 文件 / 1448 项通过，`vue-tsc`、lint、build/build:lib、bench-diff 118 均通过。
+- 交错 4×NEW/4×OLD、每进程 20 轮：NEW/OLD 中位数分别为 105.050/105.081、104.785/104.688、105.511/103.788、105.004/106.931 ms，仅 2/4 组胜出且出现退化，无稳定收益，按硬纪律撤回。
+- 版本保持 0.7.56，工作区干净，未发布；详见 `docs/changelog/2026-10-10-round118-optimization.md`。
+- 下一轮：Round 119，重新基于真实剖析寻找尚未证伪且能在交错端到端中稳定获益的调用点级候选。
+
