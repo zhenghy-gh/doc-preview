@@ -466,12 +466,11 @@ export function isSameStyle(style1: CharStyle | null, style2: CharStyle | null):
 
 export function detectParagraphFormat(text: string, index: number, totalParagraphs: number): ParagraphFormat {
     const format: ParagraphFormat = {}
-    const trimmed = text.trim()
-    const alignment = detectAlignment(text, index, totalParagraphs, trimmed)
+    const alignment = detectAlignment(text, index, totalParagraphs)
     if (alignment) format.alignment = alignment
 
     // Detect list type (with level inferred from leading whitespace).
-    const listInfo = detectListInfo(text, trimmed)
+    const listInfo = detectListInfo(text)
     if (listInfo) {
       format.listType = listInfo.listType
       format.listStyle = listInfo.listStyle
@@ -499,12 +498,12 @@ export function detectParagraphFormat(text: string, index: number, totalParagrap
    * The list level is inferred from leading whitespace (per 2 spaces ≈ 1 level).
    * Returns null if the paragraph does not look like a list item.
    */
-export function detectListInfo(text: string, trimmedText = text.trim()): { listType: 'ordered' | 'unordered'; listStyle: string; listLevel: number } | null {
+export function detectListInfo(text: string): { listType: 'ordered' | 'unordered'; listStyle: string; listLevel: number } | null {
     // Count leading whitespace (spaces / tabs / full-width spaces) as an indent width.
     // 原先 match(/^[\s\u3000\t]*/) + 两次 replace 共 3 次整串分配，现单趟扫描。
     const listLevel = Math.floor(leadingIndentWidth(text) / 2)
 
-    const trimmed = trimmedText
+    const trimmed = text.trim()
     if (trimmed.length < 2) return null
 
     // 1. Multi-level Arabic: 1.1 / 1.2.3 (at least one dot-separated number followed by space or end)
@@ -567,8 +566,8 @@ export function detectListInfo(text: string, trimmedText = text.trim()): { listT
     return null
   }
 
-export function detectAlignment(text: string, index: number, totalParagraphs: number, trimmedText = text.trim()): ParagraphFormat['alignment'] | null {
-    const trimmed = trimmedText
+export function detectAlignment(text: string, index: number, totalParagraphs: number): ParagraphFormat['alignment'] | null {
+    const trimmed = text.trim()
     const totalLen = trimmed.length
     // 原先每次调用要 trim()/trimStart()/trimEnd()×2/replace()/match() 共 6 次分配。
     // 前导/尾部空白改为计数（trimStart/trimEnd 只用于取长度），

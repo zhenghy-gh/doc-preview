@@ -172,6 +172,15 @@ describe('styleParser', () => {
       expect(resolved.fontIndex).toBeUndefined()
     })
 
+    it('should reflect mutations to the caller-owned style definitions', () => {
+      const styles = [
+        { istd: 0, name: 'Normal', type: 'paragraph' as const, charFormat: { fontSize: 10 } },
+      ]
+      expect(resolveStyleFormat(styles, 0).charFormat).toEqual({ fontSize: 10 })
+      styles[0].charFormat = { fontSize: 18 }
+      expect(resolveStyleFormat(styles, 0).charFormat).toEqual({ fontSize: 18 })
+    })
+
     it('should stop the chain at a missing base style', () => {
       const styles = [
         { istd: 2, name: 'Derived', type: 'paragraph' as const, istdBase: 99, charFormat: { bold: true } },
