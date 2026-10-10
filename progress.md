@@ -1120,3 +1120,11 @@
 - 全量76文件/1467项、类型/lint/双构建通过；bench-diff125与124除cycle/timestamp外逐字段相同。主包/ESM/UMD gzip109.94/94.98/83.14kB，分别+0.03/+0.03/+0.02kB。
 - 详见 `docs/changelog/2026-10-11-round125-optimization.md`；下一轮Round126，目标Round208。
 
+## Round 126/100 — 2026-10-11
+- 否决真实字符格式「先排除styles再合并」候选，src生产代码精确撤回至8cbb057；保留tests/docParser.test.ts新增7项集成差分护栏。不升号、不发布，版本保持0.7.58。
+- CPU profile4143采样点：createParagraphsWithRealFormats占11.80%，最终合并rest行0.84%。27文件捕获32,690组真实合并输入，merged含styles为0；隔离6组80遍上中位OLD233.641/NEW233.754ms，增加0.048%，无稳定收益。
+- git stash仅切候选源码构建基线后恢复，预构建双bundle；交错4×NEW/4×OLD每进程60轮，中位93.761/94.808、94.863/94.824、96.383/96.666、95.891/96.767ms；第2组退化0.0411%，结合隔离无益按纪律否决。
+- 常驻护栏覆盖样式排除/键序/false-zero-undefined覆盖/未知键/冻结对象及256组合；明确断言真实非空产出。3个错误负控被捕获、慢等价对照通过，全部控制改动撤回。
+- 候选及最终生产构建27份dump各与基线系统cmp全部通过；全量76文件/1474项、类型/lint/双构建通过，bench126/125除cycle/timestamp外逐字段相等；gzip109.94/94.98/83.14kB不变，双包官方latest均0.7.58。
+- 详见 `docs/changelog/2026-10-11-round126-optimization.md`；下一轮Round127，目标Round208。
+

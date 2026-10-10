@@ -2322,3 +2322,160 @@ describe('real list format via ilfo', () => {
     expect(para.paraFormat?.listId).toBe(1)
   })
 })
+
+describe('Round126 real character format merge guards', () => {
+  function expectLegacyMerge(base: Record<PropertyKey, unknown>, merged: Record<PropertyKey, unknown>) {
+    const text = 'Valid paragraph text here'
+    const parser = new DocParser(new ArrayBuffer(512))
+    const baseBefore = Object.getOwnPropertyDescriptors(base)
+    const mergedBefore = Object.getOwnPropertyDescriptors(merged)
+    const baseKeysBefore = Reflect.ownKeys(base)
+    const mergedKeysBefore = Reflect.ownKeys(merged)
+    const { styles: _styles, ...expected } = { ...base, ...merged }
+    const guessCharFormat = vi.spyOn(parser as any, 'guessCharFormat').mockReturnValue(base)
+
+    try {
+      const paragraphs = (parser as any).createParagraphsWithRealFormats(
+        text,
+        [{ cpStart: 0, cpEnd: text.length, format: merged }],
+        [],
+        [],
+        [],
+        [{ start: 0, end: text.length, chpxIndex: 0 }],
+        [],
+        [],
+      )
+
+      expect(paragraphs).toHaveLength(1)
+      expect(paragraphs[0].text).toBe(text)
+      expect(paragraphs[0].charFormatFromReal).toBe(true)
+      expect(guessCharFormat).toHaveBeenCalledWith(text, 0)
+      const actual = paragraphs[0].charFormat
+      expect(JSON.stringify(actual)).toBe(JSON.stringify(expected))
+      expect(actual).toEqual(expected)
+      expect(Reflect.ownKeys(actual)).toEqual(Reflect.ownKeys(expected))
+      expect(Object.prototype.hasOwnProperty.call(actual, 'styles')).toBe(false)
+      expect(actual).not.toBe(base)
+      expect(actual).not.toBe(merged)
+      expect(Object.getOwnPropertyDescriptors(base)).toEqual(baseBefore)
+      expect(Object.getOwnPropertyDescriptors(merged)).toEqual(mergedBefore)
+      expect(Reflect.ownKeys(base)).toEqual(baseKeysBefore)
+      expect(Reflect.ownKeys(merged)).toEqual(mergedKeysBefore)
+      return actual
+    } finally {
+      guessCharFormat.mockRestore()
+    }
+  }
+
+  it('removes heuristic styles without real styles at every base insertion position', () => {
+    const bases = [
+      { styles: ['bold'], fontName: 'Base', bold: true, fontSize: 12 },
+      { fontName: 'Base', styles: ['bold'], bold: true, fontSize: 12 },
+      { fontName: 'Base', bold: true, fontSize: 12, styles: ['bold'] },
+    ]
+    for (const base of bases) {
+      expectLegacyMerge(base, { fontSize: 20, italic: true })
+      expectLegacyMerge(base, { italic: true, fontSize: 20 })
+    }
+  })
+
+  it('strips real styles arrays and explicit undefined at every insertion position', () => {
+    for (const styles of [['italic'], undefined]) {
+      const realFormats = [
+        { styles, fontSize: 0, bold: false },
+        { fontSize: 0, styles, bold: false },
+        { fontSize: 0, bold: false, styles },
+      ]
+      const bases = [
+        { styles: ['bold'], fontName: 'Base', bold: true },
+        { fontName: 'Base', styles: ['bold'], bold: true },
+        { fontName: 'Base', bold: true, styles: ['bold'] },
+        { fontName: 'Base', bold: true },
+      ]
+      for (const base of bases) {
+        for (const merged of realFormats) expectLegacyMerge(base, merged)
+      }
+    }
+  })
+
+  it('keeps false zero and own undefined overrides instead of heuristic values', () => {
+    const actual = expectLegacyMerge(
+      { styles: ['bold', 'italic'], bold: true, italic: true, fontSize: 12, fontName: 'Base' },
+      { bold: false, italic: undefined, fontSize: 0, fontName: undefined },
+    )
+    expect(actual.bold).toBe(false)
+    expect(actual.fontSize).toBe(0)
+    expect(Object.prototype.hasOwnProperty.call(actual, 'italic')).toBe(true)
+    expect(Object.prototype.hasOwnProperty.call(actual, 'fontName')).toBe(true)
+    expect(actual.italic).toBeUndefined()
+    expect(actual.fontName).toBeUndefined()
+  })
+
+  it('preserves base key positions and appends new real keys in insertion order', () => {
+    const actual = expectLegacyMerge(
+      { fontName: 'Base', styles: ['bold'], bold: true, fontSize: 12 },
+      { color: '#123456', fontSize: 18, italic: true, bold: false, underline: 'single' },
+    )
+    expect(JSON.stringify(actual)).toBe(
+      '{"fontName":"Base","bold":false,"fontSize":18,"color":"#123456","italic":true,"underline":"single"}',
+    )
+    expectLegacyMerge(
+      { fontSize: 12, bold: true, styles: ['bold'], fontName: 'Base' },
+      { underline: 'single', bold: false, italic: true, fontSize: 18, color: '#123456' },
+    )
+  })
+
+  it('preserves unknown enumerable string numeric and symbol keys', () => {
+    const extension = Symbol('extension')
+    const base = { styles: ['bold'], extraBase: 'base', 10: 'ten', [extension]: 'base-symbol' }
+    const merged = {
+      extraReal: 'real',
+      2: 'two',
+      extraBase: undefined,
+      [extension]: 'real-symbol',
+    }
+    Object.defineProperty(merged, 'enumerableExtension', { value: 0, enumerable: true })
+    Object.defineProperty(merged, 'hiddenExtension', { value: 'hidden', enumerable: false })
+    const actual = expectLegacyMerge(base, merged)
+    expect(actual[extension]).toBe('real-symbol')
+    expect(actual.enumerableExtension).toBe(0)
+    expect(Object.prototype.hasOwnProperty.call(actual, 'extraBase')).toBe(true)
+    expect(Object.prototype.hasOwnProperty.call(actual, 'hiddenExtension')).toBe(false)
+  })
+
+  it('does not mutate frozen base real formats or their styles arrays', () => {
+    const baseStyles = Object.freeze(['bold'])
+    const realStyles = Object.freeze(['italic'])
+    const base = Object.freeze({ fontName: 'Base', styles: baseStyles, bold: true })
+    const withoutStyles = Object.freeze({ fontSize: 0, bold: false })
+    const withStyles = Object.freeze({ fontSize: 0, styles: realStyles, bold: false })
+    expectLegacyMerge(base, withoutStyles)
+    expectLegacyMerge(base, withStyles)
+    expect(base.styles).toBe(baseStyles)
+    expect(withStyles.styles).toBe(realStyles)
+    expect(baseStyles).toEqual(['bold'])
+    expect(realStyles).toEqual(['italic'])
+  })
+
+  it('matches the legacy oracle for all 256 pairs of common four-field subsets', () => {
+    const fields = ['bold', 'italic', 'fontSize', 'fontName']
+    const baseValues = [true, true, 12, 'Base']
+    const realValues = [false, undefined, 0, undefined]
+    let combinations = 0
+    for (let baseMask = 0; baseMask < 16; baseMask++) {
+      for (let realMask = 0; realMask < 16; realMask++) {
+        const base: Record<string, unknown> = { styles: ['bold'] }
+        const merged: Record<string, unknown> = { color: '#123456' }
+        for (let index = 0; index < fields.length; index++) {
+          if (baseMask & (1 << index)) base[fields[index]] = baseValues[index]
+        }
+        for (let index = fields.length - 1; index >= 0; index--) {
+          if (realMask & (1 << index)) merged[fields[index]] = realValues[index]
+        }
+        expectLegacyMerge(base, merged)
+        combinations++
+      }
+    }
+    expect(combinations).toBe(256)
+  })
+})
