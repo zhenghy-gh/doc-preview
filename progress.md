@@ -1058,6 +1058,13 @@
 - 包体与 Round 116 一致：主包 gzip 109.91 kB；库入口 gzip 94.95 kB、UMD gzip 83.11 kB。版本保持 0.7.56。详见 `docs/changelog/2026-10-10-round117-optimization.md`。
 - 下一轮：Round 118，重新剖析真实热点，优先验证尚未证伪的调用点级候选。
 
+## Round 119/100 — 2026-10-10
+- 本轮候选否决，未升号、未发布；评估复用同一 `PlcfFld` 字段位置表解析结果，避免 hyperlinks/TOC、page fields、cross-references 三处重复 `parsePlcfFld`。
+- 27 份真实样本完整 `parseWithFormat()` dump 逐字节一致，共 16,247,039 字符；交错 4×NEW/4×OLD、每进程 20 轮，NEW/OLD 中位数分别为 114.061/107.528、105.183/112.578、107.734/106.507、106.235/104.868ms，仅 2/4 组胜出，四组中位数中 NEW≈108.30ms、OLD≈107.87ms，整体略慢且无稳定收益，按硬纪律撤回。
+- 撤回后 `npm test` 76 文件 / 1448 项、`vue-tsc`、lint、build/build:lib 均通过；包体保持 Round 116 基线：主包 gzip 109.91 kB、库入口 gzip 94.95 kB、UMD gzip 83.11 kB。
+- `bench-diff 1190`：27/27 解析成功，中位数 0.950243、p25 0.915450、p10 0.896816、min 0.811547，与上一轮字段一致（除 cycle/timestamp）。版本保持 0.7.56，工作区已清理。
+- 下一轮：Round 120，重新剖析真实热点，优先验证尚未证伪的调用点级候选。
+
 ## Round 118/100 — 2026-10-10
 - 本轮候选否决，未落地生产代码、未升号、未发布；轮次计入完成计数。候选为在 `mergeCharFormatForParagraph` 中预计算每个 CHPX run 的合并样式，避免段落级回退路径重复创建 style spread 对象。
 - 27/27 份真实样本完整 `parseWithFormat()` dump 逐字节一致；全量 `npm test` 76 文件 / 1448 项通过，`vue-tsc`、lint、build/build:lib、bench-diff 118 均通过。
