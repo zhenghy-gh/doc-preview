@@ -1065,6 +1065,14 @@
 - `bench-diff 1190`：27/27 解析成功，中位数 0.950243、p25 0.915450、p10 0.896816、min 0.811547，与上一轮字段一致（除 cycle/timestamp）。版本保持 0.7.56，工作区已清理。
 - 下一轮：Round 120，重新剖析真实热点，优先验证尚未证伪的调用点级候选。
 
+## Round 120/100 — 2026-10-10
+- 本轮候选否决，未落地生产代码、未升号、未发布；评估 `mergeCharFormatForParagraph` 逐字段回退样式属性，避免每个 CHPX run 创建 `{ ...styleFormat, ...run.format }` 临时对象。
+- 候选来自真实 CPU profile：`mergeCharFormatForParagraph` 自耗约 3.10%，位列热点第 8；改动只在隔离 bundle 中验证，源码恢复至 Round 119 基线。
+- 27/27 份真实样本完整 dump 逐字节一致；全量 `npm test` 76 文件 / 1448 项通过，`vue-tsc`、lint、build/build:lib 均通过；应用主 JS gzip 109.91 kB，库入口 gzip 94.95 kB，UMD gzip 83.11 kB。
+- 交错 4×NEW/4×OLD、每进程 30 轮：NEW/OLD 中位数分别为 111.320/111.491、113.052/108.492、111.230/110.513、109.771/108.160 ms，仅 1/4 组胜出；整体中位数约 NEW 111.32 ms、OLD 110.51 ms，候选无稳定收益且略慢，按硬纪律撤回。
+- `bench-diff 120`：27/27 解析成功，中位数 0.950243、p25 0.915450、p10 0.896816、min 0.811547；与上一轮逐字段一致（除 cycle/timestamp）。版本保持 0.7.56，工作区已清理。
+- 下一轮：Round 121，重新剖析真实热点，优先验证 `createParagraphsWithRealFormats`、`applyStructuralFormats` 或图片提取调用点级候选。
+
 ## Round 118/100 — 2026-10-10
 - 本轮候选否决，未落地生产代码、未升号、未发布；轮次计入完成计数。候选为在 `mergeCharFormatForParagraph` 中预计算每个 CHPX run 的合并样式，避免段落级回退路径重复创建 style spread 对象。
 - 27/27 份真实样本完整 `parseWithFormat()` dump 逐字节一致；全量 `npm test` 76 文件 / 1448 项通过，`vue-tsc`、lint、build/build:lib、bench-diff 118 均通过。
