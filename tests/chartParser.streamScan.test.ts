@@ -7,6 +7,8 @@
 import { describe, it, expect } from 'vitest'
 import { extractChartsFromWordDocumentStream } from '../src/utils/chartParser'
 import type { ChartInfo } from '../src/utils/docFormat'
+import fs from 'node:fs'
+import { OleParser } from '../src/utils/oleParser'
 
 /** 改动前实现逐行转写（Round 107 之前）。 */
 function referenceExtractCharts(data: Uint8Array): ChartInfo[] {
@@ -100,7 +102,21 @@ function buildBoundaryCases(): Uint8Array[] {
   return cases
 }
 
-describe('extractChartsFromWordDocumentStream 首字节跳跃等价性', () => {
+describe('extractChartsFromWordDocumentStream 签名跳跃等价性', () => {
+  it('27份真实 WordDocument 流与逐字节 oracle 相同（产出路径另有确定断言）', () => {
+    const docs = new URL('../docs/', import.meta.url)
+    const files = fs.readdirSync(docs).filter(name => /\.(doc|dot)$/.test(name))
+    expect(files).toHaveLength(27)
+    for (const name of files) {
+      const buf = fs.readFileSync(new URL(name, docs))
+      const ole = new OleParser(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength))
+      const header = ole.parseHeader()
+      const directory = ole.getDirectorySectors(header, ole.getFatSectors(header))
+      const stream = ole.findWordDocumentStream(directory)
+      expect(stream).not.toBeNull()
+      expect(extractChartsFromWordDocumentStream(stream!.data)).toEqual(referenceExtractCharts(stream!.data))
+    }
+  })
   it('合成语料（含真实产出路径）与改动前参照逐项一致', () => {
     const inputs = buildSynthetic(777, 300)
     let produced = 0
@@ -137,6 +153,41 @@ describe('extractChartsFromWordDocumentStream 首字节跳跃等价性', () => {
     expect(out[0].type).toBe('oleobject')
     expect(out[0].name).toBe('Embedded OLE Object 1')
     expect(out[0].dataSize).toBe(690)
+  })
+
+  it('第二字节位于流开头不能伪造负偏移签名，offset 0 真签名仍可产出', () => {
+    for (const sig of [OLE_SIG, ZIP_SIG]) {
+      const atZero = new Uint8Array(700).fill(1)
+      atZero.set(sig, 0)
+      expect(extractChartsFromWordDocumentStream(atZero)).toEqual(referenceExtractCharts(atZero))
+      expect(extractChartsFromWordDocumentStream(atZero)[0].dataSize).toBe(700)
+      const falseAnchor = new Uint8Array(700).fill(1)
+      falseAnchor[0] = sig[1]
+      falseAnchor.set(sig.slice(1), 11)
+      expect(extractChartsFromWordDocumentStream(falseAnchor)).toEqual([])
+    }
+  })
+
+  it('成功产出后跳过 endOffset+4，保留 endOffset+5 的第二对象', () => {
+    for (const gap of [4, 5]) {
+      const buf = new Uint8Array(1400).fill(1)
+      buf.set(OLE_SIG, 0)
+      buf.fill(0, 600, 604)
+      buf.set(ZIP_SIG, 600 + gap)
+      const out = extractChartsFromWordDocumentStream(buf)
+      expect(out).toEqual(referenceExtractCharts(buf))
+      expect(out).toHaveLength(gap === 4 ? 1 : 2)
+    }
+  })
+
+  it('图表长度恰好500不产出，501才产出', () => {
+    for (const size of [500, 501]) {
+      const buf = new Uint8Array(700).fill(1)
+      buf.set(OLE_SIG, 0)
+      buf.fill(0, size, size + 4)
+      expect(extractChartsFromWordDocumentStream(buf)).toEqual(referenceExtractCharts(buf))
+      expect(extractChartsFromWordDocumentStream(buf)).toHaveLength(size === 500 ? 0 : 1)
+    }
   })
 
   it('ZIP 签名产出 excel 类型', () => {
