@@ -1,0 +1,27 @@
+{
+  "series": "doc-preview 持续优化循环",
+  "protocol": ".workbuddy-ai/optimization-loop.md",
+  "targetRound": 208,
+  "completedRounds": 121,
+  "currentRound": 122,
+  "inFlight": false,
+  "lastVersion": "0.7.56",
+  "lastCommit": "PENDING_ROUND121_COMMIT",
+  "updatedAt": "2026-10-10T09:42:00Z",
+  "audit": {
+    "at": "2026-10-10T15:10:08+08:00",
+    "completedRounds": 120,
+    "verdict": "Round 120 候选否决：逐字段回退样式属性与基线 27 份真实样本逐字节等价，但交错端到端仅 1/4 组胜出且整体略慢，按协议撤回；未升号、未发布，版本保持 0.7.56。progress.md 最大 Round=120；Round 118/119/120 均有 changelog、progress 条目、2026-10-10 memory 记录与对应 git 提交（f341c6e/65942dd/fc5bcb2）。package.json=0.7.56，@zhenghy/doc-preview 与 doc-preview 的 registry latest 均为 0.7.56。状态字段 completedRounds=120、currentRound=121、inFlight=false、lastVersion=0.7.56、lastCommit=fc5bcb2 符合候选否决轮协议。",
+    "gaps": [
+      "changelog 相对 1..120 缺 26/27/28/29/34/37/40/44/45/47/85 共 11 个轮次文档（历史遗留）；符合当前轮已有 Round 120 文档。",
+      "progress.md 相对 1..120 缺 6/7/8/9/10/27/32/33/49/50/51/55 共 12 个轮次条目（历史遗留），且 Round 67 重复一次；Round 118/119/120 的条目齐全但顺序为 119、120、118。",
+      "审计前的 progress.md 变更已恢复，当前工作区仅有本状态文件的审计写回；历史 progress 条目顺序与缺口仍待后续专门整理。"
+    ]
+  },
+  "notes": [
+    "progress.md 的标签写作 \"Round N/100\"，分母 100 是历史批次名，不是目标；目标看 targetRound。",
+    "completedRounds 只在「代码 + 护栏 + 验证 + 提交 + 双包发布」全部闭环后才前移；协议允许整轮候选否决并计入轮次。",
+    "Round 109 已完成：图片扫描整对跳过（隔离 1.34x / 端到端 1.048x），提交 328e06c，双包 0.7.53。",
+    "Round 110 候选否决：pieceMap 重叠临时数组消除无稳定端到端收益，已撤回；版本与发布保持 0.7.53。"
+  ]
+}

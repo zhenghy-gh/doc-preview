@@ -1073,6 +1073,14 @@
 - `bench-diff 120`：27/27 解析成功，中位数 0.950243、p25 0.915450、p10 0.896816、min 0.811547；与上一轮逐字段一致（除 cycle/timestamp）。版本保持 0.7.56，工作区已清理。
 - 下一轮：Round 121，重新剖析真实热点，优先验证 `createParagraphsWithRealFormats`、`applyStructuralFormats` 或图片提取调用点级候选。
 
+## Round 121/100 — 2026-10-10
+- 本轮候选否决，未落地生产代码、未升号、未发布；评估 `createParagraphsWithRealFormats` 中 CHPX 回退格式合并后的 `styles` 清除路径，尝试以两轮键复制替代对象展开与解构 rest。
+- 真实 CPU profile（1132 samples）中 `createParagraphsWithRealFormats` 自耗 11.75%，格式合并调用行约 2.47%，对象清除路径约 1.41%。隔离真实输入 32,690 次合并调用等价，3 个故意错误负控均被捕获，慢但等价对照通过。
+- 27 份真实样本完整 dump 逐字节一致；主调用路径交错 4×NEW/4×OLD、每进程40轮，NEW/OLD 中位数 116.827/118.002、116.223/107.326、110.804/107.073、108.978/108.345 ms，仅 2/4 组胜出且两组退化，无稳定收益，按硬纪律撤回。
+- 全量测试 76/1448、vue-tsc、lint、build/build:lib、bench-diff 121 均通过；bench 中位 0.950243、p25 0.915450、p10 0.896816、min 0.811547，与 Round 120 逐字段一致。包体保持主包 gzip 109.91 kB、库入口 94.95 kB、UMD 83.11 kB。
+- 版本保持 0.7.56，生产源码无变化；详见 `docs/changelog/2026-10-10-round121-optimization.md`。
+- 下一轮：Round 122，重新剖析真实热点，优先寻找主调用路径可稳定获益的低分配候选。
+
 ## Round 118/100 — 2026-10-10
 - 本轮候选否决，未落地生产代码、未升号、未发布；轮次计入完成计数。候选为在 `mergeCharFormatForParagraph` 中预计算每个 CHPX run 的合并样式，避免段落级回退路径重复创建 style spread 对象。
 - 27/27 份真实样本完整 `parseWithFormat()` dump 逐字节一致；全量 `npm test` 76 文件 / 1448 项通过，`vue-tsc`、lint、build/build:lib、bench-diff 118 均通过。
