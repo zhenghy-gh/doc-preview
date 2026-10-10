@@ -1047,3 +1047,15 @@
 - `npm test` 76 文件 / 1447 项、`vue-tsc`、lint、build/build:lib、bench-diff 1160 均通过；bench 与 cycle-1150 逐字段一致，中位数 0.950、p25 0.915、p10 0.897、min 0.812。
 - 包体：主包 gzip 109.91 kB；库入口 gzip 94.95 kB、UMD gzip 83.11 kB。详见 `docs/changelog/2026-10-10-round116-optimization.md`。
 - 下一轮：Round 117，重新剖析尚未证伪的真实热点。
+
+## Autonomous Round 117 — 2026-10-10
+
+- 目标：减少段落格式启发式中 `detectParagraphFormat` 对同一段落文本的重复 `trim()` 分配。
+- 根因或依据：Round 117 CPU profile 中 `createParagraphsWithRealFormats` 仍占约 11.88%；该函数对每个有效段落调用 `detectParagraphFormat`，而该函数随后独立调用 `detectAlignment` 与 `detectListInfo`，两者各自再次执行 `text.trim()`。真实文档 A/B 测量比对 Round 116 基线稳定改善。
+- 改动：`detectParagraphFormat` 只创建一次 trimmed 文本并透传给两个 helper；`detectAlignment` 与 `detectListInfo` 增加可选 trimmed 参数，默认路径保持公共调用兼容；新增 `tests/textHeuristics.paragraphFormat.test.ts`，覆盖列表、对齐、CJK、字段、空白和直接 helper 调用等价性。
+- 测试：定向 131 项通过；全量 `npm test`：77 个测试文件、1450 项通过；既有 `tests/fixVuew.test.ts` 缺少 `source` prop 的 Vue 警告仍存在但不影响通过。
+- 构建：`npm run lint`、`npx vue-tsc --noEmit`、`npm run build`、`npm run build:lib` 均通过；应用主 JS gzip 109.92 kB，库入口 gzip 94.96 kB。
+- 性能或兼容性指标：真实 27 份文档交错 A/B（两轮共 40 次进程、每进程 20/30 轮）候选中位数中位数约 106.2 ms，Round 116 基线约 109.4 ms，约 2.9% 改善；最小值中位数约 103.2 ms 对 105.7 ms。构建前后真实解析结果未出现回归，相关测试通过。
+- 风险：新增参数仅用于内部共享已计算的 `trim()` 结果；省略参数时 helper 仍按原逻辑自行 trim，保持既有 API 行为。用户启动前已有的 `tests/styleParser.test.ts` 修改未触碰、未暂存。
+- 是否计入发布计数：是。
+- 下一轮方向：重新剖析剩余真实热点，优先验证 `createParagraphsWithRealFormats`、`applyStructuralFormats` 或 `extractImagesFromStream` 的调用点级候选，避免重复已否决变体。

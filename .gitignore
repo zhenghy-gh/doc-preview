@@ -37,6 +37,7 @@ dist-lib
 
 # Auto loop state
 .opencode/
+.autopilot/
 
 # Agent bench artifacts
 .doc-preview-bench/
