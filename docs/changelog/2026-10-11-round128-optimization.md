@@ -1,7 +1,7 @@
 # Round 128 优化记录（2026-10-11）
 
 ## 结论
-否决「解析内缓存样式格式非空标记」候选。真实判空隔离耗时降低84.6310%，但交错4×NEW/4×OLD第2组退化0.0717%，未证明稳定端到端收益。生产源码完全撤回，保留22项样式存在性差分护栏；不升号、不发布，版本保持0.7.58。按否决例外计入本轮，下一轮129，目标208。
+否决「解析内缓存样式格式非空标记」候选。修正身份键后真实判空隔离耗时降低84.2923%，但交错4×NEW/4×OLD第2组退化0.0717%，未证明稳定端到端收益。生产源码完全撤回，保留22项样式存在性差分护栏；不升号、不发布，版本保持0.7.58。按否决例外计入本轮，下一轮129，目标208。
 
 ## 门禁与剖析
 - 开始completedRounds=127/currentRound=128/inFlight=false，HEAD4c3501a；实际版本0.7.58，用户给出的0.7.52已过时。如采纳应升0.7.59，本轮否决不升号。
@@ -12,7 +12,8 @@
 createParagraphsWithRealFormats调用内resolvedParagraphStyles值从resolved改为{resolved,hasParaFormat,hasCharFormat}，cache miss时按旧表达式Object.keys计算一次存在性，段落读布尔值。resolved只读、spread仍按原顺序、缓存仍按istd且每调用重新构建；不缓存公开resolveStyleFormat的可变入参，不跨调用共享。所有候选/负控生产改动已撤回；src/package/lock对HEAD无差异。
 
 ## 真实隔离基准
-本轮基线bundle在样式应用点插桩，重新解析27份文档，捕获33702次样式应用、66个resolved对象；hasPara1792次、hasChar33692次。保存round128-pairs.json。预加载相同真实输入，旧判空副本与预计算布尔版本直接校验计数相等；计时6组正反交错，每组500遍。上中位OLD104.156750/NEW16.007875ms，减少84.6309769%。仅量重复判空，不含miss创建和spread成本，不能当作完整函数或端到端收益。
+本轮基线bundle在样式应用点插桩，重新解析27份文档，捕获33702次样式应用、94个resolved对象；hasPara1792次、hasChar32693次。保存round128-pairs.json。按完整resolved对象身份缓存，逐调用断言para/char对象及存在性布尔值均与原始pair相同；旧基准独立直接遍历原始pairs，不从候选映射读取。计时6组正反交错，每组500遍。上中位OLD101.382542/NEW15.924834ms，减少84.2923311%。仅量重复判空，不含miss创建和spread成本，不能当作完整函数或端到端收益。
+监督发现首版隔离脚本错误用pair[0]段落格式对象身份归并缓存，undefined键串联不同字符样式，66是错误归并组数而非resolved数；首版两条路径共用污染后的inputs导致计数一致也不能证明正确。旧首版84.6310%不能代表原始输入，应废弃；invalid脚本/结果保留追溯。已按完整resolved身份修复、以原始pairs逐项断言并重测，端到端/生产源码/护栏与否决结论不受影响。
 
 ## 常驻护栏与负控
 tests/docParser.test.ts新增156行、22项Round128测试。受控普通对象独立旧oracle保留Object.keys判空与spread顺序，16种undefined/空/非空/undefined枚举键组合，加上多istd交错、直接PAPX/CHPX覆盖、继承、跨调用样式变化、冻结对象。断言指定非空段落文本/数量/CP、JSON及键序、false/0/undefined覆盖及样式不变。oracle继承链仅覆盖受控无环输入，不宣称任意StyleDefinition穷尽。
