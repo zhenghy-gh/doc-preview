@@ -323,21 +323,8 @@ export function hasTooManyJunkChars(text: string): boolean {
       }
     }
 
-    // Mark image-only paragraphs so list detection treats them as transparent
-    // (they don't start or end a list group). The placeholder will be moved
-    // to a separate paragraph after list detection completes.
-    for (const para of paragraphs) {
-      const text = para.text || ''
-      if (text.includes('\u0001')) {
-        const textWithoutPic = text.replace(PIC_PLACEHOLDER_RE, '')
-        const hasNonPicContent = textWithoutPic.trim().length > 0
-        if (hasNonPicContent) {
-          // Mixed content: keep the placeholder in the text but flag the paragraph
-          // so list detection can ignore the placeholder when measuring length.
-          para.__hasEmbeddedPic = true
-        }
-      }
-    }
+    // Image-only paragraph marking is folded into the list-length pass below.
+    // The placeholder is moved to a separate paragraph after list detection.
 
     // --- Step 1: Detect title FIRST (before list detection to avoid conflicts) ---
     // First few paragraphs that are very short and not already formatted
@@ -372,9 +359,16 @@ export function hasTooManyJunkChars(text: string): boolean {
       // Round 107：只有长度被用到，且占位符极稀少 —— 先判断是否含 `\u0001`，
       // 不含时直接用原串长度，跳过整串的全局正则替换（无匹配时 replace 返回原串，
       // 故长度逐位相同）。
-      const len = text.includes('\u0001')
-        ? text.replace(PIC_PLACEHOLDER_RE, '').length
-        : text.length
+      let len = text.length
+      if (text.includes('\u0001')) {
+        const textWithoutPic = text.replace(PIC_PLACEHOLDER_RE, '')
+        len = textWithoutPic.length
+        if (textWithoutPic.trim().length > 0) {
+          // Mixed content: keep the placeholder in the text but flag the paragraph
+          // so list detection can ignore the placeholder when measuring length.
+          paragraphs[i].__hasEmbeddedPic = true
+        }
+      }
       visibleTextLengths[i] = len
       const isShort = len >= LIST_ITEM_MIN_LEN && len <= LIST_ITEM_MAX_LEN
 

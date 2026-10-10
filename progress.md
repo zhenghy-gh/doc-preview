@@ -1081,6 +1081,15 @@
 - 版本保持 0.7.56，生产源码无变化；详见 `docs/changelog/2026-10-10-round121-optimization.md`。
 - 下一轮：Round 122，重新剖析真实热点，优先寻找主调用路径可稳定获益的低分配候选。
 
+## Round 122/100 — 2026-10-10
+- 采纳 1 项真实数据优化：将 `applyStructuralFormats` 中独立的图片占位符标记循环合并进列表长度分析循环；无占位符段落继续直接读取长度，含占位符段落在同一处完成剥离与 `__hasEmbeddedPic` 标记。
+- 27 份真实样本完整 dump 逐文件一致；隔离 20 轮候选/基线中位数 112.229/116.157ms。
+- 独立进程交错 4×候选/4×基线、每进程25轮：候选/基线中位数 113.630/118.640、111.190/113.979、110.433/114.960、112.970/114.960ms，四组均改善，约 2.2%–4.2%。
+- `npm test` 76文件/1448项、类型检查、lint、build/build:lib、bench-diff 122 全部通过；bench 与 cycle-121 逐字段一致（除 cycle/timestamp）。
+- 包体保持主包 gzip 109.91 kB、库入口 94.95 kB、UMD 83.12 kB；版本升至 0.7.57，双包发布并核验 registry latest。
+- 详见 `docs/changelog/2026-10-10-round122-optimization.md`。
+- 下一轮：Round 123，重新剖析真实语料，优先审计剩余高占比路径，避免重复已验证候选。
+
 ## Round 118/100 — 2026-10-10
 - 本轮候选否决，未落地生产代码、未升号、未发布；轮次计入完成计数。候选为在 `mergeCharFormatForParagraph` 中预计算每个 CHPX run 的合并样式，避免段落级回退路径重复创建 style spread 对象。
 - 27/27 份真实样本完整 `parseWithFormat()` dump 逐字节一致；全量 `npm test` 76 文件 / 1448 项通过，`vue-tsc`、lint、build/build:lib、bench-diff 118 均通过。
