@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { parseChpxRuns, parsePapxRuns, mergeCharFormatForParagraph, parseChpxGrpprlWithFont, parsePapxGrpprl, parseChpxRunsFromFkp, parsePapxRunsFromFkp } from '../src/utils/formatParser'
 import type { ChpxRun, PapxRun, PieceFcRange } from '../src/utils/formatParser'
+import type { CharacterFormat } from '../src/utils/docFormat'
 import { deepStrictEqual } from 'node:assert'
 import { readFileSync, readdirSync } from 'node:fs'
 import { readUint16, readUint32 } from '../src/utils/binaryReader'
@@ -1594,5 +1595,317 @@ describe('Round 132 FKP相邻检测跳过稳定sort护栏', () => {
         expect(runs.map(run => run.format)).toEqual(Array(expected.length).fill(formatsFor(kind)[0]))
       }
     }
+  })
+})
+
+// Round134：逐字复制HEAD旧函数，仅去掉export并改函数名，控制脚本机器核对。
+// 普通对象差分之外，固定getter/Proxy读取次数和异常语义，防止重采纳已否决的短路交换。
+function round134OldMergeCharFormatForParagraph(
+  runs: ChpxRun[],
+  cpStart: number,
+  cpEnd: number,
+  fontNames?: string[],
+  styleFormats?: ReadonlyMap<number, Partial<CharacterFormat>>,
+): Partial<CharacterFormat> {
+  const totalChars = cpEnd - cpStart
+  if (totalChars <= 0 || runs.length === 0) return {}
+
+  // Collect properties from runs that overlap the paragraph.
+  let boldCount = 0
+  let italicCount = 0
+  let underlineCount = 0
+  let strikethroughCount = 0
+  let superscriptCount = 0
+  let subscriptCount = 0
+  let smallCapsCount = 0
+  let allCapsCount = 0
+  let fontSizeSum = 0
+  let fontSizeCount = 0
+  let firstColor: string | undefined
+  let firstHighlight: string | undefined
+  let firstFontName: string | undefined
+
+  // runs are sorted by cpStart and cpEnd (aCP is strictly increasing), so binary-search
+  // the first run that can overlap [cpStart, cpEnd) and stop as soon as runs move past
+  // the paragraph. This turns the per-paragraph cost from O(runs) into O(log runs +
+  // overlapping), avoiding the O(paragraphs * runs) blow-up on text-heavy documents.
+  let lo = 0
+  let hi = runs.length
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    if (runs[mid].cpEnd > cpStart) hi = mid
+    else lo = mid + 1
+  }
+  for (let ri = lo; ri < runs.length; ri++) {
+    const run = runs[ri]
+    if (run.cpStart >= cpEnd) break
+    const overlapStart = run.cpStart > cpStart ? run.cpStart : cpStart
+    const overlapEnd = run.cpEnd < cpEnd ? run.cpEnd : cpEnd
+    if (overlapEnd <= overlapStart) continue
+    const len = overlapEnd - overlapStart
+    const styleFormat = run.istd !== undefined ? styleFormats?.get(run.istd) : undefined
+    const format = styleFormat ? { ...styleFormat, ...run.format } : run.format
+    if (format.bold) boldCount += len
+    if (format.italic) italicCount += len
+    if (format.underline) underlineCount += len
+    if (format.strikethrough) strikethroughCount += len
+    if (format.superscript) superscriptCount += len
+    if (format.subscript) subscriptCount += len
+    if (format.smallCaps) smallCapsCount += len
+    if (format.allCaps) allCapsCount += len
+    if (format.fontSize !== undefined) {
+      fontSizeSum += format.fontSize * len
+      fontSizeCount += len
+    }
+    if (format.color && !firstColor) firstColor = format.color
+    if (format.highlight && !firstHighlight) firstHighlight = format.highlight
+    // Font name from font index
+    if (run.fontIndex !== undefined && fontNames && !firstFontName) {
+      const fontName = fontNames[run.fontIndex]
+      if (fontName) firstFontName = fontName
+    }
+    if (!firstFontName && format.fontName) firstFontName = format.fontName
+  }
+
+  const result: Partial<CharacterFormat> = {}
+  if (boldCount > totalChars * 0.5) result.bold = true
+  if (italicCount > totalChars * 0.3) result.italic = true
+  if (underlineCount > totalChars * 0.3) result.underline = true
+  if (strikethroughCount > totalChars * 0.3) result.strikethrough = true
+  if (superscriptCount > totalChars * 0.3) result.superscript = true
+  if (subscriptCount > totalChars * 0.3) result.subscript = true
+  if (smallCapsCount > totalChars * 0.5) result.smallCaps = true
+  if (allCapsCount > totalChars * 0.5) result.allCaps = true
+  if (fontSizeCount > totalChars * 0.5 && fontSizeCount > 0) {
+    result.fontSize = Math.round(fontSizeSum / fontSizeCount)
+  }
+  if (firstColor) result.color = firstColor
+  if (firstHighlight) result.highlight = firstHighlight
+  if (firstFontName) result.fontName = firstFontName
+
+  return result
+}
+
+function round134Assert(
+  runs: ChpxRun[], cpStart: number, cpEnd: number,
+  fontNames?: string[], styleFormats?: ReadonlyMap<number, Partial<CharacterFormat>>,
+): Partial<CharacterFormat> {
+  const before = structuredClone({ runs, fontNames, styles: styleFormats ? [...styleFormats] : undefined })
+  const runRefs = runs.slice()
+  const formatRefs = runs.map(run => run.format)
+  const styleRefs = styleFormats ? [...styleFormats.values()] : undefined
+  const expected = round134OldMergeCharFormatForParagraph(runs, cpStart, cpEnd, fontNames, styleFormats)
+  const actual = mergeCharFormatForParagraph(runs, cpStart, cpEnd, fontNames, styleFormats)
+  deepStrictEqual(actual, expected)
+  expect(Object.keys(actual)).toEqual(Object.keys(expected))
+  expect(JSON.stringify(actual)).toBe(JSON.stringify(expected))
+  deepStrictEqual({ runs, fontNames, styles: styleFormats ? [...styleFormats] : undefined }, before)
+  for (let i = 0; i < runs.length; i++) {
+    expect(runs[i]).toBe(runRefs[i])
+    expect(runs[i].format).toBe(formatRefs[i])
+    expect(actual).not.toBe(runs[i].format)
+  }
+  if (styleFormats) {
+    for (const [i, format] of [...styleFormats.values()].entries()) expect(format).toBe(styleRefs![i])
+  }
+  return actual
+}
+
+const round134Run = (cpStart: number, cpEnd: number, format: Partial<CharacterFormat>, extra: Partial<ChpxRun> = {}): ChpxRun =>
+  ({ cpStart, cpEnd, format, ...extra })
+
+describe('Round134 段落首个颜色与高亮短路的普通数据对象等价护栏', () => {
+  it('完整结果与固定JSON键序保留全部摘要字段，不泄露无关样式字段', () => {
+    const format: Partial<CharacterFormat> = {
+      bold: true, italic: true, underline: true, strikethrough: true,
+      superscript: true, subscript: true, smallCaps: true, allCaps: true,
+      fontSize: 13.5, color: '#123456', highlight: '#ABCDEF', fontName: '段落字体',
+      hidden: true, outline: true, shadow: true, letterSpacing: 2,
+    }
+    const actual = round134Assert([round134Run(0, 10, format)], 0, 10)
+    expect(actual).toEqual({
+      bold: true, italic: true, underline: true, strikethrough: true,
+      superscript: true, subscript: true, smallCaps: true, allCaps: true,
+      fontSize: 14, color: '#123456', highlight: '#ABCDEF', fontName: '段落字体',
+    })
+    expect(Object.keys(actual)).toEqual(['bold', 'italic', 'underline', 'strikethrough', 'superscript', 'subscript', 'smallCaps', 'allCaps', 'fontSize', 'color', 'highlight', 'fontName'])
+  })
+
+  it('颜色和高亮分别选择首次truthy，后续更长run也不能覆盖', () => {
+    const runs = [
+      round134Run(0, 1, { color: '', highlight: '#first-highlight' }),
+      round134Run(1, 2, { color: '#first-color', highlight: '#second-highlight' }),
+      round134Run(2, 100, { color: '#last-color', highlight: '#last-highlight' }),
+    ]
+    expect(round134Assert(runs, 0, 100)).toEqual({ color: '#first-color', highlight: '#first-highlight' })
+  })
+
+  it('缺失、显式undefined和空色空高亮均不占据首个有效值且全空时不输出键', () => {
+    const runs = [round134Run(0, 2, {}), round134Run(2, 4, { color: undefined, highlight: undefined }), round134Run(4, 6, { color: '', highlight: '' })]
+    expect(round134Assert(runs, 0, 6)).toEqual({})
+    runs.push(round134Run(6, 8, { color: '#valid', highlight: '#valid-highlight' }))
+    expect(round134Assert(runs, 0, 8)).toEqual({ color: '#valid', highlight: '#valid-highlight' })
+  })
+
+  it('半开overlap边界忽略相接与零长run，裁剪后首值和权重仍正确', () => {
+    const runs = [
+      round134Run(0, 10, { color: '#outside-before', highlight: '#outside-before' }),
+      round134Run(10, 10, { color: '#zero', highlight: '#zero' }),
+      round134Run(10, 12, { color: '#inside', highlight: '#inside-highlight', bold: true, fontSize: 10 }),
+      round134Run(12, 20, { color: '#later', highlight: '#later-highlight', fontSize: 20 }),
+      round134Run(20, 30, { color: '#outside-after', highlight: '#outside-after' }),
+    ]
+    expect(round134Assert(runs, 10, 20)).toEqual({ fontSize: 18, color: '#inside', highlight: '#inside-highlight' })
+    expect(round134Assert(runs, 11, 13)).toEqual({ fontSize: 15, color: '#inside', highlight: '#inside-highlight' })
+    expect(round134Assert(runs, 30, 40)).toEqual({})
+  })
+
+  it('字符直接格式覆盖样式，false和显式undefined抹掉样式，空字符串允许后续值', () => {
+    const styles = new Map<number, Partial<CharacterFormat>>([[7, { bold: true, fontSize: 18, color: '#style', highlight: '#style-highlight', fontName: '样式字体' }]])
+    const runs = [
+      round134Run(0, 6, { bold: false, fontSize: undefined, color: undefined, highlight: '', fontName: undefined }, { istd: 7 }),
+      round134Run(6, 10, { color: '#direct', highlight: '#direct-highlight' }, { istd: 7 }),
+    ]
+    expect(round134Assert(runs, 0, 10, undefined, styles)).toEqual({ color: '#direct', highlight: '#direct-highlight', fontName: '样式字体' })
+    expect(round134Assert([round134Run(0, 10, { color: '#direct', highlight: '#direct-highlight' }, { istd: 7 })], 0, 10, undefined, styles))
+      .toEqual({ bold: true, fontSize: 18, color: '#direct', highlight: '#direct-highlight', fontName: '样式字体' })
+  })
+
+  it('512组字段组合交叉覆盖truthy布尔、样式优先级、颜色高亮及字号权重', () => {
+    for (let mask = 0; mask < 512; mask++) {
+      const booleans = ['bold', 'italic', 'underline', 'strikethrough', 'superscript', 'subscript', 'smallCaps', 'allCaps'] as const
+      const format: Partial<CharacterFormat> = {}
+      for (const [i, key] of booleans.entries()) format[key] = (mask & (1 << i)) !== 0
+      format.color = [undefined, '', '#first', '#other'][mask % 4]
+      format.highlight = [undefined, '#highlight', '', '#alternate'][(mask >> 2) % 4]
+      format.fontSize = [undefined, 0, 11.5, 24][(mask >> 4) % 4]
+      const styles = new Map<number, Partial<CharacterFormat>>([[3, { bold: true, italic: true, color: '#style', highlight: '#style-highlight', fontSize: 16 }]])
+      const runs = [
+        round134Run(0, 4, format, { istd: mask & 256 ? 3 : undefined }),
+        round134Run(4, 10, { color: '#fallback', highlight: '#fallback-highlight', fontSize: 20, fontName: '回退字体' }),
+      ]
+      round134Assert(runs, 0, 10, undefined, styles)
+      round134Assert(runs, 3, 7, [], styles)
+    }
+  })
+
+  it('30%与50%严格阈值、缺失字号和加权四舍五入不受首值短路影响', () => {
+    const keys = ['bold', 'italic', 'underline', 'strikethrough', 'superscript', 'subscript', 'smallCaps', 'allCaps'] as const
+    for (const key of keys) {
+      const threshold = ['bold', 'smallCaps', 'allCaps'].includes(key) ? 5 : 3
+      for (const length of [threshold, threshold + 1]) {
+        const actual = round134Assert([round134Run(0, length, { [key]: true, color: '#first', highlight: '#first-highlight' })], 0, 10)
+        expect(actual[key]).toBe(length > threshold ? true : undefined)
+      }
+    }
+    expect(round134Assert([round134Run(0, 5, { fontSize: 13 })], 0, 10)).toEqual({})
+    expect(round134Assert([round134Run(0, 3, { fontSize: 10 }), round134Run(3, 6, { fontSize: 15 })], 0, 10)).toEqual({ fontSize: 13 })
+  })
+
+  it('字体索引优先与缺失样式回退保持完整输出，冻结输入及重复调用不改变引用', () => {
+    const styles = new Map<number, Partial<CharacterFormat>>([[0, Object.freeze({ color: '#style', highlight: '#style-highlight' })]])
+    const runs = [
+      Object.freeze(round134Run(0, 2, Object.freeze({ fontName: '', color: '', highlight: '' }), { fontIndex: -1, istd: 99 })),
+      Object.freeze(round134Run(2, 8, Object.freeze({ fontName: '直接字体' }), { fontIndex: 1, istd: 0 })),
+    ]
+    const names = ['', '索引字体']
+    Object.freeze(runs)
+    Object.freeze(names)
+    const first = round134Assert(runs, 0, 8, names, styles)
+    const second = round134Assert(runs, 0, 8, names, styles)
+    expect(first).toEqual({ color: '#style', highlight: '#style-highlight', fontName: '索引字体' })
+    expect(first).not.toBe(second)
+  })
+
+  it('跨调用修改普通run、样式和字体数组立即可见，首值状态不跨段落缓存', () => {
+    const runs = [round134Run(0, 5, { color: '#before', highlight: '#before-highlight' }, { fontIndex: 0, istd: 1 }), round134Run(5, 10, { color: '#tail', highlight: '#tail-highlight' })]
+    const names = ['旧字体']
+    const styles = new Map<number, Partial<CharacterFormat>>([[1, { bold: true }]])
+    expect(round134Assert(runs, 0, 5, names, styles)).toEqual({ bold: true, color: '#before', highlight: '#before-highlight', fontName: '旧字体' })
+    runs[0].format.color = ''
+    runs[0].format.highlight = undefined
+    names[0] = '新字体'
+    styles.set(1, { italic: true })
+    expect(round134Assert(runs, 0, 10, names, styles)).toEqual({ italic: true, color: '#tail', highlight: '#tail-highlight', fontName: '新字体' })
+    expect(round134Assert(runs, 5, 10, names, styles)).toEqual({ color: '#tail', highlight: '#tail-highlight' })
+  })
+
+  it('27份真实FKP字符run汇总与独立旧oracle一致且产出非空', () => {
+    const docs = new URL('../docs/', import.meta.url)
+    const files = readdirSync(docs).filter(name => /\.(doc|dot)$/.test(name)).sort()
+    expect(files).toHaveLength(27)
+    let totalRuns = 0
+    let calls = 0
+    let nonempty = 0
+    for (const name of files) {
+      const bytes = readFileSync(new URL(name, docs))
+      const ole = new OleParser(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength))
+      const header = ole.parseHeader()
+      const directory = ole.getDirectorySectors(header, ole.getFatSectors(header))
+      const word = ole.findWordDocumentStream(directory)?.data
+      if (!word) throw new Error(`缺少WordDocument：${name}`)
+      const fib = parseFib(word)
+      if (!fib) throw new Error(`缺少FIB：${name}`)
+      const table = ole.findTableStream(directory, fib.fWhichTblStm ? 1 : 0)?.data ?? new Uint8Array(0)
+      const pieces = parseClxPieces({ maxTotalChars: 10 * 1024 * 1024, readUint16, readUint32 }, table.subarray(fib.fcClx, fib.fcClx + fib.lcbClx))
+        .map(p => ({ cpStart: p.cpStart, cpEnd: p.cpEnd, fcStart: p.fcValue, compressed: p.fCompressed }))
+      const runs = parseChpxRunsFromFkp(table, word, fib.fcPlcfBteChpx, fib.lcbPlcfBteChpx, pieces)
+      totalRuns += runs.length
+      // 每个真实文档前100个run的单run段落范围，不冒称覆盖实际33702次段落调用。
+      for (const run of runs.slice(0, 100)) {
+        const actual = round134Assert([run], run.cpStart, run.cpEnd)
+        calls++
+        if (Object.keys(actual).length) nonempty++
+      }
+    }
+    expect(totalRuns).toBe(26698)
+    expect(calls).toBeGreaterThan(0)
+    expect(nonempty).toBeGreaterThan(0)
+  })
+
+  it('getter与Proxy保留后续颜色高亮读取次数及异常，拒绝短路顺序交换', () => {
+    for (const proxy of [false, true]) {
+      const makeRuns = () => {
+        const reads = { color: 0, highlight: 0 }
+        const later = proxy
+          ? new Proxy({ color: '#later', highlight: '#later-highlight' }, {
+            get(target, key, receiver) {
+              if (key === 'color' || key === 'highlight') reads[key]++
+              return Reflect.get(target, key, receiver)
+            },
+          })
+          : {
+            get color() { reads.color++; return '#later' },
+            get highlight() { reads.highlight++; return '#later-highlight' },
+          }
+        return { runs: [round134Run(0, 1, { color: '#first', highlight: '#first-highlight' }), round134Run(1, 2, later)], reads }
+      }
+      const oldInput = makeRuns()
+      const newInput = makeRuns()
+      const expected = round134OldMergeCharFormatForParagraph(oldInput.runs, 0, 2)
+      const actual = mergeCharFormatForParagraph(newInput.runs, 0, 2)
+      deepStrictEqual(actual, expected)
+      expect(oldInput.reads).toEqual({ color: 1, highlight: 1 })
+      // 已否决的短路顺序交换会变成0次；当前实现和慢等价控制必须保留读取。
+      expect(newInput.reads).toEqual(oldInput.reads)
+    }
+    const sentinel = new Error('后续getter异常不属于普通数据对象承诺')
+    const runs = [round134Run(0, 1, { color: '#first' }), round134Run(1, 2, { get color(): string { throw sentinel } })]
+    expect(() => round134OldMergeCharFormatForParagraph(runs, 0, 2)).toThrow(sentinel)
+    // 公开函数不得静默跳过调用方后续getter异常。
+    expect(() => mergeCharFormatForParagraph(runs, 0, 2)).toThrow(sentinel)
+  })
+
+  it('空、反向与非有限段落范围保持旧结果，非法format异常不污染后续普通调用', () => {
+    const runs = [round134Run(0, 10, { color: '#color', highlight: '#highlight', fontSize: 12 })]
+    for (const [start, end] of [[0, 0], [10, 0], [NaN, 10], [0, NaN], [-Infinity, 10], [0, Infinity], [Infinity, Infinity]]) round134Assert(runs, start, end)
+    expect(round134Assert([], 0, 10)).toEqual({})
+    const invalid = [round134Run(0, 10, null as unknown as Partial<CharacterFormat>)]
+    for (const merge of [round134OldMergeCharFormatForParagraph, mergeCharFormatForParagraph]) {
+      expect(() => merge(invalid, 0, 10)).toThrow(TypeError)
+      expect(merge(invalid, 0, 0)).toEqual({})
+      expect(merge(invalid, 10, 20)).toEqual({})
+    }
+    expect(round134Assert(runs, 0, 10)).toEqual({ fontSize: 12, color: '#color', highlight: '#highlight' })
   })
 })
