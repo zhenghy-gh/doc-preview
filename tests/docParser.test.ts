@@ -2369,6 +2369,29 @@ describe('Round126 real character format merge guards', () => {
     }
   }
 
+  it('Round133 preserves a symbol named styles and an own __proto__ data key', () => {
+    const symbolStyles = Symbol('styles')
+    const base: Record<PropertyKey, unknown> = { styles: ['bold'], fontName: 'Base', [symbolStyles]: 'base' }
+    const merged: Record<PropertyKey, unknown> = { bold: false, [symbolStyles]: 'real' }
+    Object.defineProperty(merged, '__proto__', { value: { marker: 'data' }, enumerable: true })
+    const actual = expectLegacyMerge(base, merged)
+    expect(actual[symbolStyles]).toBe('real')
+    expect(Object.getPrototypeOf(actual)).toBe(Object.prototype)
+    expect(Object.hasOwn(actual, '__proto__')).toBe(true)
+    expect(actual.__proto__).toEqual({ marker: 'data' })
+  })
+
+  it('Round133 excludes inherited and nonenumerable styles without mutating descriptors', () => {
+    const base = Object.create({ styles: ['inherited'], italic: true })
+    Object.defineProperty(base, 'styles', { value: ['hidden'], enumerable: false, configurable: false })
+    base.fontName = 'Base'
+    const merged = Object.create({ color: '#ffffff' })
+    merged.bold = false
+    Object.defineProperty(merged, 'styles', { value: ['hidden-real'], enumerable: false, configurable: false })
+    const actual = expectLegacyMerge(base, merged)
+    expect(Reflect.ownKeys(actual)).toEqual(['fontName', 'bold'])
+  })
+
   it('removes heuristic styles without real styles at every base insertion position', () => {
     const bases = [
       { styles: ['bold'], fontName: 'Base', bold: true, fontSize: 12 },
