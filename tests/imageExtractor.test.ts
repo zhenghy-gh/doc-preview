@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
+import { deepStrictEqual } from 'node:assert'
 import { OleParser } from '../src/utils/oleParser'
 import {
   extractImagesFromStream,
@@ -618,6 +619,318 @@ const JPEG_ENTROPY_BOUNDARIES = [
   { name: 'RST和TEM独立标记', entropy: [0x11, 0xFF, 0xD0, 0x22, 0xFF, 0xD7, 0xFF, 0x01, 0x33, 0xFF, 0xD9, 0x44], end: 11 },
   { name: '长非FF熵区后EOI', entropy: [...new Array<number>(4096).fill(0x11), 0xFF, 0xD9, 0x22], end: 4098 },
 ]
+
+// Round 129：来源 git show 794b1a8:src/utils/imageExtractor.ts。
+// 主循环、push分派与PNG/BMP/GIF末端查找按该HEAD逐行复制，仅重命名和移除说明注释。
+// 独立重建固定签名、LEAD_KIND和PAIR_HAS_LEAD，不导入任何生产扫描表或helper。
+// JPEG复用上方Round125已单独验证的旧逐字节oracle；固定签名值与长度是共享语义边界，
+// 不共享候选四字节推进、生产末端查找或候选提取结果，不由actual生成expected。
+const round129PngSignature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
+const round129JpegSoi = [0xff, 0xd8]
+const round129Gif87 = [0x47, 0x49, 0x46, 0x38, 0x37, 0x61]
+const round129Gif89 = [0x47, 0x49, 0x46, 0x38, 0x39, 0x61]
+const round129BmpSignature = [0x42, 0x4d]
+type Round129Image = { format: 'png' | 'jpeg' | 'bmp' | 'gif'; data: Uint8Array }
+
+function round129BytesEqual(data: Uint8Array, offset: number, signature: number[]): boolean {
+  if (offset + signature.length > data.length) return false
+  for (let i = 0; i < signature.length; i++) {
+    if (data[offset + i] !== signature[i]) return false
+  }
+  return true
+}
+
+function round129FindPngEnd(data: Uint8Array, start: number): number {
+  let offset = start + round129PngSignature.length
+  const maxChunks = 10000
+  for (let i = 0; i < maxChunks; i++) {
+    if (offset + 8 > data.length) return -1
+    const length = (data[offset] << 24) | (data[offset + 1] << 16) |
+                   (data[offset + 2] << 8) | data[offset + 3]
+    const type = String.fromCharCode(data[offset + 4], data[offset + 5],
+                                     data[offset + 6], data[offset + 7])
+    if (length < 0 || length > data.length) return -1
+    const chunkEnd = offset + 12 + length
+    if (chunkEnd > data.length) return -1
+    if (type === 'IEND') return chunkEnd
+    offset = chunkEnd
+  }
+  return -1
+}
+
+function round129FindBmpEnd(data: Uint8Array, start: number): number {
+  if (start + 6 > data.length) return -1
+  const size = data[start + 2] | (data[start + 3] << 8) |
+               (data[start + 4] << 16) | (data[start + 5] << 24)
+  if (size < 54 || size > data.length - start) return -1
+  return start + size
+}
+
+function round129FindGifEnd(data: Uint8Array, start: number): number {
+  let offset = start + 13
+  if (start + 10 < data.length) {
+    const packed = data[start + 10]
+    const hasGct = (packed & 0x80) !== 0
+    if (hasGct) {
+      const gctSize = 3 * (1 << ((packed & 0x07) + 1))
+      offset += gctSize
+    }
+  }
+  const maxIterations = 1000000
+  for (let i = 0; i < maxIterations; i++) {
+    if (offset >= data.length) return -1
+    const block = data[offset]
+    if (block === 0x3B) return offset + 1
+    if (block === 0x21) {
+      offset += 2
+      while (offset < data.length) {
+        const subLen = data[offset]
+        offset++
+        if (subLen === 0) break
+        offset += subLen
+      }
+    } else if (block === 0x2C) {
+      offset += 10
+      if (offset > data.length) return -1
+      const packed = data[offset - 1]
+      const hasLct = (packed & 0x80) !== 0
+      if (hasLct) {
+        const lctSize = 3 * (1 << ((packed & 0x07) + 1))
+        offset += lctSize
+      }
+      offset++
+      while (offset < data.length) {
+        const subLen = data[offset]
+        offset++
+        if (subLen === 0) break
+        offset += subLen
+      }
+    } else {
+      return -1
+    }
+  }
+  return -1
+}
+
+const round129LeadKind = (() => {
+  const t = new Uint8Array(256)
+  t[round129PngSignature[0]] = 1
+  t[round129JpegSoi[0]] = 2
+  t[round129Gif87[0]] = 3
+  t[round129BmpSignature[0]] = 4
+  return t
+})()
+
+const round129PairHasLead = (() => {
+  const t = new Uint8Array(65536)
+  for (const lead of [round129PngSignature[0], round129JpegSoi[0], round129Gif87[0], round129BmpSignature[0]]) {
+    for (let lo = 0; lo < 256; lo++) t[(lead << 8) | lo] = 1
+    for (let hi = 0; hi < 256; hi++) t[(hi << 8) | lead] = 1
+  }
+  return t
+})()
+
+function round129PushImageAt(data: Uint8Array, i: number, len: number, images: Round129Image[]): number {
+  const kind = round129LeadKind[data[i]]
+  if (kind === 0) return -1
+
+  if (kind === 1) {
+    if (round129BytesEqual(data, i, round129PngSignature)) {
+      const end = round129FindPngEnd(data, i)
+      if (end > i) {
+        images.push({ format: 'png', data: data.subarray(i, end) })
+        return end
+      }
+    }
+  } else if (kind === 2) {
+    if (round129BytesEqual(data, i, round129JpegSoi) && i + 2 < len && data[i + 2] === 0xff) {
+      const end = referenceFindJpegEnd(data, i)
+      if (end > i) {
+        images.push({ format: 'jpeg', data: data.subarray(i, end) })
+        return end
+      }
+    }
+  } else if (kind === 3) {
+    if (round129BytesEqual(data, i, round129Gif87) || round129BytesEqual(data, i, round129Gif89)) {
+      const end = round129FindGifEnd(data, i)
+      if (end > i) {
+        images.push({ format: 'gif', data: data.subarray(i, end) })
+        return end
+      }
+    }
+  } else {
+    if (round129BytesEqual(data, i, round129BmpSignature)) {
+      const end = round129FindBmpEnd(data, i)
+      if (end > i) {
+        images.push({ format: 'bmp', data: data.subarray(i, end) })
+        return end
+      }
+    }
+  }
+  return -1
+}
+
+function round129ExtractImages(data: Uint8Array): Round129Image[] {
+  if (!data || data.length < 8) return []
+  const images: Round129Image[] = []
+  const len = data.length
+  let i = 0
+  while (i + 1 < len) {
+    if (round129PairHasLead[(data[i] << 8) | data[i + 1]] === 0) {
+      i += 2
+      continue
+    }
+    const end = round129PushImageAt(data, i, len, images)
+    i = end > i ? end : i + 1
+  }
+  if (i < len) round129PushImageAt(data, i, len, images)
+  return images
+}
+
+function round129Concat(...parts: Uint8Array[]): Uint8Array {
+  const data = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0))
+  let offset = 0
+  for (const part of parts) {
+    data.set(part, offset)
+    offset += part.length
+  }
+  return data
+}
+
+function round129ExpectMatches(data: Uint8Array): Round129Image[] {
+  const before = data.slice()
+  const expected = round129ExtractImages(data)
+  const actual = extractImagesFromStream(data)
+  expect(actual).toEqual(expected)
+  expect(data).toEqual(before)
+  for (let i = 0; i < actual.length; i++) {
+    expect(actual[i].data.buffer).toBe(data.buffer)
+    expect(actual[i].data.byteOffset).toBe(expected[i].data.byteOffset)
+  }
+  return actual
+}
+
+const round129Formats = [
+  { format: 'png', bytes: buildMinimalPng() },
+  { format: 'jpeg', bytes: buildMinimalJpeg() },
+  { format: 'bmp', bytes: buildMinimalBmp() },
+  { format: 'gif', bytes: buildMinimalGif() },
+]
+
+describe('Round 129 四字节跳跃与HEAD两字节oracle等价性', () => {
+  it('45条真实Data/WordDocument流完整产出一致且非空图总计125', () => {
+    const docs = new URL('../docs/', import.meta.url)
+    const files = readdirSync(docs).filter(name => /\.(doc|dot)$/.test(name)).sort()
+    expect(files).toHaveLength(27)
+    let streamCount = 0
+    let imageCount = 0
+    for (const name of files) {
+      const bytes = readFileSync(new URL(name, docs))
+      const ole = new OleParser(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength))
+      const header = ole.parseHeader()
+      const directory = ole.getDirectorySectors(header, ole.getFatSectors(header))
+      for (const entry of directory.filter(entry => entry.objectType === 2 &&
+        (entry.name === 'Data' || entry.name === 'WordDocument'))) {
+        imageCount += round129ExpectMatches(ole.readStream(entry).data).length
+        streamCount++
+      }
+    }
+    expect(streamCount).toBe(45)
+    expect(imageCount).toBe(125)
+  })
+
+  it.each(round129Formats)('$format前缀偏移0..7、奇偶尾及奇数byteOffset视图保持字节和完整产出', ({ format, bytes }) => {
+    for (let prefix = 0; prefix < 8; prefix++) {
+      for (const tail of [0, 1, 2, 3]) {
+        const content = round129Concat(new Uint8Array(prefix).fill(0x11), bytes, new Uint8Array(tail))
+        const backing = round129Concat(new Uint8Array([0xff, 0xd8, 0xff]), content, buildMinimalPng())
+        const before = backing.slice()
+        const data = backing.subarray(3, 3 + content.length)
+        const images = round129ExpectMatches(data)
+        expect(images).toHaveLength(1)
+        expect(images[0]).toEqual({ format, data: bytes })
+        expect(images[0].data.byteOffset).toBe(3 + prefix)
+        expect(backing).toEqual(before)
+      }
+    }
+  })
+
+  it('0..7短buffer及末尾截断魔数不产图，8..15奇偶buffer仍与基线一致', () => {
+    for (let len = 0; len < 16; len++) {
+      for (const { bytes } of round129Formats) {
+        const data = new Uint8Array(len).fill(0x11)
+        data.set(bytes.subarray(0, Math.min(len, 3)), Math.max(0, len - 3))
+        expect(round129ExpectMatches(data)).toHaveLength(0)
+      }
+    }
+  })
+
+  it('malformed魔数、失效长度和截断结构后紧邻有效图片仍完整产出', () => {
+    const malformed = [
+      new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0]),
+      new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 1]),
+      new Uint8Array([0x42, 0x4d, 10, 0, 0, 0]),
+      new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x37, 0x61, 1, 0, 1, 0, 0, 0, 0, 0x7f]),
+    ]
+    for (const broken of malformed) {
+      expect(round129ExpectMatches(broken)).toHaveLength(0)
+      for (const { format, bytes } of round129Formats) {
+        const images = round129ExpectMatches(round129Concat(broken, bytes))
+        expect(images).toEqual([{ format, data: bytes }])
+      }
+    }
+    for (const { bytes } of round129Formats) {
+      expect(round129ExpectMatches(bytes.subarray(0, bytes.length - 1))).toHaveLength(0)
+    }
+  })
+
+  it.each(round129Formats)('$format全部65536字节对放在第一或第二对并拼接有效图片均与oracle一致', ({ bytes }) => {
+    const data = round129Concat(new Uint8Array(4), bytes)
+    let count = 0
+    for (const pairOffset of [0, 2]) {
+      for (let pair = 0; pair < 65536; pair++) {
+        data.fill(0, 0, 4)
+        data[pairOffset] = pair >>> 8
+        data[pairOffset + 1] = pair & 0xff
+        const before = data.slice()
+        const expected = round129ExtractImages(data)
+        const actual = extractImagesFromStream(data)
+        // 用assert比较完整字节，避免52万次Vitest matcher的额外开销；expected始终来自旧oracle。
+        deepStrictEqual(actual, expected, `字节对${pair}，位置${pairOffset}`)
+        deepStrictEqual(data, before)
+        if (expected.length === 0) throw new Error(`有效图片无产出：字节对${pair}，位置${pairOffset}`)
+        count++
+      }
+    }
+    expect(count).toBe(131072)
+  }, 30000)
+
+  it('负控：第二对含图片首字节时不能只检查第一对', () => {
+    for (const { format, bytes } of round129Formats) {
+      for (const prefix of [2, 3]) {
+        expect(round129ExpectMatches(round129Concat(new Uint8Array(prefix), bytes)))
+          .toEqual([{ format, data: bytes }])
+      }
+    }
+  })
+
+  it('负控：四字节跳跃不能错跳五字节漏掉边界首字节', () => {
+    for (const { format, bytes } of round129Formats) {
+      expect(round129ExpectMatches(round129Concat(new Uint8Array(4), bytes)))
+        .toEqual([{ format, data: bytes }])
+    }
+  })
+
+  it('负控：有效图片必须跳到end，不提取载荷内嵌图且保留紧邻后图', () => {
+    const nested = buildMinimalPng()
+    const bmp = round129Concat(buildMinimalBmp(), nested)
+    new DataView(bmp.buffer).setUint32(2, bmp.length, true)
+    for (const { format, bytes } of round129Formats) {
+      const images = round129ExpectMatches(round129Concat(bmp, bytes))
+      expect(images).toEqual([{ format: 'bmp', data: bmp }, { format, data: bytes }])
+    }
+  })
+})
 
 describe('Round 125 JPEG熵扫描与HEAD逐字节oracle等价性', () => {
   it('27份真实DOC/DOT的Data和WordDocument流逐个JPEG末端相同且确有产出', () => {
