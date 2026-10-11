@@ -12,7 +12,9 @@
  * `cleanParagraph` / `shouldSkipParagraph` 的处理。
  */
 import { describe, it, expect } from 'vitest'
-import { splitTextByParagraphMark } from '../src/utils/docParser'
+import { readFileSync, readdirSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { DocParser, splitTextByParagraphMark } from '../src/utils/docParser'
 
 /** 改动前实现（逐行转写）：i 从 0 走到 text.length **含端点**。 */
 function referenceSplit(text: string): Array<{ text: string; cpStart: number; originalIndex: number }> {
@@ -34,6 +36,33 @@ function referenceSplit(text: string): Array<{ text: string; cpStart: number; or
     cp += paraText.length + 1
     partStart = i + 1
     partIndex++
+  }
+  return parts
+}
+
+/** Round136 oracle: verbatim HEAD 5a15392 indexOf implementation, independent of candidate. */
+function round136Reference(text: string) {
+  const parts: Array<{ text: string; cpStart: number; originalIndex: number }> = []
+  let cp = 0
+  let partStart = 0
+  let partIndex = 0
+  let nl = text.indexOf('\n')
+  for (;;) {
+    const cut = nl < 0 ? text.length : nl
+    const paraText = text.slice(partStart, cut)
+    const subParts = paraText.includes('\u0007\u0007')
+      ? paraText.split(/(?<=\u0007\u0007)/)
+      : [paraText]
+    let subOffset = 0
+    for (const subText of subParts) {
+      parts.push({ text: subText, cpStart: cp + subOffset, originalIndex: partIndex })
+      subOffset += subText.length
+    }
+    cp += paraText.length + 1
+    partStart = cut + 1
+    partIndex++
+    if (nl < 0) break
+    nl = text.indexOf('\n', partStart)
   }
   return parts
 }
@@ -65,6 +94,67 @@ const CASES: string[] = [
   '😀\n😀😀\n',
   '𝔘𝔫𝔦\n𝔠𝔬𝔡𝔢',
 ]
+
+describe('Round136 普通段落直接写入护栏', () => {
+  it('普通段和表格段混合：固定键序、空段、CP及原始序号', () => {
+    for (const text of CASES.concat(['a\n\u0007\u0007b\n\n尾\n', '😀\u0007\u0007\u0007\u0007x\n'])) {
+      expect(JSON.stringify(splitTextByParagraphMark(text))).toBe(JSON.stringify(round136Reference(text)))
+    }
+    expect(splitTextByParagraphMark('a\n\n')).toEqual([
+      { text: 'a', cpStart: 0, originalIndex: 0 },
+      { text: '', cpStart: 2, originalIndex: 1 },
+      { text: '', cpStart: 3, originalIndex: 2 },
+    ])
+  })
+
+  it('长度不超过7的三字符字母表穷尽：独立旧oracle', () => {
+    let checked = 0
+    const visit = (text: string, depth: number) => {
+      expect(JSON.stringify(splitTextByParagraphMark(text))).toBe(JSON.stringify(round136Reference(text)))
+      checked++
+      if (depth > 0) for (const c of ['a', '\n', '\u0007']) visit(text + c, depth - 1)
+    }
+    visit('', 7)
+    expect(checked).toBe(3280)
+  })
+
+  it('27份真实文档重新捕获完整入参，非空产出且逐字段及键序一致', () => {
+    type CreateArgs = [string, ...unknown[]]
+    const prototype = DocParser.prototype as unknown as {
+      createParagraphsWithRealFormats: (...args: CreateArgs) => unknown
+    }
+    const original = prototype.createParagraphsWithRealFormats
+    const texts: string[] = []
+    prototype.createParagraphsWithRealFormats = function (...args: CreateArgs) {
+      texts.push(args[0])
+      return original.apply(this, args)
+    }
+    try {
+      const docs = resolve(process.cwd(), 'docs')
+      const files = readdirSync(docs).filter(n => /\.(doc|dot)$/.test(n)).sort()
+      expect(files.length).toBe(27)
+      for (const name of files) {
+        const b = readFileSync(resolve(docs, name))
+        const result = new DocParser(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength)).parseWithFormat()
+        expect(result.success, name).toBe(true)
+      }
+    } finally {
+      prototype.createParagraphsWithRealFormats = original
+    }
+    expect(texts.length).toBe(27)
+    let produced = 0
+    let tables = 0
+    for (const text of texts) {
+      const expected = round136Reference(text)
+      expect(splitTextByParagraphMark(text)).toEqual(expected)
+      expect(JSON.stringify(splitTextByParagraphMark(text))).toBe(JSON.stringify(expected))
+      produced += expected.length
+      tables += expected.filter(p => p.text.includes('\u0007\u0007')).length
+    }
+    expect(produced).toBe(34348)
+    expect(tables).toBeGreaterThan(0)
+  })
+})
 
 describe('splitTextByParagraphMark 差分护栏（Round 108）', () => {
   it('固定用例：与改动前实现逐字段一致', () => {
