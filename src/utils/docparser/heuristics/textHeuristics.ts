@@ -501,39 +501,39 @@ export function detectParagraphFormat(text: string, index: number, totalParagrap
 export function detectListInfo(text: string): { listType: 'ordered' | 'unordered'; listStyle: string; listLevel: number } | null {
     // Count leading whitespace (spaces / tabs / full-width spaces) as an indent width.
     // 原先 match(/^[\s\u3000\t]*/) + 两次 replace 共 3 次整串分配，现单趟扫描。
-    const listLevel = Math.floor(leadingIndentWidth(text) / 2)
+    // Round 138: compute indentation only for a matching list marker.
 
     const trimmed = text.trim()
     if (trimmed.length < 2) return null
 
     // 1. Multi-level Arabic: 1.1 / 1.2.3 (at least one dot-separated number followed by space or end)
     if (LIST_MULTI_LEVEL_RE.test(trimmed)) {
-      return { listType: 'ordered', listStyle: 'decimal', listLevel }
+      return { listType: 'ordered', listStyle: 'decimal', listLevel: Math.floor(leadingIndentWidth(text) / 2) }
     }
 
     // 2. Arabic numeral with . or ) then space: 1. / 2) / 12.
     if (LIST_ARABIC_RE.test(trimmed)) {
-      return { listType: 'ordered', listStyle: 'decimal', listLevel }
+      return { listType: 'ordered', listStyle: 'decimal', listLevel: Math.floor(leadingIndentWidth(text) / 2) }
     }
 
     // 3. Parenthesized Arabic: (1) / （2） / [1] — allow optional space after closing paren.
     if (LIST_PAREN_ARABIC_RE.test(trimmed)) {
-      return { listType: 'ordered', listStyle: 'decimal', listLevel }
+      return { listType: 'ordered', listStyle: 'decimal', listLevel: Math.floor(leadingIndentWidth(text) / 2) }
     }
 
     // 4. Roman numerals: i. / ii. / iv. / I. / II. (checked BEFORE single Latin letter
     //    so "i." / "v." / "x." are treated as Roman rather than lower-alpha).
     if (LIST_ROMAN_RE.test(trimmed)) {
       const isUpper = LIST_ROMAN_UPPER_RE.test(trimmed)
-      return { listType: 'ordered', listStyle: isUpper ? 'upper-roman' : 'lower-roman', listLevel }
+      return { listType: 'ordered', listStyle: isUpper ? 'upper-roman' : 'lower-roman', listLevel: Math.floor(leadingIndentWidth(text) / 2) }
     }
 
     // 5. Latin letter with . or ): a. / B) / (a)
     if (LIST_LATIN_RE.test(trimmed) && trimmed.length >= 3) {
-      return { listType: 'ordered', listStyle: 'lower-alpha', listLevel }
+      return { listType: 'ordered', listStyle: 'lower-alpha', listLevel: Math.floor(leadingIndentWidth(text) / 2) }
     }
     if (LIST_PAREN_LATIN_RE.test(trimmed)) {
-      return { listType: 'ordered', listStyle: 'lower-alpha', listLevel }
+      return { listType: 'ordered', listStyle: 'lower-alpha', listLevel: Math.floor(leadingIndentWidth(text) / 2) }
     }
 
     // 6. CJK ideographic numerals: 一、二、三、...、十、十一、... / 甲、乙、... / 壹、贰、...
@@ -541,26 +541,26 @@ export function detectListInfo(text: string): { listType: 'ordered' | 'unordered
     //    since Chinese numbered items often have no separator).
     //    原实现用 match() 但只用其结果做真值判断，改用 test() 等价且不产出数组。
     if (LIST_CJK_NUMERAL_RE.test(trimmed)) {
-      return { listType: 'ordered', listStyle: 'cjk-ideographic', listLevel }
+      return { listType: 'ordered', listStyle: 'cjk-ideographic', listLevel: Math.floor(leadingIndentWidth(text) / 2) }
     }
     if (LIST_PAREN_CJK_RE.test(trimmed)) {
-      return { listType: 'ordered', listStyle: 'cjk-ideographic', listLevel }
+      return { listType: 'ordered', listStyle: 'cjk-ideographic', listLevel: Math.floor(leadingIndentWidth(text) / 2) }
     }
 
     // 7. Circled numbers: ① ② ... ㊿ (U+2460..U+2473, U+3251..U+325F, U+32B1..U+32BF)
     if (LIST_CIRCLED_RE.test(trimmed)) {
-      return { listType: 'ordered', listStyle: 'cjk-ideographic', listLevel }
+      return { listType: 'ordered', listStyle: 'cjk-ideographic', listLevel: Math.floor(leadingIndentWidth(text) / 2) }
     }
 
     // 8. Unordered: ASCII and CJK bullets
     if (LIST_BULLET_ASCII_RE.test(trimmed) || LIST_BULLET_ASCII_ALT_RE.test(trimmed)) {
-      return { listType: 'unordered', listStyle: 'disc', listLevel }
+      return { listType: 'unordered', listStyle: 'disc', listLevel: Math.floor(leadingIndentWidth(text) / 2) }
     }
     if (LIST_BULLET_CJK_RE.test(trimmed)) {
-      return { listType: 'unordered', listStyle: 'disc', listLevel }
+      return { listType: 'unordered', listStyle: 'disc', listLevel: Math.floor(leadingIndentWidth(text) / 2) }
     }
     if (LIST_BULLET_SQUARE_RE.test(trimmed)) {
-      return { listType: 'unordered', listStyle: 'square', listLevel }
+      return { listType: 'unordered', listStyle: 'square', listLevel: Math.floor(leadingIndentWidth(text) / 2) }
     }
 
     return null
