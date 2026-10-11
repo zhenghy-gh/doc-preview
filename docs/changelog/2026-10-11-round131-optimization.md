@@ -1,7 +1,7 @@
 # Round 131 优化记录（2026-10-11）
 
 ## 实测结论与闭环状态
-采纳 FKP 格式run直接输出候选：真实完整FKP隔离耗时降低14.2670%，交错4×NEW/4×OLD各100轮四组均改善1.0385%–1.9909%。生产改动为src/utils/formatParser.ts两个调用点内联FC→CP转换，省去中间数组及range对象。新增22项常驻护栏，全部全量门禁通过。计划版本0.7.59（实际起点0.7.58，不使用过时0.7.52）。提交/发布完成情况以后续状态及audit为准，尚不可计入completedRounds。
+采纳 FKP 格式run直接输出候选：真实完整FKP隔离耗时降低14.2670%，原交错4×NEW/4×OLD各100轮四组均改善1.0385%–1.9909%；15:27续办独立四组复测改善0.8793%–2.3059%。生产改动为src/utils/formatParser.ts两个调用点内联FC→CP转换，省去中间数组及range对象。新增22项常驻护栏，全部全量门禁通过。版本0.7.59、单提交d3605aa（实际起点0.7.58，不使用过时0.7.52）；首次release证书失败，15:27默认TLS续办双包补发成功，15:34官方latest/gitHead/shasum核验通过。最终completedRounds=131/currentRound=132/inFlight=false，后台监督待audit；下文保留首次失败历史，末节为最终闭环。
 
 ## 门禁、剖析与真实输入
 开始HEAD e09fa49、completedRounds130/currentRound131/inFlight=false；重读协议、状态、项目长期及当日记忆、git log/status。无源码遗留改动，已有状态/记忆自然收尾及outputs报告保留；根目录.prof*/.bench*/.e2e-*为空。占用第131轮，未并发开新轮。
@@ -32,5 +32,15 @@ tests/formatParser.test.ts追加22项：四个独立旧oracle与e09fa49逐行机
 OLD ESM361311/gzip94984字节，NEW361522/gzip95034，原始+211/gzip+50，明确运行时收益支持微增。
 
 ## 发布、风险与下一方向
-拟npm version 0.7.59 --no-git-tag-version、单提交后npm run release双包。官方registry正常curl、显式系统CA及Managed Node信任链均失败自签证书，curl -k仅只读公开元数据返回HTTP403/空体；未改变全局strict-ssl或发送凭据绕过校验，不用上一轮0.7.58响应冒充本轮核验。若release失败，保持本轮未闭环（completedRounds130/currentRound131/inFlight=true），不新开132，先完成131发布核验。
+已执行npm version 0.7.59 --no-git-tag-version，单提交d3605aa；npm run release重建成功，但scoped npm publish因DEPTH_ZERO_SELF_SIGNED_CERT退出1，未到unscoped发布步骤，双包发布未完成。当前package/lock为0.7.59，lastCommit=d3605aa，completedRounds保持130/currentRound131/inFlight=true，next候选132被阻断。发布重建27份cmp已复核通过，累计81次系统cmp全部一致，不能用本地打包成功冒充上传成功。
+首次git add提示.workbuddy-ai被忽略但两个既有tracked文件已实际暂存；核验cached范围后提交成功。收尾本段更新是在提交后的状态说明，未新增第二生产提交。
+官方registry正常curl、显式系统CA及Managed Node信任链均失败自签证书，curl -k仅只读公开元数据返回HTTP403/空体；未改变全局strict-ssl或发送凭据绕过校验，不用上一轮0.7.58响应冒充本轮核验。若release失败，保持本轮未闭环（completedRounds130/currentRound131/inFlight=true），不新开132，先完成131发布核验。
 历史progress/changelog缺号与Round123/124/127/128偏差不补造；状态/记忆提交后自然回写、历史交付报告保留，不宣称整个工作区干净。证据在.workbuddy-ai/perf-harness/round131-*。下一候选Round132仅在131闭环后开启，优先FKP排序实际分布，避免重复已否决cache/trim/unroll。
+
+## 15:27接续独立复核与补发
+占用超过90分钟（约135分钟）、现场无活动基准/发布进程；只接续131，不另开132。继承原轮已预建双生产bundle，本次未重新stash切源码或重建OLD；当前全量重建NEW的SHA256与既有候选完全一致，旧源码与e09fa49逐字一致。串行重新执行全量76文件/1571项、types/lint/build/build:lib全部status0。
+独立8进程、正反交错各100轮NEW/OLD中位90.159/92.287、91.422/92.233、92.401/93.345、93.067/94.163ms，四组耗时降低2.3058502%/0.8792948%/1.0113022%/1.1639391%。计时内仅轻量文件/日志读取与默认TLS公开metadata读取，不声称整机绝对空载。继承已核验49真实输入完整FKP隔离6组100遍重测OLD807.362/NEW686.340ms，降低14.9898321%，未重新捕获输入；隔离测量与端到端绝对时间不跨会话比较；隔离重测与短控制/bench执行有轻微窗口重叠，不据其绝对值推导端到端收益。
+三负控本次重跑仍13/10/4项语义失败，候选与慢等价各22项通过；bench131重新生成后与130除cycle/timestamp外逐字段一致。OLD/NEW及OLD/本次发布构建各27份系统cmp共54次通过。
+默认TLS npm run release重新构建后两包上传0.7.59均成功、exit0、package.json已恢复；不重复升号、不新增生产提交，沿用d3605aa。首次官方元数据仍latest0.7.58且无0.7.59，必须等待真实传播核验，不以上传成功冒充完整闭环。本次证据前缀round131-resume-；最终registry与监督结论待实际落盘。
+
+15:34最终官方默认TLS核验：两包dist-tags.latest均0.7.59、versions存在且gitHead均d3605aa9b2e652e47c5a02e09cc9972490f908b4；shasum与release上传回执分别eabe9b905c404401e9edf753c25422fe3cc007b1/e1085c9671af11418d7e9c549fd3ff82357aa37e一致。状态完成前移completedRounds=131/currentRound=132/inFlight=false、lastVersion=0.7.59、lastCommit=d3605aa、updatedAt=2026-10-11T07:34:44Z。本次一轮仅续办131，不再执行132；后台监督待回写audit。原文首次失败保留为历史过程，不代表最终阻断。主会话另外默认TLS实际下载两包tarball，SHA1/SHA512与官方metadata一致，package名/0.7.59正确，每包9个dist-lib文件及文件名集合逐字节等于本地发布构建。

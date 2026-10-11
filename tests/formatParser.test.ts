@@ -1417,3 +1417,182 @@ describe('Round 131 FKP最终run直接构造与独立旧oracle护栏', () => {
     }
   })
 })
+
+// Round 132继承e09fa49独立旧oracle；共用的SPRM解析未变化。
+describe('Round 132 FKP相邻检测跳过稳定sort护栏', () => {
+  it('27份真实文档直接调用FKP与独立旧oracle一致且66355条输出非空', () => {
+    const docs = new URL('../docs/', import.meta.url)
+    const files = readdirSync(docs).filter(name => /\.(doc|dot)$/.test(name)).sort()
+    expect(files).toHaveLength(27)
+    const totals = { chpx: 0, papx: 0 }
+    for (const name of files) {
+      const bytes = readFileSync(new URL(name, docs))
+      const ole = new OleParser(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength))
+      const header = ole.parseHeader()
+      const directory = ole.getDirectorySectors(header, ole.getFatSectors(header))
+      const word = ole.findWordDocumentStream(directory)?.data
+      if (!word) throw new Error(`缺少WordDocument：${name}`)
+      const fib = parseFib(word)
+      if (!fib) throw new Error(`缺少FIB：${name}`)
+      const table = ole.findTableStream(directory, fib.fWhichTblStm ? 1 : 0)?.data ?? new Uint8Array(0)
+      const pieces = parseClxPieces({ maxTotalChars: 10 * 1024 * 1024, readUint16, readUint32 }, table.subarray(fib.fcClx, fib.fcClx + fib.lcbClx))
+        .map(p => ({ cpStart: p.cpStart, cpEnd: p.cpEnd, fcStart: p.fcValue, compressed: p.fCompressed }))
+      for (const kind of round131Kinds) {
+        const fc = kind === 'chpx' ? fib.fcPlcfBteChpx : fib.fcPlcfBtePapx
+        const lcb = kind === 'chpx' ? fib.lcbPlcfBteChpx : fib.lcbPlcfBtePapx
+        totals[kind] += round131RealAssert(kind, table, word, pieces, fc, lcb)
+      }
+    }
+    // 直接两种FKP入口包含DocParser快速路径未调用的47条CHPX。
+    expect(totals).toEqual({ chpx: 26698, papx: 39657 })
+  })
+  const prlsFor = (kind: Round131Kind) => kind === 'chpx'
+    ? [[0x35, 0x08, 1], [0x36, 0x08, 1], [0x3E, 0x2A, 1]]
+    : [[0x03, 0x24, 1], [0x03, 0x24, 2], [0x03, 0x24, 0]]
+  const formatsFor = (kind: Round131Kind) => kind === 'chpx'
+    ? [{ bold: true }, { italic: true }, { underline: true }]
+    : [{ alignment: 'center' }, { alignment: 'right' }, { alignment: 'left' }]
+  const ranges = (runs: ChpxRun[] | PapxRun[]) => runs.map(run => [run.cpStart, run.cpEnd])
+
+  // 三个相邻FC run分别拥有独立payload，不能靠相同format掩盖稳定tie次序。
+  function multiRunFkp(kind: Round131Kind): Uint8Array {
+    const prls = prlsFor(kind)
+    const data = round131Fkp(kind, prls[0], 1001, 1003)
+    const view = new DataView(data.buffer)
+    for (let i = 0; i <= prls.length; i++) view.setUint32(512 + i * 4, 1001 + i * 2, true)
+    for (let i = 0; i < prls.length; i++) {
+      data[512 + (prls.length + 1) * 4 + i * (kind === 'chpx' ? 1 : 13)] = 100 + i * 16
+      data.set(round131Fkp(kind, prls[i]).subarray(712, 744), 712 + i * 32)
+    }
+    data[1023] = prls.length
+    return data
+  }
+
+  it.each(round131Kinds)('%s 已排序pieces保留正序，压缩与UTF16均有四条输出', kind => {
+    for (const compressed of [true, false]) {
+      const pieces = [0, 10, 20, 30].map(cpStart => ({ cpStart, cpEnd: cpStart + 3, fcStart: 1001, compressed }))
+      const runs = round131Assert(kind, round131Bin(), round131Fkp(kind, prlsFor(kind)[0]), pieces)
+      expect(runs).toHaveLength(4)
+      expect(ranges(runs)).toEqual([[0, 3], [10, 13], [20, 23], [30, 33]])
+      expect(runs.map(run => run.format)).toEqual(Array(4).fill(formatsFor(kind)[0]))
+    }
+  })
+
+  it.each(round131Kinds)('%s 完全反序pieces必须回退完整排序', kind => {
+    const pieces = [30, 20, 10, 0].map(cpStart => ({ cpStart, cpEnd: cpStart + 3, fcStart: 1001, compressed: true }))
+    const runs = round131Assert(kind, round131Bin(), round131Fkp(kind, prlsFor(kind)[0]), pieces)
+    expect(runs).toHaveLength(4)
+    expect(ranges(runs)).toEqual([[0, 3], [10, 13], [20, 23], [30, 33]])
+  })
+
+  it.each(round131Kinds)('%s 同cpStart时cpEnd既检测逆序也决定二级排序', kind => {
+    for (const ends of [[13, 16, 20], [20, 16, 13], [13, 20, 16]]) {
+      const pieces = ends.map(cpEnd => ({ cpStart: 10, cpEnd, fcStart: 1001, compressed: true }))
+      const runs = round131Assert(kind, round131Bin(), round131Fkp(kind, prlsFor(kind)[0]), pieces)
+      expect(runs).toHaveLength(3)
+      expect(ranges(runs)).toEqual([[10, 13], [10, 16], [10, 20]])
+    }
+  })
+
+  it.each(round131Kinds)('%s cpStart优先级不能被较小cpEnd覆盖', kind => {
+    const pieces = [
+      { cpStart: 5, cpEnd: 6, fcStart: 1001, compressed: true },
+      { cpStart: 0, cpEnd: 10, fcStart: 1001, compressed: true },
+      { cpStart: 3, cpEnd: 4, fcStart: 1001, compressed: true },
+    ]
+    const runs = round131Assert(kind, round131Bin(), round131Fkp(kind, prlsFor(kind)[0]), pieces)
+    expect(runs).toHaveLength(3)
+    expect(ranges(runs)).toEqual([[0, 10], [3, 4], [5, 6]])
+  })
+
+  it.each(round131Kinds)('%s 多run FKP已排序同key保持三个不同format的输入次序', kind => {
+    const pieces = [1001, 1003, 1005].map(fcStart => ({ cpStart: 20, cpEnd: 22, fcStart, compressed: true }))
+    const runs = round131Assert(kind, round131Bin(1001, 1007), multiRunFkp(kind), pieces)
+    expect(runs).toHaveLength(3)
+    expect(ranges(runs)).toEqual([[20, 22], [20, 22], [20, 22]])
+    expect(runs.map(run => run.format)).toEqual(formatsFor(kind))
+    expect(new Set(runs.map(run => run.format)).size).toBe(3)
+  })
+
+  it.each(round131Kinds)('%s 多run FKP跨run逆序回退后同key仍稳定且保留format引用', kind => {
+    const pieces = [
+      ...[1001, 1003, 1005].map(fcStart => ({ cpStart: 20, cpEnd: 22, fcStart, compressed: true })),
+      { cpStart: 0, cpEnd: 2, fcStart: 1003, compressed: true },
+    ]
+    const runs = round131Assert(kind, round131Bin(1001, 1007), multiRunFkp(kind), pieces)
+    const [first, second, third] = formatsFor(kind)
+    expect(runs).toHaveLength(4)
+    expect(ranges(runs)).toEqual([[0, 2], [20, 22], [20, 22], [20, 22]])
+    expect(runs.map(run => run.format)).toEqual([second, first, second, third])
+    expect(runs[0].format).toBe(runs[2].format)
+    expect(new Set(runs.map(run => run.format)).size).toBe(3)
+  })
+
+  it.each(round131Kinds)('%s 跨bin引用FKP页次序乱序必须恢复CP及format次序', kind => {
+    const table = new Uint8Array(28)
+    const view = new DataView(table.buffer)
+    for (const [offset, value] of [[0, 1001], [4, 1003], [8, 1005], [12, 1007], [16, 2], [20, 1], [24, 3]]) {
+      view.setUint32(offset, value, true)
+    }
+    const word = new Uint8Array(2048)
+    const pieces: PieceFcRange[] = []
+    for (let i = 0; i < 3; i++) {
+      word.set(round131Fkp(kind, prlsFor(kind)[i], 1001 + i * 2, 1003 + i * 2).subarray(512), (i + 1) * 512)
+      pieces.push({ cpStart: i * 10, cpEnd: i * 10 + 2, fcStart: 1001 + i * 2, compressed: true })
+    }
+    const runs = round131Assert(kind, table, word, pieces)
+    expect(runs).toHaveLength(3)
+    expect(ranges(runs)).toEqual([[0, 2], [10, 12], [20, 22]])
+    expect(runs.map(run => run.format)).toEqual(formatsFor(kind))
+  })
+
+  it.each(round131Kinds)('%s 唯一逆序出现在最后一对时不可提前结束检测', kind => {
+    const pieces = [0, 10, 20, 30, 25].map(cpStart => ({ cpStart, cpEnd: cpStart + 2, fcStart: 1001, compressed: true }))
+    const runs = round131Assert(kind, round131Bin(), round131Fkp(kind, prlsFor(kind)[0]), pieces)
+    expect(runs).toHaveLength(5)
+    expect(ranges(runs)).toEqual([[0, 2], [10, 12], [20, 22], [25, 27], [30, 32]])
+  })
+
+  it.each(round131Kinds)('%s 空和单输出边界，以及冻结pieces重复调用均不修改输入', kind => {
+    const table = round131Bin()
+    const word = round131Fkp(kind, prlsFor(kind)[0])
+    const tableBefore = table.slice()
+    const wordBefore = word.slice()
+    for (const starts of [[], [10], [30, 10, 20]]) {
+      const pieces = starts.map(cpStart => Object.freeze({ cpStart, cpEnd: cpStart + 2, fcStart: 1001, compressed: true }))
+      Object.freeze(pieces)
+      const first = round131Assert(kind, table, word, pieces)
+      const second = round131Assert(kind, table, word, pieces)
+      expect(first).toHaveLength(starts.length)
+      expect(second).toHaveLength(starts.length)
+      const expected = starts.length === 3 ? [[10, 12], [20, 22], [30, 32]] : starts.length === 1 ? [[10, 12]] : []
+      expect(ranges(first)).toEqual(expected)
+      expect(ranges(second)).toEqual(expected)
+      deepStrictEqual(first, second)
+      if (first.length) {
+        expect(first[0].format).toEqual(formatsFor(kind)[0])
+        expect(first[0]).not.toBe(second[0])
+        expect(first[0].format).not.toBe(second[0].format)
+      }
+    }
+    deepStrictEqual(table, tableBefore)
+    deepStrictEqual(word, wordBefore)
+  })
+
+  it.each(round131Kinds)('%s 公开pieces中的NaN和正负Infinity保持旧oracle过滤及有效run排序', kind => {
+    for (const field of ['cpStart', 'cpEnd', 'fcStart'] as const) {
+      for (const value of [NaN, Infinity, -Infinity]) {
+        const pieces = [
+          { cpStart: 10, cpEnd: 14, fcStart: 1001, compressed: true },
+          { cpStart: 20, cpEnd: 24, fcStart: 1001, compressed: true, [field]: value },
+          { cpStart: 0, cpEnd: 4, fcStart: 1001, compressed: true },
+        ]
+        const runs = round131Assert(kind, round131Bin(), round131Fkp(kind, prlsFor(kind)[0]), pieces)
+        const expected = field === 'cpEnd' && value === Infinity ? [[0, 4], [10, 14], [20, 30]] : [[0, 4], [10, 14]]
+        expect(runs).toHaveLength(expected.length)
+        expect(ranges(runs)).toEqual(expected)
+        expect(runs.map(run => run.format)).toEqual(Array(expected.length).fill(formatsFor(kind)[0]))
+      }
+    }
+  })
+})
