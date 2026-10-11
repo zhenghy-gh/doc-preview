@@ -607,9 +607,12 @@ export function detectAlignment(text: string, index: number, totalParagraphs: nu
     if (ALL_CAPS_LINE_RE.test(trimmed) && totalLen >= 3 && totalLen <= 50) return 'center'
 
     // Short centered Chinese title
-    const hasSentencePunct = ALIGN_SENTENCE_PUNCT_RE.test(trimmed)
-    const noFieldMarkers = !trimmed.includes('：') && !trimmed.includes(':') && !trimmed.includes('？') && !trimmed.includes('?') && !hasSentencePunct
-    if (totalLen < 18 && chineseCount >= 2 && chineseCount / strippedLen > 0.5 && noFieldMarkers) return 'center'
+    // Round 137: marker scans are only observable for a short Chinese title.
+    if (totalLen < 18 && chineseCount >= 2 && chineseCount / strippedLen > 0.5) {
+      const hasSentencePunct = ALIGN_SENTENCE_PUNCT_RE.test(trimmed)
+      const noFieldMarkers = !trimmed.includes('：') && !trimmed.includes(':') && !trimmed.includes('？') && !trimmed.includes('?') && !hasSentencePunct
+      if (noFieldMarkers) return 'center'
+    }
 
     return null
   }

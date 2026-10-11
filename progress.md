@@ -1206,3 +1206,11 @@
 - 候选及最终均76文件1611测试与types/lint/双构建通过；54cmp、bench136/135全字段一致，最终bundle等于OLD/gzip95034，候选+13字节撤回。官方双包latest0.7.59/gitHead=d3605aa。
 - candidate/final回执独立保存未覆盖；测量少量读写/静态复核非严格空载，历史账本及状态/memory/outputs收尾边界保留。详见 `docs/changelog/2026-10-12-round136-optimization.md`；后台只读监督仅可回写audit，下一轮137，目标208。
 
+## Round 137/100 — 2026-10-12
+- 采纳detectAlignment末尾短中文标题标点/域标记探测惰性求值，保留全部早返回优先级。真实完整函数隔离降低39.6133%，交错四组端到端改善1.8480%–2.4839%，拟升现场0.7.59至0.7.60；发布闭环以实际状态及registry为准。
+- 独立CPU5371采样，detectAlignment105/5371=1.9549%，标记includes行56/5371=1.0426%；27文档33702真实输入1519227码元、8次>=2CJK、短中文多数标题0次、16非空center。隔离6组120遍上中位OLD531.189167/NEW320.767750ms，checksum一致。
+- 新增4项旧oracle差分/17-18/严格比例/九标点/65536插入码元/1600短串位置组合及27真实解析33702输入非空产出护栏，旧oracle机器核对HEAD一致；三错控2/1/2语义失败、慢等价4通过。首版错误读取parsed.paragraphs已修正document.paragraphs后重跑，标点固定用例加强至4CJK不受比例短路遮蔽。
+- 候选和最终两次全量76文件1615项及types/lint/双构建全通过。实际stash候选源码预建双库后4×NEW/4×OLD各100遍，中位91.027/93.183、91.640/93.390、91.120/93.441、91.461/93.183ms，四组耗时降低2.3137%/1.8739%/2.4839%/1.8480%。
+- 候选及最终共54次系统cmp一致，bench137/136除cycle/timestamp全字段相同；最终与候选生产bundle逐字相同，gzip95034→95026减8字节。candidate/final回执独立保存。无跨轮绝对值比较/统计显著性承诺，测量少量读写非严格空载。
+- 本轮单提交计划包含生产/护栏/changelog/progress/版本；npm run release默认TLS官方双包及latest/gitHead/shasum需收尾核验。历史缺号/67重复及状态/memory/outputs自然收尾边界保留；详见 `docs/changelog/2026-10-12-round137-optimization.md`。完成137后下一轮138，目标208。
+

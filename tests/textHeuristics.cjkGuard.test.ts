@@ -1,3 +1,6 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import { DocParser } from '../src/utils/docParser'
 // Round 112 护栏：guessCharFormat / detectAlignment 的「无 CJK 时跳过 O(n) 计数」。
 //
 // 参照实现是**改动前**两个函数的逐行转写（无条件调用 countChineseAndWhitespace）。
@@ -265,5 +268,125 @@ describe('Round 112：无 CJK 时跳过计数 —— 等价性', () => {
         expect(detectAlignment(s, i, n)).toEqual(refDetectAlignment(s, i, n))
       }
     }
+  })
+})
+
+// Round137 oracle is a line-for-line copy of HEAD detectAlignment; constants/helpers
+// are shared with the independent Round112 oracle above and unchanged this round.
+const HAS_CJK_RE = /[\u4e00-\u9fff]/
+function round137OldAlignment(text: string, index: number, totalParagraphs: number): string | null {
+    const trimmed = text.trim()
+    const totalLen = trimmed.length
+    // 原先每次调用要 trim()/trimStart()/trimEnd()×2/replace()/match() 共 6 次分配。
+    // 前导/尾部空白改为计数（trimStart/trimEnd 只用于取长度），
+    // stripped 只用到长度与其中的中文字数 —— 两者都可直接在 trimmed 上算。
+    const leadingSpaces = leadingWhitespaceCount(text)
+    const trailingSpaces = trailingWhitespaceCount(text, leadingSpaces)
+    // ── Round 112：同 guessCharFormat，无 CJK 时跳过 O(n) 计数 ──────────────
+    // `chineseCount >= 2` 的两处判断（onlyName、居中标题）全部短路，
+    // `strippedLen` 不会被读取，故整次逐字符计数可省。
+    let chineseCount = 0
+    let strippedLen = 0
+    if (HAS_CJK_RE.test(text)) {
+      const [c, w] = countChineseAndWhitespace(trimmed)
+      chineseCount = c
+      strippedLen = totalLen - w
+    }
+
+    // Detect centering by leading whitespace: if text is centered in the "page",
+    // it will have roughly equal leading and trailing whitespace within the line.
+    // A large leading space ratio suggests intentional centering.
+    if (totalLen > 0 && leadingSpaces > 0) {
+      const leadingRatio = leadingSpaces / (leadingSpaces + totalLen)
+      if (leadingRatio > 0.15 && leadingRatio < 0.5) return 'center'
+    }
+
+    // Short line with both leading and trailing spaces → centered
+    if (leadingSpaces > 2 && trailingSpaces > 2 && totalLen < 60) return 'center'
+
+    // Pure Chinese name (2-4 chars) in the second half of document → right-aligned (signature)
+    const onlyName = chineseCount >= 2 && chineseCount <= 4 && strippedLen === chineseCount
+    if (onlyName && index > totalParagraphs * 0.5) return 'right'
+
+    // Date lines → right-aligned
+    if (ALIGN_YEAR_RE.test(trimmed) || ALIGN_MONTH_RE.test(trimmed)) return 'right'
+
+    // Short ALL-CAPS English → center (likely a title/subtitle)
+    if (ALL_CAPS_LINE_RE.test(trimmed) && totalLen >= 3 && totalLen <= 50) return 'center'
+
+    // Short centered Chinese title
+    const hasSentencePunct = ALIGN_SENTENCE_PUNCT_RE.test(trimmed)
+    const noFieldMarkers = !trimmed.includes('：') && !trimmed.includes(':') && !trimmed.includes('？') && !trimmed.includes('?') && !hasSentencePunct
+    if (totalLen < 18 && chineseCount >= 2 && chineseCount / strippedLen > 0.5 && noFieldMarkers) return 'center'
+
+    return null
+  }
+
+
+describe('Round 137：短中文标题标点探测惰性求值', () => {
+  it('锁定长度17/18、中文比例等于/超过一半及标点与冒号排除', () => {
+    const cases: Array<[string, string | null]> = [
+      ['中文a', 'center'], ['中文ab', null], ['中文中文abcd', null],
+      ['中文中文abc', 'center'], ['中文中文a'.padEnd(17, '中'), 'center'],
+      ['中文中文a'.padEnd(18, '中'), null],
+      ...['：', ':', '？', '?', '，', '。', '！', '、', '；'].map(c => ['中文中文a' + c, null] as [string, null]),
+      ['中文中文ab？', null], ['中文中文ab?', null], ['', null], ['ALL CAPS', 'center'],
+      ['2026年', 'right'], ['10月', 'right'], ['   centered line', 'center'],
+    ]
+    for (const [text, result] of cases) {
+      expect(round137OldAlignment(text, 0, 10)).toBe(result)
+      expect(detectAlignment(text, 0, 10)).toBe(result)
+    }
+    expect(detectAlignment('中文', 9, 10)).toBe('right')
+  })
+
+  it('穷尽65536码元置入中文标题与全部trim空白，保留旧输出', () => {
+    for (let code = 0; code <= 0xffff; code++) {
+      const c = String.fromCharCode(code)
+      const text = '中文a' + c
+      expect(detectAlignment(text, 0, 10)).toBe(round137OldAlignment(text, 0, 10))
+    }
+  })
+
+  it('混合短串穷尽并锁定早返回优先级与签名位置', () => {
+    let seen = 0
+    forAllStrings(3, ['中', '文', 'a', ' ', ':', '?', '。'], text => {
+      for (const [i, n] of [[0, 1], [5, 10], [6, 10], [9, 10]] as const) {
+        expect(detectAlignment(text, i, n)).toBe(round137OldAlignment(text, i, n))
+        seen++
+      }
+    })
+    expect(seen).toBe(1600)
+  })
+
+  it('重新解析27真实文档，逐调用比较33702输入并断言非空产出', () => {
+    const proto = DocParser.prototype as unknown as { detectParagraphFormat: (...args: [string, number, number]) => unknown }
+    const original = proto.detectParagraphFormat
+    const inputs: Array<[string, number, number]> = []
+    proto.detectParagraphFormat = function (...args) {
+      inputs.push(args)
+      return original.apply(this, args)
+    }
+    try {
+      const directory = path.resolve(process.cwd(), 'docs')
+      const files = fs.readdirSync(directory).filter(n => /\.(doc|dot)$/.test(n)).sort()
+      expect(files.length).toBe(27)
+      for (const name of files) {
+        const bytes = fs.readFileSync(path.join(directory, name))
+        const parsed = new DocParser(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)).parseWithFormat()
+        expect(parsed.success).toBe(true)
+        expect(parsed.document!.paragraphs.length).toBeGreaterThan(0)
+      }
+    } finally {
+      proto.detectParagraphFormat = original
+    }
+    expect(inputs.length).toBe(33702)
+    let aligned = 0
+    for (const args of inputs) {
+      const expected = round137OldAlignment(...args)
+      expect(detectAlignment(...args)).toBe(expected)
+      if (expected !== null) aligned++
+    }
+    expect(aligned).toBe(16)
   })
 })
