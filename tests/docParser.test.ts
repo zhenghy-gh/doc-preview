@@ -2652,6 +2652,25 @@ describe('Round127 重复 trim 清洗差分护栏', () => {
     expectLegacyParagraphs('伀倀\f' + body, [])
   })
 
+  it('Round135 多分页只消费首个位置，长尾不改变第一段和 CP', () => {
+    const tail = ('Discarded Tail\f').repeat(2000)
+    expectLegacyParagraphs(body + '\f' + tail, one())
+    expectLegacyParagraphs(' \f' + body + '\fKept Tail', one(body + '\fKept Tail', true))
+    expectLegacyParagraphs('\f\f\f' + body, one(body, true))
+  })
+
+  it('Round135 分页位于任一码元之后时，旧 split oracle 与真实路径相等', () => {
+    let checked = 0
+    for (let code = 0; code <= 0xffff; code++) {
+      const prefix = String.fromCharCode(code)
+      if (prefix === '\n' || prefix === '\u0007') continue
+      const input = prefix + '\f' + body + '\fKept Tail'
+      expectLegacyParagraphs(input, legacyParagraphs(input))
+      checked++
+    }
+    expect(checked).toBe(65534)
+  })
+
   it('跳过段落后 CP 仍取原始文本长度，含 CR、代理对和表格行边界', () => {
     const first = ' \ufeff伀倀\t' + body + '\u3000'
     const skipped = '伀倀\t'
