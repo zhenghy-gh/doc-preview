@@ -1148,30 +1148,6 @@ export interface PieceFcRange {
   compressed: boolean
 }
 
-/**
- * Convert an FC (byte) range into CP ranges using the piece table.
- * A single FC range may span multiple pieces; one CP range is returned per
- * overlapping piece. Pieces must be the full piece table (all stories).
- */
-function fcRangeToCpRanges(
-  fcStart: number,
-  fcEnd: number,
-  pieces: PieceFcRange[],
-): Array<{ cpStart: number; cpEnd: number }> {
-  const out: Array<{ cpStart: number; cpEnd: number }> = []
-  for (const p of pieces) {
-    const bytesPerChar = p.compressed ? 1 : 2
-    const pieceFcEnd = p.fcStart + (p.cpEnd - p.cpStart) * bytesPerChar
-    const s = Math.max(fcStart, p.fcStart)
-    const e = Math.min(fcEnd, pieceFcEnd)
-    if (e <= s) continue
-    const cpS = p.cpStart + Math.floor((s - p.fcStart) / bytesPerChar)
-    const cpE = p.cpStart + Math.ceil((e - p.fcStart) / bytesPerChar)
-    if (cpE > cpS) out.push({ cpStart: cpS, cpEnd: cpE })
-  }
-  return out
-}
-
 /** Read the bin table (PlcBteChpx/PlcBtePapx) and return FKP page numbers with their FC ranges. */
 function parseBinTable(
   tableData: Uint8Array,
@@ -1240,12 +1216,21 @@ export function parseChpxRunsFromFkp(
       if (Object.keys(format).length === 0 && fontIndex === undefined &&
           !revision && !isSpecial && fcPic === undefined && istd === undefined) continue
 
-      for (const cpRange of fcRangeToCpRanges(fcStart, fcEnd, pieces)) {
-        const run: ChpxRun = { cpStart: cpRange.cpStart, cpEnd: cpRange.cpEnd, format, fontIndex, revision }
-        if (isSpecial) run.isSpecial = true
-        if (fcPic !== undefined) run.fcPic = fcPic
-        if (istd !== undefined) run.istd = istd
-        runs.push(run)
+      for (const p of pieces) {
+        const bytesPerChar = p.compressed ? 1 : 2
+        const pieceFcEnd = p.fcStart + (p.cpEnd - p.cpStart) * bytesPerChar
+        const s = Math.max(fcStart, p.fcStart)
+        const e = Math.min(fcEnd, pieceFcEnd)
+        if (e <= s) continue
+        const cpS = p.cpStart + Math.floor((s - p.fcStart) / bytesPerChar)
+        const cpE = p.cpStart + Math.ceil((e - p.fcStart) / bytesPerChar)
+        if (cpE > cpS) {
+          const run: ChpxRun = { cpStart: cpS, cpEnd: cpE, format, fontIndex, revision }
+          if (isSpecial) run.isSpecial = true
+          if (fcPic !== undefined) run.fcPic = fcPic
+          if (istd !== undefined) run.istd = istd
+          runs.push(run)
+        }
       }
     }
   }
@@ -1305,13 +1290,22 @@ export function parsePapxRunsFromFkp(
       const { format, ilvl, ilst, ilfo, table } =
         parsePapxGrpprl(wordDocData, papxOffset + 2, grpprlLen)
 
-      for (const cpRange of fcRangeToCpRanges(fcStart, fcEnd, pieces)) {
-        const run: PapxRun = { cpStart: cpRange.cpStart, cpEnd: cpRange.cpEnd, format, istd }
-        if (ilvl !== undefined) run.ilvl = ilvl
-        if (ilst !== undefined) run.ilst = ilst
-        if (ilfo !== undefined) run.ilfo = ilfo
-        if (table) run.table = table
-        runs.push(run)
+      for (const p of pieces) {
+        const bytesPerChar = p.compressed ? 1 : 2
+        const pieceFcEnd = p.fcStart + (p.cpEnd - p.cpStart) * bytesPerChar
+        const s = Math.max(fcStart, p.fcStart)
+        const e = Math.min(fcEnd, pieceFcEnd)
+        if (e <= s) continue
+        const cpS = p.cpStart + Math.floor((s - p.fcStart) / bytesPerChar)
+        const cpE = p.cpStart + Math.ceil((e - p.fcStart) / bytesPerChar)
+        if (cpE > cpS) {
+          const run: PapxRun = { cpStart: cpS, cpEnd: cpE, format, istd }
+          if (ilvl !== undefined) run.ilvl = ilvl
+          if (ilst !== undefined) run.ilst = ilst
+          if (ilfo !== undefined) run.ilfo = ilfo
+          if (table) run.table = table
+          runs.push(run)
+        }
       }
     }
   }

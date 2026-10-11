@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import { parseChpxRuns, parsePapxRuns, mergeCharFormatForParagraph, parseChpxGrpprlWithFont, parsePapxGrpprl } from '../src/utils/formatParser'
+import { parseChpxRuns, parsePapxRuns, mergeCharFormatForParagraph, parseChpxGrpprlWithFont, parsePapxGrpprl, parseChpxRunsFromFkp, parsePapxRunsFromFkp } from '../src/utils/formatParser'
+import type { ChpxRun, PapxRun, PieceFcRange } from '../src/utils/formatParser'
+import { deepStrictEqual } from 'node:assert'
+import { readFileSync, readdirSync } from 'node:fs'
+import { readUint16, readUint32 } from '../src/utils/binaryReader'
+import { OleParser } from '../src/utils/oleParser'
+import { parseFib } from '../src/utils/fibParser'
+import { parseClxPieces } from '../src/utils/docparser/pieceTable'
 
 /**
  * Build a PlcfBteChpx test fixture from a list of (cpStart, bold, fontSize) tuples.
@@ -933,5 +940,480 @@ describe('formatParser mergeCharFormatForParagraph counting thresholds', () => {
     const merged = mergeCharFormatForParagraph(runs, 0, 10, undefined, styles)
     expect(merged.bold).toBe(true)
     expect(merged.italic).toBe(true)
+  })
+})
+
+// Round 131：以下四个函数从e09fa49逐行复制，仅函数重命名和去export。
+// 共用边界仅为字节读取及未改动的grpprl解析；FC转换/bin/FKP遍历不调用候选。
+function round131FcRangeToCpRangesOracle(
+  fcStart: number,
+  fcEnd: number,
+  pieces: PieceFcRange[],
+): Array<{ cpStart: number; cpEnd: number }> {
+  const out: Array<{ cpStart: number; cpEnd: number }> = []
+  for (const p of pieces) {
+    const bytesPerChar = p.compressed ? 1 : 2
+    const pieceFcEnd = p.fcStart + (p.cpEnd - p.cpStart) * bytesPerChar
+    const s = Math.max(fcStart, p.fcStart)
+    const e = Math.min(fcEnd, pieceFcEnd)
+    if (e <= s) continue
+    const cpS = p.cpStart + Math.floor((s - p.fcStart) / bytesPerChar)
+    const cpE = p.cpStart + Math.ceil((e - p.fcStart) / bytesPerChar)
+    if (cpE > cpS) out.push({ cpStart: cpS, cpEnd: cpE })
+  }
+  return out
+}
+
+/** Read the bin table (PlcBteChpx/PlcBtePapx) and return FKP page numbers with their FC ranges. */
+function round131ParseBinTableOracle(
+  tableData: Uint8Array,
+  fc: number,
+  lcb: number,
+): Array<{ fcStart: number; fcEnd: number; pn: number }> {
+  if (lcb < 12 || fc < 0 || fc + lcb > tableData.length) return []
+  // n = (lcb - 4) / 8; tolerate trailing padding by flooring.
+  const n = Math.floor((lcb - 4) / 8)
+  if (n <= 0 || n > 100000) return []
+
+  const entries: Array<{ fcStart: number; fcEnd: number; pn: number }> = []
+  for (let i = 0; i < n; i++) {
+    const fcStart = readUint32(tableData, fc + i * 4)
+    const fcEnd = readUint32(tableData, fc + (i + 1) * 4)
+    if (fcEnd <= fcStart) return [] // aFC must be strictly increasing
+    const pnRaw = readUint32(tableData, fc + (n + 1) * 4 + i * 4)
+    const pn = pnRaw & 0x3FFFFF
+    entries.push({ fcStart, fcEnd, pn })
+  }
+  return entries
+}
+
+/**
+ * Parse CHPX runs the spec-level way: bin table → ChpxFkp pages → grpprls,
+ * FC ranges converted to CPs via the piece table.
+ *
+ * @param tableData - The table stream (0Table/1Table).
+ * @param wordDocData - The WordDocument stream (FKPs live here).
+ * @param fc/lcb - fcPlcfBteChpx / lcbPlcfBteChpx from the FIB.
+ * @param pieces - Full piece table for FC→CP conversion.
+ */
+function round131ParseChpxRunsFromFkpOracle(
+  tableData: Uint8Array,
+  wordDocData: Uint8Array,
+  fc: number,
+  lcb: number,
+  pieces: PieceFcRange[],
+): ChpxRun[] {
+  if (pieces.length === 0) return []
+  const bins = round131ParseBinTableOracle(tableData, fc, lcb)
+  if (bins.length === 0) return []
+
+  const runs: ChpxRun[] = []
+  for (const bin of bins) {
+    const base = bin.pn * 512
+    if (base + 512 > wordDocData.length) continue
+    const crun = wordDocData[base + 511]
+    // rgfc needs (crun+1)*4 bytes and rgb needs crun bytes; all must fit
+    // before the crun byte itself.
+    if (crun === 0 || (crun + 1) * 4 + crun > 511) continue
+
+    for (let i = 0; i < crun; i++) {
+      const fcStart = readUint32(wordDocData, base + i * 4)
+      const fcEnd = readUint32(wordDocData, base + (i + 1) * 4)
+      if (fcEnd <= fcStart) continue
+      const rgb = wordDocData[base + (crun + 1) * 4 + i]
+      if (rgb === 0) continue // no CHPX → inherits from paragraph style
+      const chpxOffset = base + rgb * 2
+      if (chpxOffset >= base + 511) continue
+      const cb = wordDocData[chpxOffset]
+      if (cb === 0 || chpxOffset + 1 + cb > base + 512) continue
+
+      const { format, fontIndex, revision, isSpecial, fcPic, istd } =
+        parseChpxGrpprlWithFont(wordDocData, chpxOffset + 1, cb)
+      if (Object.keys(format).length === 0 && fontIndex === undefined &&
+          !revision && !isSpecial && fcPic === undefined && istd === undefined) continue
+
+      for (const cpRange of round131FcRangeToCpRangesOracle(fcStart, fcEnd, pieces)) {
+        const run: ChpxRun = { cpStart: cpRange.cpStart, cpEnd: cpRange.cpEnd, format, fontIndex, revision }
+        if (isSpecial) run.isSpecial = true
+        if (fcPic !== undefined) run.fcPic = fcPic
+        if (istd !== undefined) run.istd = istd
+        runs.push(run)
+      }
+    }
+  }
+
+  runs.sort((a, b) => a.cpStart - b.cpStart || a.cpEnd - b.cpEnd)
+  return runs
+}
+
+/**
+ * Parse PAPX runs the spec-level way: bin table → PapxFkp pages → grpprls,
+ * FC ranges converted to CPs via the piece table.
+ */
+function round131ParsePapxRunsFromFkpOracle(
+  tableData: Uint8Array,
+  wordDocData: Uint8Array,
+  fc: number,
+  lcb: number,
+  pieces: PieceFcRange[],
+): PapxRun[] {
+  if (pieces.length === 0) return []
+  const bins = round131ParseBinTableOracle(tableData, fc, lcb)
+  if (bins.length === 0) return []
+
+  const runs: PapxRun[] = []
+  for (const bin of bins) {
+    const base = bin.pn * 512
+    if (base + 512 > wordDocData.length) continue
+    const cpara = wordDocData[base + 511]
+    // rgfc: (cpara+1)*4 bytes; rgbx (BxPap): 13 bytes each.
+    if (cpara === 0 || (cpara + 1) * 4 + cpara * 13 > 511) continue
+
+    for (let i = 0; i < cpara; i++) {
+      const fcStart = readUint32(wordDocData, base + i * 4)
+      const fcEnd = readUint32(wordDocData, base + (i + 1) * 4)
+      if (fcEnd <= fcStart) continue
+      const bOffset = wordDocData[base + (cpara + 1) * 4 + i * 13]
+      if (bOffset === 0) continue // no PAPX → style defaults
+      let papxOffset = base + bOffset * 2
+      if (papxOffset >= base + 511) continue
+
+      // PapxInFkp: cb (1 byte). cb != 0 → payload 2*cb-1 bytes; cb == 0 →
+      // read cb' (next byte), payload 2*cb' bytes. Payload = istd(2) + grpprl.
+      const cb = wordDocData[papxOffset]
+      let payloadLen: number
+      if (cb === 0) {
+        const cbPrime = wordDocData[papxOffset + 1]
+        payloadLen = cbPrime * 2
+        papxOffset += 2
+      } else {
+        payloadLen = cb * 2 - 1
+        papxOffset += 1
+      }
+      if (payloadLen < 2 || papxOffset + payloadLen > base + 512) continue
+
+      const istd = readUint16(wordDocData, papxOffset)
+      const grpprlLen = payloadLen - 2
+      const { format, ilvl, ilst, ilfo, table } =
+        parsePapxGrpprl(wordDocData, papxOffset + 2, grpprlLen)
+
+      for (const cpRange of round131FcRangeToCpRangesOracle(fcStart, fcEnd, pieces)) {
+        const run: PapxRun = { cpStart: cpRange.cpStart, cpEnd: cpRange.cpEnd, format, istd }
+        if (ilvl !== undefined) run.ilvl = ilvl
+        if (ilst !== undefined) run.ilst = ilst
+        if (ilfo !== undefined) run.ilfo = ilfo
+        if (table) run.table = table
+        runs.push(run)
+      }
+    }
+  }
+
+  runs.sort((a, b) => a.cpStart - b.cpStart || a.cpEnd - b.cpEnd)
+  return runs
+}
+
+const round131Kinds = ['chpx', 'papx'] as const
+type Round131Kind = typeof round131Kinds[number]
+
+function round131Bin(start = 1001, end = 1011, pn = 1): Uint8Array {
+  const data = new Uint8Array(12)
+  const view = new DataView(data.buffer)
+  view.setUint32(0, start, true)
+  view.setUint32(4, end, true)
+  view.setUint32(8, pn, true)
+  return data
+}
+
+// 合成布局参考fkpParser.test.ts，仅构造输入，不包含候选FC转换逻辑。
+function round131Fkp(kind: Round131Kind, prls: number[] = [0x35, 0x08, 1], start = 1001, end = 1011, cbPrime = false): Uint8Array {
+  const data = new Uint8Array(1024)
+  const view = new DataView(data.buffer)
+  view.setUint32(512, start, true)
+  view.setUint32(516, end, true)
+  data[520] = 100
+  data[1023] = 1
+  if (kind === 'chpx') {
+    data[712] = prls.length
+    data.set(prls, 713)
+  } else {
+    const payload = [37, 0, ...prls]
+    if (cbPrime) {
+      if (payload.length % 2) payload.push(0)
+      data[712] = 0
+      data[713] = payload.length / 2
+      data.set(payload, 714)
+    } else {
+      if (payload.length % 2 === 0) payload.push(0)
+      data[712] = (payload.length + 1) / 2
+      data.set(payload, 713)
+    }
+  }
+  return data
+}
+
+function round131Assert(kind: Round131Kind, table: Uint8Array, word: Uint8Array, pieces: PieceFcRange[], fc = 0, lcb = table.length): ChpxRun[] | PapxRun[] {
+  const beforeTable = table.slice()
+  const beforeWord = word.slice()
+  const beforePieces = pieces.map(piece => ({ ...piece }))
+  const candidate = kind === 'chpx' ? parseChpxRunsFromFkp : parsePapxRunsFromFkp
+  const oracle = kind === 'chpx' ? round131ParseChpxRunsFromFkpOracle : round131ParsePapxRunsFromFkpOracle
+  const actual = candidate(table, word, fc, lcb, pieces)
+  const old = oracle(table, word, fc, lcb, pieces)
+  deepStrictEqual(actual, old)
+  expect(JSON.stringify(actual)).toBe(JSON.stringify(old))
+  actual.forEach((run, i) => expect(Object.keys(run)).toEqual(Object.keys(old[i])))
+  for (let i = 0; i < actual.length; i++) {
+    for (let j = i + 1; j < actual.length; j++) {
+      expect(actual[i].format === actual[j].format).toBe(old[i].format === old[j].format)
+      if (kind === 'chpx') {
+        expect((actual[i] as ChpxRun).revision === (actual[j] as ChpxRun).revision)
+          .toBe((old[i] as ChpxRun).revision === (old[j] as ChpxRun).revision)
+      } else {
+        expect((actual[i] as PapxRun).table === (actual[j] as PapxRun).table)
+          .toBe((old[i] as PapxRun).table === (old[j] as PapxRun).table)
+      }
+    }
+  }
+  deepStrictEqual(table, beforeTable)
+  deepStrictEqual(word, beforeWord)
+  deepStrictEqual(pieces, beforePieces)
+  return actual
+}
+
+const round131Pieces: PieceFcRange[] = [
+  { cpStart: 50, cpEnd: 54, fcStart: 1004, compressed: false },
+  { cpStart: 0, cpEnd: 5, fcStart: 1000, compressed: true },
+  { cpStart: 20, cpEnd: 26, fcStart: 1002, compressed: true },
+  { cpStart: 70, cpEnd: 70, fcStart: 1005, compressed: true },
+  { cpStart: 80, cpEnd: 85, fcStart: 1011, compressed: true },
+  { cpStart: 90, cpEnd: 95, fcStart: 996, compressed: true },
+]
+
+const round131FullChpx = [
+  0x35, 0x08, 1, 0x4F, 0x4A, 2, 0,
+  0x01, 0x08, 1, 0x04, 0x48, 3, 0,
+  0x55, 0x08, 1, 0x03, 0x6A, 0, 0, 0, 0, 0x30, 0x4A, 0, 0,
+]
+const round131FullPapx = [
+  0x03, 0x24, 1, 0x0A, 0x26, 0, 0x0E, 0x46, 0, 0,
+  0x0B, 0x46, 0, 0, 0x16, 0x24, 1, 0x49, 0x66, 2, 0, 0, 0,
+]
+
+// 完整属性及序列化顺序护栏；真实样本引用拓扑按对象组检查，避免O(runs²)。
+function round131RealAssert(kind: Round131Kind, table: Uint8Array, word: Uint8Array, pieces: PieceFcRange[], fc: number, lcb: number): number {
+  const candidate = kind === 'chpx' ? parseChpxRunsFromFkp : parsePapxRunsFromFkp
+  const oracle = kind === 'chpx' ? round131ParseChpxRunsFromFkpOracle : round131ParsePapxRunsFromFkpOracle
+  const actual = candidate(table, word, fc, lcb, pieces)
+  const old = oracle(table, word, fc, lcb, pieces)
+  deepStrictEqual(actual, old)
+  expect(JSON.stringify(actual)).toBe(JSON.stringify(old))
+  const topology = (runs: (ChpxRun | PapxRun)[], key: 'format' | 'revision' | 'table') => {
+    const ids = new Map<unknown, number>()
+    return runs.map(run => {
+      const value = (run as unknown as Record<string, unknown>)[key]
+      if (!ids.has(value)) ids.set(value, ids.size)
+      return ids.get(value)
+    })
+  }
+  for (const key of ['format', kind === 'chpx' ? 'revision' : 'table'] as const) {
+    deepStrictEqual(topology(actual, key), topology(old, key))
+  }
+  for (let i = 0; i < actual.length; i++) deepStrictEqual(Object.keys(actual[i]), Object.keys(old[i]))
+  return actual.length
+}
+
+describe('Round 131 FKP最终run直接构造与独立旧oracle护栏', () => {
+  it('27份真实样本两种FKP完整对象、JSON键顺序及引用共享拓扑一致，均有非空产出', () => {
+    const docs = new URL('../docs/', import.meta.url)
+    const files = readdirSync(docs).filter(name => /\.(doc|dot)$/.test(name)).sort()
+    expect(files).toHaveLength(27)
+    const totals = { chpx: 0, papx: 0 }
+    const nonEmpty = { chpx: 0, papx: 0 }
+    for (const name of files) {
+      const bytes = readFileSync(new URL(name, docs))
+      const ole = new OleParser(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength))
+      const header = ole.parseHeader()
+      const directory = ole.getDirectorySectors(header, ole.getFatSectors(header))
+      const word = ole.findWordDocumentStream(directory)?.data
+      expect(word, name).toBeDefined()
+      if (!word) throw new Error(`缺少WordDocument：${name}`)
+      const fib = parseFib(word)
+      expect(fib, name).not.toBeNull()
+      if (!fib) throw new Error(`缺少FIB：${name}`)
+      const table = ole.findTableStream(directory, fib.fWhichTblStm ? 1 : 0)?.data ?? new Uint8Array(0)
+      const pieces = parseClxPieces({ maxTotalChars: 10 * 1024 * 1024, readUint16, readUint32 }, table.subarray(fib.fcClx, fib.fcClx + fib.lcbClx))
+        .map(p => ({ cpStart: p.cpStart, cpEnd: p.cpEnd, fcStart: p.fcValue, compressed: p.fCompressed }))
+      for (const kind of round131Kinds) {
+        const fc = kind === 'chpx' ? fib.fcPlcfBteChpx : fib.fcPlcfBtePapx
+        const lcb = kind === 'chpx' ? fib.lcbPlcfBteChpx : fib.lcbPlcfBtePapx
+        const count = round131RealAssert(kind, table, word, pieces, fc, lcb)
+        totals[kind] += count
+        if (count > 0) nonEmpty[kind]++
+      }
+    }
+    expect(totals.chpx).toBeGreaterThan(0)
+    expect(totals.papx).toBeGreaterThan(0)
+    expect(nonEmpty.chpx).toBeGreaterThan(0)
+    expect(nonEmpty.papx).toBeGreaterThan(0)
+  })
+
+  it.each(round131Kinds)('%s 多piece乱序、overlap、空piece、相切及UTF16奇数结束边界', kind => {
+    const prls = kind === 'chpx' ? round131FullChpx : round131FullPapx
+    const runs = round131Assert(kind, round131Bin(), round131Fkp(kind, prls), round131Pieces)
+    expect(runs.map(run => [run.cpStart, run.cpEnd])).toEqual([[1, 5], [20, 26], [50, 54]])
+    expect(runs).toHaveLength(3)
+    expect(runs[0].format).toBe(runs[1].format)
+    expect(runs[1].format).toBe(runs[2].format)
+    if (kind === 'chpx') {
+      const chpx = runs as ChpxRun[]
+      expect(Object.keys(chpx[0])).toEqual(['cpStart', 'cpEnd', 'format', 'fontIndex', 'revision', 'isSpecial', 'fcPic', 'istd'])
+      expect(chpx[0].fontIndex).toBe(2)
+      expect(chpx[0].revision).toEqual({ type: 'insert', authorIndex: 3 })
+      expect(chpx[0].revision).toBe(chpx[2].revision)
+      expect(chpx[0].isSpecial).toBe(true)
+      expect(chpx[0].fcPic).toBe(0)
+      expect(chpx[0].istd).toBe(0)
+    } else {
+      const papx = runs as PapxRun[]
+      expect(Object.keys(papx[0])).toEqual(['cpStart', 'cpEnd', 'format', 'istd', 'ilvl', 'ilst', 'ilfo', 'table'])
+      expect(papx[0].istd).toBe(37)
+      expect([papx[0].ilvl, papx[0].ilst, papx[0].ilfo]).toEqual([0, 0, 0])
+      expect(papx[0].table).toEqual({ inTable: true, depth: 2 })
+      expect(papx[0].table).toBe(papx[2].table)
+    }
+  })
+
+  it.each(round131Kinds)('%s UTF16奇数起止字节分别floor和ceil且一字节范围不能丢弃', kind => {
+    const pieces = [{ cpStart: 10, cpEnd: 20, fcStart: 1000, compressed: false }]
+    for (const [start, end, expected] of [[1001, 1003, [10, 12]], [1001, 1002, [10, 11]], [1002, 1003, [11, 12]]]) {
+      const runs = round131Assert(kind, round131Bin(start as number, end as number), round131Fkp(kind, kind === 'chpx' ? [0x35, 0x08, 1] : [0x03, 0x24, 1], start as number, end as number), pieces)
+      expect(runs.map(run => [run.cpStart, run.cpEnd])).toEqual([expected])
+    }
+  })
+
+  it('CHPX optional缺席仍保留fontIndex/revision自有undefined键，只有istd也须非空', () => {
+    const runs = round131Assert('chpx', round131Bin(), round131Fkp('chpx'), round131Pieces) as ChpxRun[]
+    expect(Object.keys(runs[0])).toEqual(['cpStart', 'cpEnd', 'format', 'fontIndex', 'revision'])
+    expect(Object.hasOwn(runs[0], 'fontIndex')).toBe(true)
+    expect(Object.hasOwn(runs[0], 'revision')).toBe(true)
+    expect(Object.hasOwn(runs[0], 'istd')).toBe(false)
+    const onlyStyle = round131Assert('chpx', round131Bin(), round131Fkp('chpx', [0x30, 0x4A, 37, 0]), round131Pieces)
+    expect(onlyStyle).toHaveLength(3)
+    expect((onlyStyle[0] as ChpxRun).istd).toBe(37)
+    expect(onlyStyle[0].format).toEqual({})
+  })
+
+  it.each([false, true])('PAPX cbPrime=%s optional缺席及空format保持istd', cbPrime => {
+    const runs = round131Assert('papx', round131Bin(), round131Fkp('papx', [], 1001, 1011, cbPrime), round131Pieces)
+    expect(runs).toHaveLength(3)
+    expect(Object.keys(runs[0])).toEqual(['cpStart', 'cpEnd', 'format', 'istd'])
+    expect(runs[0].format).toEqual({})
+    expect((runs[0] as PapxRun).istd).toBe(37)
+  })
+
+  it.each(round131Kinds)('%s 多FKP run稳定sort同CP范围保持输入run次序而不合并引用', kind => {
+    const data = new Uint8Array(1536)
+    data.set(round131Fkp(kind, kind === 'chpx' ? [0x35, 0x08, 1] : [0x03, 0x24, 1]))
+    data.set(round131Fkp(kind, kind === 'chpx' ? [0x36, 0x08, 1] : [0x03, 0x24, 2]).subarray(512), 1024)
+    const table = new Uint8Array(20)
+    const view = new DataView(table.buffer)
+    for (const [offset, value] of [[0, 1000], [4, 1010], [8, 1020], [12, 1], [16, 2]]) view.setUint32(offset, value, true)
+    const runs = round131Assert(kind, table, data, [round131Pieces[1]])
+    expect(runs).toHaveLength(2)
+    expect(runs[0].format).not.toBe(runs[1].format)
+    expect(runs[0].format).toEqual(kind === 'chpx' ? { bold: true } : { alignment: 'center' })
+    expect(runs[1].format).toEqual(kind === 'chpx' ? { italic: true } : { alignment: 'right' })
+  })
+
+  it.each(round131Kinds)('%s 输入不变且跨调用反映可变piece内容，不缓存旧范围', kind => {
+    const table = round131Bin()
+    const word = round131Fkp(kind)
+    const pieces = round131Pieces.map(piece => ({ ...piece }))
+    const tableBefore = table.slice()
+    const wordBefore = word.slice()
+    const piecesBefore = structuredClone(pieces)
+    const first = round131Assert(kind, table, word, pieces)
+    deepStrictEqual(table, tableBefore)
+    deepStrictEqual(word, wordBefore)
+    deepStrictEqual(pieces, piecesBefore)
+    pieces[0].cpStart += 100
+    pieces[0].cpEnd += 100
+    const second = round131Assert(kind, table, word, pieces)
+    expect(second.map(run => [run.cpStart, run.cpEnd])).toEqual([[1, 5], [20, 26], [150, 154]])
+    expect(first.map(run => [run.cpStart, run.cpEnd])).toEqual([[1, 5], [20, 26], [50, 54]])
+  })
+
+  it.each(round131Kinds)('%s 穷尽0..16起止偏移及两种编码的578组FC范围', kind => {
+    let cases = 0
+    for (const compressed of [true, false]) {
+      const pieces = [{ cpStart: 10, cpEnd: 16, fcStart: 1004, compressed }]
+      for (let start = 0; start <= 16; start++) {
+        for (let end = 0; end <= 16; end++) {
+          const fcStart = 1000 + start
+          const fcEnd = 1000 + end
+          const runs = round131Assert(kind, round131Bin(), round131Fkp(kind, undefined, fcStart, fcEnd), pieces)
+          const width = compressed ? 1 : 2
+          const left = Math.max(fcStart, 1004)
+          const right = Math.min(fcEnd, 1004 + 6 * width)
+          const expected = right > left ? [[10 + Math.floor((left - 1004) / width), 10 + Math.ceil((right - 1004) / width)]] : []
+          deepStrictEqual(runs.map(run => [run.cpStart, run.cpEnd]), expected)
+          cases++
+        }
+      }
+    }
+    expect(cases).toBe(578)
+  })
+
+  it.each(round131Kinds)('%s bin范围不用于裁剪FKP且pn高位被mask及尾部padding容忍', kind => {
+    const table = new Uint8Array(15)
+    table.set(round131Bin(2000, 2010, 0xFFC00001))
+    expect(round131Assert(kind, table, round131Fkp(kind), round131Pieces)).toHaveLength(3)
+  })
+
+  it.each(round131Kinds)('%s 无piece、无overlap、空FC、倒退FC及空CP均不产出', kind => {
+    const table = round131Bin()
+    for (const pieces of [[], [round131Pieces[3]], [round131Pieces[4]], [round131Pieces[5]], [{ cpStart: 1, cpEnd: 0, fcStart: 1000, compressed: true }]]) {
+      expect(round131Assert(kind, table, round131Fkp(kind), pieces)).toEqual([])
+    }
+    for (const [start, end] of [[1001, 1001], [1011, 1001]]) {
+      expect(round131Assert(kind, table, round131Fkp(kind, undefined, start, end), round131Pieces)).toEqual([])
+    }
+  })
+
+  it.each(round131Kinds)('%s 坏bin范围、过短bin、过多bin及越界页均为空', kind => {
+    const word = round131Fkp(kind)
+    for (const [fc, lcb] of [[-1, 12], [0, 0], [0, 11], [1, 12], [0, 13]]) {
+      expect(round131Assert(kind, round131Bin(), word, round131Pieces, fc, lcb)).toEqual([])
+    }
+    for (const table of [round131Bin(1001, 1001), round131Bin(1011, 1001), round131Bin(1001, 1011, 99), new Uint8Array(800012)]) {
+      expect(round131Assert(kind, table, word, round131Pieces)).toEqual([])
+    }
+    expect(round131Assert(kind, round131Bin(), word.subarray(0, 1023), round131Pieces)).toEqual([])
+  })
+
+  it.each(round131Kinds)('%s FKP零run、计数溢出、零offset及payload截断边界', kind => {
+    for (const count of [0, 255]) {
+      const word = round131Fkp(kind)
+      word[1023] = count
+      expect(round131Assert(kind, round131Bin(), word, round131Pieces)).toEqual([])
+    }
+    const noOffset = round131Fkp(kind)
+    noOffset[520] = 0
+    expect(round131Assert(kind, round131Bin(), noOffset, round131Pieces)).toEqual([])
+    const overflow = round131Fkp(kind)
+    overflow[520] = 255
+    overflow[1022] = 255
+    expect(round131Assert(kind, round131Bin(), overflow, round131Pieces)).toEqual([])
+    const zeroPayload = round131Fkp(kind)
+    zeroPayload[712] = 0
+    zeroPayload[713] = 0
+    expect(round131Assert(kind, round131Bin(), zeroPayload, round131Pieces)).toEqual([])
+    if (kind === 'chpx') {
+      expect(round131Assert(kind, round131Bin(), round131Fkp(kind, [0x4B, 0x48, 0x10, 0]), round131Pieces)).toEqual([])
+    } else {
+      const short = round131Fkp(kind)
+      short[712] = 1
+      expect(round131Assert(kind, round131Bin(), short, round131Pieces)).toEqual([])
+    }
   })
 })
