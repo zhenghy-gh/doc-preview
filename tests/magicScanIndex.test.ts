@@ -787,3 +787,262 @@ describe('Round 143 图片候选数组：护栏鉴别力', () => {
     expect(dup.imageCandidates.length).not.toBe(index.imageCandidates.length)
   })
 })
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Round 145：`buildMagicScanIndex` 改为「Uint16 一次读一对」
+// ═══════════════════════════════════════════════════════════════════════════
+// 本段守住四件事：
+//   1. **快路径 == 慢路径**：同一逻辑字节放在偶数 `byteOffset`（走 `Uint16Array`）
+//      与奇数 `byteOffset`（走逐字节对推进的慢路径）时，桶与候选数组必须逐项相同。
+//   2. **边界**：长度 0..40 全枚举 + 锚点铺满/交替，覆盖主循环与奇数尾字节两条出口。
+//   3. **回退保障**：空输入与**已分离的 ArrayBuffer** 上不得抛错（旧实现安静返回空桶），
+//      因为 `len === 0` 的提前返回正是为它们而存在。
+//   4. **鉴别力**：与生产快路径同构的骨架（正控必须与 oracle 相同）注入 4 个故意改错
+//      必须与 oracle 不同：①一对里只查第一个字节 ②一对里只查第二个字节
+//      ③漏掉奇数尾字节 ④字节对表只填一半（依赖「表对称」这一前提）。
+
+/** 把 `src` 的同一段逻辑字节放到指定偏移处，返回该偏移处的视图。 */
+function viewAtOffset(src: Uint8Array, offset: number): Uint8Array {
+  const backing = new Uint8Array(src.length + offset + 1)
+  backing.set(src, offset)
+  return backing.subarray(offset, offset + src.length)
+}
+
+/**
+ * 与生产快路径**同构**的骨架：`Uint16Array` 一次读一对 + 命中时逐字节查表 +
+ * 奇数尾字节收尾。`pushPair` 决定一对命中时要检查哪些字节，`tailByte` 决定是否收尾。
+ * 正控用 `PUSH_BOTH` + `tailByte = true` 必须与 oracle 相同；其余组合是负控。
+ */
+function buildFastSkeleton(
+  data: Uint8Array,
+  pair: Uint8Array,
+  pushPair: (buckets: Buckets, d: Uint8Array, i: number) => void,
+  tailByte: boolean
+): Buckets {
+  const buckets: Buckets = LEADS.map(() => [])
+  const len = data.length
+  if (len === 0) return buckets
+  const n = len >> 1
+  const u16 = new Uint16Array(data.buffer, data.byteOffset, n)
+  for (let j = 0; j < n; j++) {
+    if (pair[u16[j]] === 0) continue
+    pushPair(buckets, data, j << 1)
+  }
+  if (tailByte && (len & 1)) {
+    const s = SLOT[data[len - 1]]
+    if (s !== 0) buckets[s - 1].push(len - 1)
+  }
+  return buckets
+}
+
+/** 正控：一对里两个字节都查（= 生产实现的行为）。 */
+const PUSH_BOTH = (buckets: Buckets, d: Uint8Array, i: number): void => {
+  const s0 = SLOT[d[i]]
+  if (s0 !== 0) buckets[s0 - 1].push(i)
+  const s1 = SLOT[d[i + 1]]
+  if (s1 !== 0) buckets[s1 - 1].push(i + 1)
+}
+
+/** 负控 1：一对里只查第一个字节。 */
+const PUSH_FIRST = (buckets: Buckets, d: Uint8Array, i: number): void => {
+  const s = SLOT[d[i]]
+  if (s !== 0) buckets[s - 1].push(i)
+}
+
+/** 负控 2：一对里只查第二个字节。 */
+const PUSH_SECOND = (buckets: Buckets, d: Uint8Array, i: number): void => {
+  const s = SLOT[d[i + 1]]
+  if (s !== 0) buckets[s - 1].push(i + 1)
+}
+
+/** 桶与候选数组都相等的判据。 */
+function sameIndex(a: { buckets: Buckets; imageCandidates: number[] }, b: Uint8Array): boolean {
+  const want = LEADS.map((lead) => enumerate(b, lead))
+  if (JSON.stringify(a.buckets) !== JSON.stringify(want)) return false
+  return JSON.stringify(a.imageCandidates) === JSON.stringify(imageCandidateOracle(b))
+}
+
+describe('Round 145 单趟扫描：快路径与慢路径（奇数 byteOffset）一致', () => {
+  const corpus = (): Uint8Array[] => [
+    ...realWordDocStreams(),
+    ...adversarialImageStreams(),
+    ...randomStreams(20261015, 300, 400),
+  ]
+
+  it('27 份真实流 + 对抗流 + 随机流上，偏移 0 与偏移 1 的桶/候选逐项相同', () => {
+    const streams = corpus()
+    let checked = 0
+    for (const data of streams) {
+      const even = buildMagicScanIndex(data)
+      const shifted = viewAtOffset(data, 1)
+      // 前提必须钉死：否则「慢路径」根本没被走到，用例就是空转。
+      expect(shifted.byteOffset % 2, `len=${data.length} 未能构造奇数偏移视图`).toBe(1)
+      const odd = buildMagicScanIndex(shifted)
+      expect(odd.buckets, `len=${data.length} 桶不一致`).toEqual(even.buckets)
+      expect(odd.imageCandidates, `len=${data.length} 候选不一致`).toEqual(even.imageCandidates)
+      checked += even.imageCandidates.length
+    }
+    // 鉴别力：语料必须真的产出候选，否则上述比对可能只是「两边都空」。
+    expect(checked).toBeGreaterThan(50000)
+  })
+
+  it('真实流的 WordDocument 视图 byteOffset 全为偶数（快路径前提）', () => {
+    const streams = realWordDocStreams()
+    expect(streams).toHaveLength(27)
+    for (const data of streams) expect(data.byteOffset % 2).toBe(0)
+  })
+
+  it('同一逻辑内容在偏移 0 与偏移 1 下都与 oracle 相同（两种路径都正确）', () => {
+    for (const data of [...adversarialImageStreams(), ...randomStreams(20261016, 200, 300)]) {
+      const even = buildMagicScanIndex(data)
+      const odd = buildMagicScanIndex(viewAtOffset(data, 1))
+      expect(sameIndex(even, data), `even len=${data.length}`).toBe(true)
+      expect(sameIndex(odd, data), `odd len=${data.length}`).toBe(true)
+    }
+  })
+})
+
+describe('Round 145 单趟扫描：边界与尾部出口', () => {
+  it('长度 0..40 全枚举（铺满锚点 / 无锚点 / 交替）与 oracle 一致', () => {
+    for (let n = 0; n <= 40; n++) {
+      // 铺满单一首字节：覆盖「一对两个都是锚点」
+      for (const fill of [0xd0, 0xff, 0x41]) {
+        const buf = new Uint8Array(n).fill(fill)
+        const idx = buildMagicScanIndex(buf)
+        expect(idx.buckets, `len=${n} fill=${fill}`).toEqual(LEADS.map((lead) => enumerate(buf, lead)))
+        expect(idx.imageCandidates, `len=${n} fill=${fill}`).toEqual(imageCandidateOracle(buf))
+      }
+      // 交替 0xd0 / 0x41：锚点只在偶数位，成对检查里必须落到第一个字节上
+      const alt = new Uint8Array(n)
+      for (let i = 0; i < n; i++) alt[i] = i % 2 === 0 ? 0xd0 : 0x41
+      expect(buildMagicScanIndex(alt).buckets, `alt len=${n}`).toEqual(
+        LEADS.map((lead) => enumerate(alt, lead))
+      )
+      // 交替 0x41 / 0xd0：锚点只在奇数位，必须落到一对的第二个字节上
+      const alt2 = new Uint8Array(n)
+      for (let i = 0; i < n; i++) alt2[i] = i % 2 === 1 ? 0xd0 : 0x41
+      expect(buildMagicScanIndex(alt2).buckets, `alt2 len=${n}`).toEqual(
+        LEADS.map((lead) => enumerate(alt2, lead))
+      )
+    }
+  })
+
+  it('锚点落在任意位置（含对边界 1/3/7/8/15/16…）都被收录', () => {
+    for (const at of [0, 1, 3, 4, 7, 8, 9, 15, 16, 23, 24, 31]) {
+      const buf = new Uint8Array(40).fill(0x41)
+      buf[at] = 0xd0
+      const idx = buildMagicScanIndex(buf)
+      expect(idx.buckets[0], `at=${at}`).toEqual(enumerate(buf, 0xd0))
+      expect(idx.buckets[0]).toContain(at)
+    }
+  })
+
+  it('末字节是锚点时在快路径上也被收录（奇数尾字节出口）', () => {
+    for (const n of [1, 3, 5, 9, 17, 33]) {
+      const buf = new Uint8Array(n).fill(0x41)
+      buf[n - 1] = 0xd0
+      expect(buildMagicScanIndex(buf).buckets[0], `len=${n}`).toEqual([n - 1])
+    }
+    // 末字节是图片首字节时同样必须进候选数组
+    for (const n of [1, 3, 5, 9, 17, 33]) {
+      const buf = new Uint8Array(n).fill(0x41)
+      buf[n - 1] = 0xff
+      expect(buildMagicScanIndex(buf).imageCandidates, `len=${n}`).toEqual([n - 1])
+    }
+  })
+
+  it('空输入返回空桶与空候选', () => {
+    const idx = buildMagicScanIndex(new Uint8Array(0))
+    expect(idx.buckets).toEqual([[], [], [], [], []])
+    expect(idx.imageCandidates).toEqual([])
+  })
+
+  it('已分离（detached）的 ArrayBuffer 上不抛错且返回空结果', () => {
+    const ab = new ArrayBuffer(16)
+    const view = new Uint8Array(ab)
+    view[0] = 0xd0
+    view[1] = 0xff
+    structuredClone(ab, { transfer: [ab] })
+    // 分离后视图长度按规范归零；旧实现安静返回空桶，新实现不得因构造 Uint16Array 抛错。
+    expect(view.length).toBe(0)
+    const idx = buildMagicScanIndex(view)
+    expect(idx.buckets).toEqual([[], [], [], [], []])
+    expect(idx.imageCandidates).toEqual([])
+  })
+})
+
+describe('Round 145 单趟扫描：护栏鉴别力（负控必须被检出）', () => {
+  const corpus = (): Uint8Array[] => [
+    ...realWordDocStreams(),
+    ...adversarialImageStreams(),
+    ...randomStreams(20261017, 200, 300),
+    // 端序无关的「一对里只有一个锚点」用例：两种字节序下各有一种排列会漏
+    new Uint8Array([0xd0, 0x41, 0x41, 0xd0, 0xd0, 0x41, 0x41, 0xd0]),
+    new Uint8Array([0xd0, 0x41]).subarray(0, 2),
+  ]
+  const want = (data: Uint8Array): Buckets => LEADS.map((lead) => enumerate(data, lead))
+
+  it('正控：同构骨架 + 两字节全查 + 收尾 == oracle（钉死骨架与生产实现同构）', () => {
+    for (const data of corpus()) {
+      const got = buildFastSkeleton(data, PAIR_SYM, PUSH_BOTH, true)
+      expect(got, `len=${data.length}`).toEqual(want(data))
+    }
+  })
+
+  it('慢但等价的对照（两趟计数建表）与新的单趟扫描逐项相同', () => {
+    let hits = 0
+    for (const data of corpus()) {
+      const idx = buildMagicScanIndex(data)
+      expect(idx.buckets, `len=${data.length}`).toEqual(bucketizeTwoPass(data))
+      expect(idx.imageCandidates, `len=${data.length}`).toEqual(imageCandidateTwoPass(data))
+      hits += idx.imageCandidates.length
+    }
+    expect(hits).toBeGreaterThan(50000)
+  })
+
+  it('负控 1（一对里只查第一个字节）必须被检出', () => {
+    let bad = 0
+    for (const data of corpus()) {
+      if (JSON.stringify(buildFastSkeleton(data, PAIR_SYM, PUSH_FIRST, true)) !== JSON.stringify(want(data))) bad++
+    }
+    expect(bad).toBeGreaterThan(0)
+  })
+
+  it('负控 2（一对里只查第二个字节）必须被检出', () => {
+    let bad = 0
+    for (const data of corpus()) {
+      if (JSON.stringify(buildFastSkeleton(data, PAIR_SYM, PUSH_SECOND, true)) !== JSON.stringify(want(data))) bad++
+    }
+    expect(bad).toBeGreaterThan(0)
+  })
+
+  it('负控 3（漏掉奇数尾字节）必须被检出', () => {
+    const tailLead = [new Uint8Array(3).fill(0x41), new Uint8Array(9).fill(0x41)]
+    tailLead[0][2] = 0xd0
+    tailLead[1][8] = 0xd0
+    let bad = 0
+    for (const data of [...corpus(), ...tailLead]) {
+      if (JSON.stringify(buildFastSkeleton(data, PAIR_SYM, PUSH_BOTH, false)) !== JSON.stringify(want(data))) bad++
+    }
+    expect(bad).toBeGreaterThan(0)
+  })
+
+  it('负控 4（字节对表只填一半）必须被检出——「表对称」是快路径正确性的前提', () => {
+    let bad = 0
+    for (const data of corpus()) {
+      if (JSON.stringify(buildFastSkeleton(data, PAIR_ASYM, PUSH_BOTH, true)) !== JSON.stringify(want(data))) bad++
+    }
+    expect(bad).toBeGreaterThan(0)
+  })
+
+  it('负控 4 的判据不依赖机器端序（两种字节序各有一种排列会被漏）', () => {
+    // 小端：u16 = (data[1] << 8) | data[0]；大端：u16 = (data[0] << 8) | data[1]。
+    // 下面这条流在两种字节序下各有一对会被 PAIR_ASYM 漏掉，故「必须被检出」是端序无关的。
+    const probe = new Uint8Array([0xd0, 0x41, 0x41, 0xd0])
+    const expected = want(probe)
+    const got = buildFastSkeleton(probe, PAIR_ASYM, PUSH_BOTH, true)
+    expect(JSON.stringify(got)).not.toBe(JSON.stringify(expected))
+    // 同一输入用对称表则完全一致，证明差异只来自表的一半缺失。
+    expect(buildFastSkeleton(probe, PAIR_SYM, PUSH_BOTH, true)).toEqual(expected)
+  })
+})

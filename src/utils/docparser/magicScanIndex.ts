@@ -92,13 +92,82 @@ export interface MagicScanIndex {
   readonly imageCandidates: number[]
 }
 
-/** 一趟扫过 `data`，把 5 个魔数锚点分桶、4 个图片首字节收进升序候选数组。 */
+/** `MAGIC_SCAN_LEADS` 的长度（槽位 ≤ 它的是魔数，> 它的是图片首字节）。 */
+const MAGIC_LEAD_COUNT = MAGIC_SCAN_LEADS.length
+
+/**
+ * 一趟扫过 `data`，把 5 个魔数锚点分桶、4 个图片首字节收进升序候选数组。
+ *
+ * ── Round 145：把「逐字节取两字节再拼索引」换成「一次读一对」 ──
+ * 剖析显示本函数是整轮第 4 大自耗项（5.39%），其中最热的一行正是
+ * `PAIR_HAS_LEAD[(data[i] << 8) | data[i + 1]]`（单行 2.97%）——每个 2 字节窗口
+ * 要付两次字节读取 + 一次移位 + 一次或。改用 `Uint16Array` 视图一次读出整个窗口，
+ * 索引直接就是 `u16[j]`，于是每个窗口只剩「一次数组读取 + 一次查表 + 一次比较」。
+ *
+ * **端序无关**：`PAIR_HAS_LEAD` 的构造对调换高低字节是**对称**的
+ * （同时写 `(lead << 8) | other` 与 `(other << 8) | lead`），所以小端机器上
+ * `u16[j] === (data[2j+1] << 8) | data[2j]`（字节序相反）与大端机器上的
+ * `(data[2j] << 8) | data[2j+1]` **都能命中同一张表**，无需运行时端序探测。
+ * 「表对称」因此是这条快路径的**正确性前提**，护栏用「只填一半的字节对表」作负控钉住它。
+ *
+ * **对齐守卫**：`Uint16Array` 要求 `byteOffset` 为偶数，奇数时退回逐字节对推进的
+ * 慢路径（语义完全一致，只是用回移位拼索引）。真实 27 份 `WordDocument` 流实测
+ * `byteOffset` 全为偶数（27/27），但 `readStream` 之外的调用方可能给出奇数偏移的
+ * 子视图，故必须保留回退分支。`len === 0` 单独提前返回：一是空输入本就产出空结果，
+ * 二是**已分离（detached）的 ArrayBuffer** 上视图 `length` 为 0，若仍去构造
+ * `Uint16Array` 会抛 `TypeError`，而旧实现只是安静地返回空桶。
+ *
+ * 等价性：一对两字节里只要有一个是锚点首字节就逐字节查 `LEAD_SLOT`（两个都查），
+ * 两个都不是才整对跳过，因此每个字节的「是否锚点」判定与旧的逐字节版本完全一致；
+ * 命中时按字节递增顺序 push，桶与 `imageCandidates` 仍严格升序。奇数尾字节单独收尾。
+ *
+ * ── 为什么**没有**做「多对展开」与「抽出 pushAt 闭包」 ──────────────────
+ * 两者在隔离微基准里都更快（闭包 + 4 对展开：4.080 → 2.771 ms，60/60 配对胜出），
+ * 但**端到端反而退化 0.788%**（n=400，胜 199/400）。原因是隔离基准在紧循环里把同一
+ * 份 5.77 MB 数据连扫 40 遍，函数被 JIT 升到最高层并内联了闭包；而真实一轮里本函数
+ * 只被调用一两次，运行时停在较低层，闭包调用没有被内联，8 次/组的调用开销反而超过
+ * 展开省下的循环开销。去掉闭包与展开后，同一份源码端到端为 **+1.60%（均值口径）**、
+ * 胜 264/400、18/20 块为正，两次独立测量一致。
+ * ⇒ **教训：调用频次会改变 JIT 层与内联决策，隔离微基准的赢家必须在真实调用模式下
+ * 用端到端配对复核，不能直接落地。**
+ */
 export function buildMagicScanIndex(data: Uint8Array): MagicScanIndex {
   const buckets: number[][] = []
-  for (let k = 0; k < MAGIC_SCAN_LEADS.length; k++) buckets.push([])
+  for (let k = 0; k < MAGIC_LEAD_COUNT; k++) buckets.push([])
   const imageCandidates: number[] = []
 
   const len = data.length
+  if (len === 0) return { data, buckets, imageCandidates }
+
+  if ((data.byteOffset & 1) === 0) {
+    const n = len >> 1
+    const u16 = new Uint16Array(data.buffer, data.byteOffset, n)
+    for (let j = 0; j < n; j++) {
+      if (PAIR_HAS_LEAD[u16[j]] === 0) continue
+      const i = j << 1
+      const s0 = LEAD_SLOT[data[i]]
+      if (s0 !== 0) {
+        if (s0 <= MAGIC_LEAD_COUNT) buckets[s0 - 1].push(i)
+        else imageCandidates.push(i)
+      }
+      const s1 = LEAD_SLOT[data[i + 1]]
+      if (s1 !== 0) {
+        if (s1 <= MAGIC_LEAD_COUNT) buckets[s1 - 1].push(i + 1)
+        else imageCandidates.push(i + 1)
+      }
+    }
+    // 末字节没有配对字节，单独收尾（漏掉它会让「锚点在最后一字节」的输入失配）。
+    if (len & 1) {
+      const slot = LEAD_SLOT[data[len - 1]]
+      if (slot !== 0) {
+        if (slot <= MAGIC_LEAD_COUNT) buckets[slot - 1].push(len - 1)
+        else imageCandidates.push(len - 1)
+      }
+    }
+    return { data, buckets, imageCandidates }
+  }
+
+  // 慢路径：`byteOffset` 为奇数，无法建 `Uint16Array` 视图。语义与快路径一致。
   let i = 0
   while (i + 1 < len) {
     if (PAIR_HAS_LEAD[(data[i] << 8) | data[i + 1]] === 0) {
@@ -107,16 +176,15 @@ export function buildMagicScanIndex(data: Uint8Array): MagicScanIndex {
     }
     const slot = LEAD_SLOT[data[i]]
     if (slot !== 0) {
-      if (slot <= MAGIC_SCAN_LEADS.length) buckets[slot - 1].push(i)
+      if (slot <= MAGIC_LEAD_COUNT) buckets[slot - 1].push(i)
       else imageCandidates.push(i)
     }
     i++
   }
-  // 末字节没有配对字节，单独收尾（漏掉它会让「锚点在最后一字节」的输入失配）。
   if (i < len) {
     const slot = LEAD_SLOT[data[i]]
     if (slot !== 0) {
-      if (slot <= MAGIC_SCAN_LEADS.length) buckets[slot - 1].push(i)
+      if (slot <= MAGIC_LEAD_COUNT) buckets[slot - 1].push(i)
       else imageCandidates.push(i)
     }
   }
