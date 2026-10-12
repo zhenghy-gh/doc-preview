@@ -14,7 +14,7 @@ import type { OleParser, DirectoryEntry } from '../../oleParser'
 import type { FibData } from '../../fibParser'
 import type { ChpxRun } from '../../formatParser'
 import { extractImagesFromStream, imagesToDataUrls, bytesToBase64DataUrl } from '../../imageExtractor'
-import type { ExtractedImage, ImageFormat, ImageWorkCache } from '../../imageExtractor'
+import type { ExtractedImage, ImageFormat, ImageWorkCache, ImageScanIndexView } from '../../imageExtractor'
 import { extractPicturesFromDataStream, parsePicfAt } from '../../pictureParser'
 import type { ParsedPicture } from '../../pictureParser'
 import { parseSummaryInformation, parseDocumentSummaryInformation } from '../../propertyParser'
@@ -42,12 +42,19 @@ readTableStream(fib: FibData, directory: DirectoryEntry[]): Uint8Array | null
  * 稍后会对**同一个** `wordDocData` 再扫一遍，共用同一缓存即可省掉那一次重复
  * 全流扫描（真实 27 份语料实测占全部扫描字节的 41.9%）。省略 `cache` 时与旧
  * 实现逐字节等价。等价性论证见 `imageExtractor.ImageWorkCache`。
+ *
+ * `index`（可选，Round 143）：Round 142 为 `wordDocData` 建的共享魔数扫描索引。
+ * 当被扫窗口恰是那条流本身（`index.data === window`）时，图片扫描直接消费索引里的
+ * 升序候选数组，省掉对同一条流的第二趟全缓冲扫描；窗口被 `scanBudget` 截断
+ * （`subarray` 是新对象）或扫的是 `Data` 流时自动退回逐字节路径。等价性见
+ * `imageExtractor.scanImagesFromStream`。
  */
 export function extractImages(
   ctx: AssetExtractionContext,
   directory: DirectoryEntry[],
   wordDocData?: Uint8Array,
   cache?: ImageWorkCache,
+  index?: ImageScanIndexView,
 ): string[] {
   try {
     const candidates: Uint8Array[] = []
@@ -77,7 +84,7 @@ export function extractImages(
       if (window.length < candidate.length) {
         logger.warn(`图片魔数兜底扫描达预算 ${scanBudget} 字节上限，剩余 ${candidate.length - scanBudget} 字节未扫（PERF-T2 预算化）`)
       }
-      const found = extractImagesFromStream(window, cache)
+      const found = extractImagesFromStream(window, cache, index)
       for (const img of found) {
         if (images.length >= MAX_IMAGES) break
         images.push(img)
@@ -114,6 +121,9 @@ export function extractImages(
  * scanning. Returns structured picture objects instead of plain data URLs.
  *
  * `cache`（可选，Round 139）：仅用于底层的魔数扫描去重，见 `extractImages`。
+ *
+ * `index`（可选，Round 143）：同 `extractImages` —— 只有当被扫流恰是建索引的那条
+ * `wordDocData` 时才生效，`Data` 流路径自动退回逐字节扫描。
  */
 export function extractPictures(
     ctx: AssetExtractionContext,
@@ -121,6 +131,7 @@ export function extractPictures(
     chpxRuns: ChpxRun[] = [],
     wordDocData?: Uint8Array,
     cache?: ImageWorkCache,
+    index?: ImageScanIndexView,
   ): Array<{
     format: string
     dataUrl: string
@@ -160,7 +171,7 @@ export function extractPictures(
       }
 
       if (pictures.length === 0) {
-        const scanned = extractPicturesFromDataStream(dataStreamData, cache)
+        const scanned = extractPicturesFromDataStream(dataStreamData, cache, index)
         pictures.push(...scanned.slice(0, MAX_IMAGES))
       }
     }
@@ -169,7 +180,7 @@ export function extractPictures(
     // has no pictures (common for libwv/non-standard .doc files where
     // images are embedded directly in the document stream).
     if (pictures.length === 0 && wordDocData && wordDocData.length > 0) {
-      const scanned = extractPicturesFromDataStream(wordDocData, cache)
+      const scanned = extractPicturesFromDataStream(wordDocData, cache, index)
       pictures.push(...scanned.slice(0, MAX_IMAGES))
       logger.info(`从 WordDocument 流扫描到 ${pictures.length} 个图片`)
     }

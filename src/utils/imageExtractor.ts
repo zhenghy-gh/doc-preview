@@ -277,6 +277,31 @@ const GIF_LEAD = GIF_SIGNATURE_87[0]
 const BMP_LEAD = BMP_SIGNATURE[0]
 
 /**
+ * 四个图片签名的首字节，**顺序与下面 `LEAD_KIND` 的 kind 分支一致**
+ * （1 = PNG、2 = JPEG、3 = GIF、4 = BMP）。
+ *
+ * Round 143：共享魔数扫描索引（`docparser/magicScanIndex`）需要知道要收集哪些
+ * 首字节的位置，故这里把「首字节清单」作为单一事实来源导出，索引模块直接引用，
+ * 避免两处各写一份而漂移。`tests/magicScanIndex.test.ts` 有断言钉住它与四个签名
+ * 常量的一致性。
+ */
+export const IMAGE_SIGNATURE_LEADS = [PNG_LEAD, JPEG_LEAD, GIF_LEAD, BMP_LEAD]
+
+/**
+ * 共享魔数扫描索引的**最小结构视图**（Round 143）。
+ *
+ * `docparser/magicScanIndex` 的 `MagicScanIndex` 结构性满足它（多出的 `buckets`
+ * 字段不影响）。这里刻意不 `import` 那个模块，以免 imageExtractor ↔ magicScanIndex
+ * 形成循环依赖。
+ */
+export interface ImageScanIndexView {
+  /** 被索引的数据；与传入 `data` 不同身份时一律退回逐字节扫描。 */
+  readonly data: Uint8Array
+  /** 四个图片签名首字节的**升序**候选位置。 */
+  readonly imageCandidates: readonly number[]
+}
+
+/**
  * 256 项「首字节 → 分支号」查找表（Round 108）。0 表示不是任何签名的首字节。
  *
  * 原实现是 `switch (data[i]) { case 0x89: … case 0xFF: … case 0x47: … case 0x42: … }`，
@@ -459,9 +484,37 @@ export function createImageWorkCache(): ImageWorkCache {
 }
 
 /** 无缓存的魔数扫描主体（纯函数，`extractImagesFromStream` 的唯一实现）。 */
-function scanImagesFromStream(data: Uint8Array): ExtractedImage[] {
+function scanImagesFromStream(data: Uint8Array, index?: ImageScanIndexView): ExtractedImage[] {
   const images: ExtractedImage[] = []
   const len = data.length
+
+  // ── Round 143：候选数组路径 ────────────────────────────────────────────
+  // `index` 给出「四个签名首字节的全部位置（升序）」，正是下面逐字节版本**唯一会
+  // 产生副作用**的那些位置：
+  //   - 逐字节版本在每个位置调用 `pushImageAt`，而它首行就查 `LEAD_KIND`，非首字节
+  //     立即 `return -1`，不产生任何副作用；所以等价于「只在首字节位置上调用」。
+  //   - 配对跳过（`i += 2`）只会跳过两个都**不是**首字节的位置，不会漏掉候选。
+  //   - `i = end` 的跳跃在两条路径上完全一致（都在命中后跳到图片末尾）。
+  //   - 末字节：逐字节版本在主循环退出后用 `if (i < len)` 单独收尾，而它必然恰好落在
+  //     `len - 1`；候选数组里若 `len - 1` 是首字节则同样会被访问到（未被跳跃跳过时）。
+  // 因此候选路径与逐字节路径**产出完全相同的图片序列**（同为位置升序）。
+  //
+  // `index.data !== data` 时（例如 `Data` 流与建索引的 `WordDocument` 不是同一条，
+  // 或调用方截断了扫描窗口）一律退回逐字节路径，保证**不传索引 / 索引不匹配 =
+  // 逐字节等价旧实现**。
+  if (index !== undefined && index.data === data) {
+    const candidates = index.imageCandidates
+    let i = 0
+    for (let ci = 0; ci < candidates.length; ci++) {
+      const p = candidates[ci]
+      // 已被上一次 `i = end` 跳跃越过；`i` 单调不减，故游标只需前移。
+      if (p < i) continue
+      const end = pushImageAt(data, p, len, images)
+      i = end > p ? end : p + 1
+    }
+    return images
+  }
+
   let i = 0
 
   // 主循环只处理「有配对」的位置（i ≤ len - 2）；末字节在循环后单独收尾。
@@ -490,14 +543,22 @@ function scanImagesFromStream(data: Uint8Array): ExtractedImage[] {
  *
  * `cache` 省略时行为与历史实现逐字节相同；传入时按视图对象身份复用扫描结果
  * （见 `ImageWorkCache` 的等价性论证）。
+ *
+ * `index`（Round 143，可选）是共享魔数扫描索引：仅当 `index.data === data` 时
+ * 用它替代逐字节扫描，否则自动退回。两者产出的图片序列完全一致，见
+ * `scanImagesFromStream` 的等价性论证。
  */
-export function extractImagesFromStream(data: Uint8Array, cache?: ImageWorkCache): ExtractedImage[] {
+export function extractImagesFromStream(
+  data: Uint8Array,
+  cache?: ImageWorkCache,
+  index?: ImageScanIndexView
+): ExtractedImage[] {
   if (!data || data.length < 8) return []
   if (cache) {
     const hit = cache.scans.get(data)
     if (hit !== undefined) return hit
   }
-  const result = scanImagesFromStream(data)
+  const result = scanImagesFromStream(data, index)
   if (cache) cache.scans.set(data, result)
   return result
 }

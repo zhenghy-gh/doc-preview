@@ -41,6 +41,7 @@ import {
   BMP_SIGNATURE,
   type ImageFormat,
   type ImageWorkCache,
+  type ImageScanIndexView,
 } from './imageExtractor'
 import { readUint16, readUint32, bytesToBase64 } from './binaryReader'
 
@@ -424,14 +425,22 @@ export function parsePngDimensions(data: Uint8Array): { width: number; height: n
  * 内传入 —— 此时若同一个 `wordDocData` 已先被 `extractImages` 扫过，这里直接
  * 复用那份结果，省掉一次全流扫描（真实语料实测占全部扫描字节的 41.9%）。
  * 等价性论证见 `imageExtractor.ImageWorkCache`。
+ *
+ * `index`（可选，Round 143）：Round 142 的共享魔数扫描索引；仅当
+ * `index.data === dataStream` 时生效，否则自动退回逐字节扫描。见
+ * `imageExtractor.scanImagesFromStream`。
  */
-export function extractPicturesFromDataStream(dataStream: Uint8Array, cache?: ImageWorkCache): ParsedPicture[] {
+export function extractPicturesFromDataStream(
+  dataStream: Uint8Array,
+  cache?: ImageWorkCache,
+  index?: ImageScanIndexView,
+): ParsedPicture[] {
   if (!dataStream || dataStream.length < 64) return []
 
   const results: ParsedPicture[] = []
   const seenOffsets = new Set<number>()
 
-  const rawImages = extractImagesFromStream(dataStream, cache)
+  const rawImages = extractImagesFromStream(dataStream, cache, index)
   if (rawImages.length === 0) return []
 
   let scanOffset = 0

@@ -24,6 +24,16 @@ import { extractChartsFromWordDocumentStream } from '../src/utils/chartParser'
 import { extractShapesFromWordDocumentStream } from '../src/utils/shapeParser'
 import { extractEquationsFromWordDocumentStream } from '../src/utils/equationParser'
 import { extractWordArtFromDrawingData } from '../src/utils/wordArtParser'
+import {
+  extractImagesFromStream,
+  bytesEqual,
+  IMAGE_SIGNATURE_LEADS,
+  PNG_SIGNATURE,
+  JPEG_SOI,
+  GIF_SIGNATURE_87,
+  BMP_SIGNATURE,
+  type ImageScanIndexView,
+} from '../src/utils/imageExtractor'
 
 /** 与实现同序的 5 个锚点首字节。 */
 const LEADS = [0xd0, 0x50, 0xf0, 0xef, 0xe0]
@@ -467,5 +477,313 @@ describe('Round 142 魔数扫描索引：线性时间', () => {
     const ms = performance.now() - t
     expect(buckets[4].length).toBeGreaterThan(7000)
     expect(ms, `稀疏建表耗时 ${ms.toFixed(0)} ms`).toBeLessThan(5000)
+  })
+})
+
+// ══════════════════ Round 143：图片魔数扫描并入同一索引 ══════════════════
+//
+// 本轮把 `WordDocument` 流上的**第二趟**全缓冲扫描（`imageExtractor` 的四个图片
+// 签名 0x89/0xFF/0x47/0x42）并入 Round 142 的单趟索引：扫描时把四个首字节的位置
+// 收进一条**升序候选数组**（`MagicScanIndex.imageCandidates`），图片扫描器改为在
+// 候选数组上游走。真实 27 份语料实测两者共扫同一对象 5.414 MB / 11.599 MB = 46.68%。
+//
+// 本段守住四件事：
+//   1. **候选数组完整**：`imageCandidates` == 四个首字节位置的升序并集（无重复、
+//      严格升序、不含非首字节），且在 27 份真实流上非空转。
+//   2. **图片扫描双路径一致**：`extractImagesFromStream(data)`（= 逐字节旧实现）
+//      与传索引版本逐项相同（format + 精确字节范围），覆盖跳跃/末字节/内嵌签名。
+//   3. **回退保障**：索引不属于该流、或窗口被截断时退回逐字节路径；`nextMagicOffset`
+//      对图片首字节（并集桶）必须退回原生 `indexOf`，不能串用。
+//   4. **鉴别力**：慢但等价的对照必须相同；3 个故意改错的候选数组必须与 oracle 不同。
+
+/** 四个图片签名首字节位置的升序并集（oracle，直接线性扫）。 */
+function imageCandidateOracle(data: Uint8Array): number[] {
+  const out: number[] = []
+  for (let i = 0; i < data.length; i++) {
+    if (IMAGE_SIGNATURE_LEADS.includes(data[i])) out.push(i)
+  }
+  return out
+}
+
+/** 慢但等价的对照：两趟计数 + 填充（与单趟 push 写法完全不同）。 */
+function imageCandidateTwoPass(data: Uint8Array): number[] {
+  let n = 0
+  for (let i = 0; i < data.length; i++) if (IMAGE_SIGNATURE_LEADS.includes(data[i])) n++
+  const out = new Array<number>(n)
+  let k = 0
+  for (let i = 0; i < data.length; i++) if (IMAGE_SIGNATURE_LEADS.includes(data[i])) out[k++] = i
+  return out
+}
+
+/** 把图片结果压成可比对字符串（两条路径扫的是同一个 `data`，故 byteOffset 可比）。 */
+function imageKey(imgs: ReadonlyArray<{ format: string; data: Uint8Array }>): string {
+  return imgs.map((im) => `${im.format}@${im.data.byteOffset}+${im.data.length}`).join('|')
+}
+
+/**
+ * 跳跃语义的判别用例：BMP（文件头声明总长 120）内部偏移 40 处嵌一个完整 PNG
+ * （8 字节签名 + length=0 的 IEND 块 ⇒ `findPngEnd` 返回 60）。
+ * 正确实现必须在位置 0 命中 BMP 后**跳到 120**，因而看不到内部的 PNG，只产出 1 张。
+ */
+function bmpWithEmbeddedPng(): Uint8Array {
+  const buf = new Uint8Array(200).fill(0x41)
+  buf[0] = 0x42
+  buf[1] = 0x4d
+  const size = 120
+  buf[2] = size & 0xff
+  buf[3] = (size >> 8) & 0xff
+  buf[4] = (size >> 16) & 0xff
+  buf[5] = (size >> 24) & 0xff
+  buf.set(PNG_SIGNATURE, 40)
+  // length 字段必须为 0（否则 `findPngEnd` 的长度校验会直接判非法）
+  buf[48] = 0
+  buf[49] = 0
+  buf[50] = 0
+  buf[51] = 0
+  buf[52] = 0x49 // IEND
+  buf[53] = 0x45
+  buf[54] = 0x4e
+  buf[55] = 0x44
+  return buf
+}
+
+/** 两张不相邻的 BMP，用来区分「候选顺序」是否被遵守。 */
+function twoBmpStream(): Uint8Array {
+  const buf = new Uint8Array(300).fill(0x41)
+  for (const at of [0, 150]) {
+    buf[at] = 0x42
+    buf[at + 1] = 0x4d
+    const size = 120
+    buf[at + 2] = size & 0xff
+    buf[at + 3] = (size >> 8) & 0xff
+    buf[at + 4] = (size >> 16) & 0xff
+    buf[at + 5] = (size >> 24) & 0xff
+  }
+  return buf
+}
+
+/** 图片签名铺满 / 只在末字节 / 图片跨到流尾等对抗形态。 */
+function adversarialImageStreams(): Uint8Array[] {
+  const cases: Uint8Array[] = [
+    new Uint8Array(0),
+    new Uint8Array([0x89]),
+    new Uint8Array([0x41, 0x41, 0x42, 0x4d]), // BMP 首字节只在末字节（长度不足，不产出）
+    new Uint8Array(64).fill(0x89), // PNG 首字节铺满
+    new Uint8Array(64).fill(0x47), // GIF 首字节铺满
+    new Uint8Array(64).fill(0xff), // JPEG 首字节铺满
+    new Uint8Array(33).fill(0x41), // 无候选
+    bmpWithEmbeddedPng(),
+    twoBmpStream(),
+  ]
+  // JPEG 起头且流内出现 SOS+EOI（走 findJpegEnd 的截断兜底分支）
+  const jpg = new Uint8Array(120).fill(0x41)
+  jpg.set(JPEG_SOI, 0)
+  jpg[2] = 0xff
+  jpg[3] = 0xda
+  jpg[4] = 0x00
+  jpg[5] = 0x02
+  jpg[110] = 0xff
+  jpg[111] = 0xd9
+  cases.push(jpg)
+  // GIF 起头（走 findGifEnd 的 trailer 扫描）
+  const gif = new Uint8Array(96).fill(0x41)
+  gif.set(GIF_SIGNATURE_87, 0)
+  gif[10] = 0x00 // 无全局色表
+  gif[13] = 0x3b // trailer
+  cases.push(gif)
+  return cases
+}
+
+describe('Round 143 图片候选数组：内容完整', () => {
+  it('IMAGE_SIGNATURE_LEADS 与四个签名常量一致且互不重复', () => {
+    expect(IMAGE_SIGNATURE_LEADS).toEqual([
+      PNG_SIGNATURE[0],
+      JPEG_SOI[0],
+      GIF_SIGNATURE_87[0],
+      BMP_SIGNATURE[0],
+    ])
+    expect(new Set(IMAGE_SIGNATURE_LEADS).size).toBe(IMAGE_SIGNATURE_LEADS.length)
+    // 与 Round 142 的 5 个魔数锚点也不得重叠（重叠会让槽位互相覆盖）
+    for (const lead of LEADS) expect(IMAGE_SIGNATURE_LEADS).not.toContain(lead)
+  })
+
+  it('合成/对抗流上候选 == 四个首字节位置的升序并集', () => {
+    for (const buf of [...randomStreams(20261013, 300, 400), ...adversarialImageStreams()]) {
+      expect(buildMagicScanIndex(buf).imageCandidates, `len=${buf.length}`).toEqual(
+        imageCandidateOracle(buf)
+      )
+    }
+  })
+
+  it('27 份真实流上候选完整、严格升序无重复，且非空转', () => {
+    const streams = realWordDocStreams()
+    expect(streams).toHaveLength(27)
+    let total = 0
+    for (const data of streams) {
+      const cands = buildMagicScanIndex(data).imageCandidates
+      expect(cands).toEqual(imageCandidateOracle(data))
+      for (let i = 1; i < cands.length; i++) {
+        expect(cands[i], '候选必须严格升序').toBeGreaterThan(cands[i - 1])
+      }
+      total += cands.length
+    }
+    // 实测四首字节并集 1.71%（98 506 个偏移）；下界断言防止护栏退化为空转。
+    expect(total).toBeGreaterThan(50000)
+  })
+
+  it('候选不得把非首字节收进来（与「收全部字节」区分）', () => {
+    const buf = new Uint8Array(256)
+    for (let i = 0; i < 256; i++) buf[i] = i
+    const cands = buildMagicScanIndex(buf).imageCandidates
+    for (const p of cands) expect(IMAGE_SIGNATURE_LEADS).toContain(buf[p])
+    expect(cands).toEqual(imageCandidateOracle(buf))
+  })
+})
+
+describe('Round 143 图片扫描：传索引与不传索引逐项一致', () => {
+  const corpus = () => [
+    ...realWordDocStreams(),
+    ...adversarialImageStreams(),
+    ...randomStreams(20261014, 200, 300),
+  ]
+
+  it('27 份真实流 + 对抗流 + 随机流上双路径一致', () => {
+    const streams = corpus()
+    let produced = 0
+    for (const data of streams) {
+      const index = buildMagicScanIndex(data)
+      const viaIndex = extractImagesFromStream(data, undefined, index)
+      const viaLinear = extractImagesFromStream(data)
+      expect(imageKey(viaIndex), `len=${data.length} 双路径不一致`).toBe(imageKey(viaLinear))
+      produced += viaLinear.length
+    }
+    // 鉴别力：语料必须真的产出图片，否则本用例只是空转
+    expect(produced).toBeGreaterThan(0)
+  })
+
+  it('跳跃语义：BMP 内部内嵌 PNG 时只产出 BMP（不被内部签名干扰）', () => {
+    const data = bmpWithEmbeddedPng()
+    const index = buildMagicScanIndex(data)
+    // 先把夹具的鉴别力钉死：内部 PNG 确实是一个合法的签名起点、且落在 BMP 区间内。
+    // 少了这条，「夹具失效（内部 PNG 解析不出）导致用例空转」就查不出来。
+    expect(index.imageCandidates[0]).toBe(0)
+    expect(index.imageCandidates).toContain(40)
+    expect(bytesEqual(data, 0, BMP_SIGNATURE)).toBe(true)
+    expect(bytesEqual(data, 40, PNG_SIGNATURE)).toBe(true)
+    expect(40).toBeLessThan(120)
+    const viaIndex = extractImagesFromStream(data, undefined, index)
+    expect(viaIndex).toHaveLength(1)
+    expect(viaIndex[0].format).toBe('bmp')
+    expect(viaIndex[0].data.length).toBe(120)
+    expect(imageKey(viaIndex)).toBe(imageKey(extractImagesFromStream(data)))
+  })
+
+  it('多图流的产出顺序与逐字节路径一致', () => {
+    const data = twoBmpStream()
+    const index = buildMagicScanIndex(data)
+    const viaIndex = extractImagesFromStream(data, undefined, index)
+    expect(viaIndex).toHaveLength(2)
+    expect(viaIndex[0].data.byteOffset).toBe(0)
+    expect(viaIndex[1].data.byteOffset).toBe(150)
+    expect(imageKey(viaIndex)).toBe(imageKey(extractImagesFromStream(data)))
+  })
+
+  it('索引不属于该流、或窗口被截断时退回逐字节路径', () => {
+    const full = twoBmpStream()
+    const index = buildMagicScanIndex(full)
+    // 另一条流 + 该索引 → 必须与「不传索引」相同
+    const other = new Uint8Array(300).fill(0x41)
+    other.set(BMP_SIGNATURE, 20)
+    const size = 120
+    other[22] = size & 0xff
+    other[23] = (size >> 8) & 0xff
+    other[24] = (size >> 16) & 0xff
+    other[25] = (size >> 24) & 0xff
+    expect(imageKey(extractImagesFromStream(other, undefined, index))).toBe(
+      imageKey(extractImagesFromStream(other))
+    )
+    // 截断窗口（subarray 是新对象）→ 索引身份不匹配 → 退回
+    const window = full.subarray(0, 200)
+    expect(imageKey(extractImagesFromStream(window, undefined, index))).toBe(
+      imageKey(extractImagesFromStream(window))
+    )
+    // 不传索引 = 逐字节旧实现
+    expect(imageKey(extractImagesFromStream(full, undefined, undefined))).toBe(
+      imageKey(extractImagesFromStream(full))
+    )
+  })
+
+  it('nextMagicOffset 对图片首字节退回原生（并集候选不能当单锚点桶用）', () => {
+    const data = twoBmpStream()
+    const index = buildMagicScanIndex(data)
+    for (const lead of IMAGE_SIGNATURE_LEADS) {
+      for (const from of [0, 1, 100, 150, data.length, data.length + 5]) {
+        expect(nextMagicOffset(index, data, lead, from), `lead=0x${lead.toString(16)} from=${from}`).toBe(
+          data.indexOf(lead, from)
+        )
+      }
+    }
+    // 5 个魔数锚点仍走桶（等价性由 Round 142 的用例覆盖，这里只钉住图片首字节的分流）
+    expect(index.buckets).toHaveLength(LEADS.length)
+  })
+})
+
+describe('Round 143 图片候选数组：护栏鉴别力', () => {
+  it('慢但等价的对照（两趟计数 + 填充）与 oracle 相同', () => {
+    for (const buf of [...randomStreams(20261015, 200, 400), ...adversarialImageStreams()]) {
+      expect(imageCandidateTwoPass(buf), `len=${buf.length}`).toEqual(imageCandidateOracle(buf))
+      expect(buildMagicScanIndex(buf).imageCandidates).toEqual(imageCandidateTwoPass(buf))
+    }
+  })
+
+  it('负控 A（候选漏掉 BMP 首字节）必须漏产出图片', () => {
+    const data = twoBmpStream()
+    const index = buildMagicScanIndex(data)
+    const broken: ImageScanIndexView = {
+      data,
+      imageCandidates: index.imageCandidates.filter((p) => data[p] !== BMP_SIGNATURE[0]),
+    }
+    expect(extractImagesFromStream(data, undefined, index)).toHaveLength(2)
+    expect(extractImagesFromStream(data, undefined, broken)).toHaveLength(0)
+  })
+
+  it('负控 B（候选逆序）必须与 oracle 不同', () => {
+    const data = twoBmpStream()
+    const index = buildMagicScanIndex(data)
+    const reversed: ImageScanIndexView = {
+      data,
+      imageCandidates: [...index.imageCandidates].reverse(),
+    }
+    const viaReversed = extractImagesFromStream(data, undefined, reversed)
+    expect(imageKey(viaReversed)).not.toBe(imageKey(extractImagesFromStream(data, undefined, index)))
+    expect(viaReversed).toHaveLength(1)
+  })
+
+  it('负控 C（候选含重复位置）必须与 oracle 不同', () => {
+    const data = twoBmpStream()
+    const index = buildMagicScanIndex(data)
+    const dup: ImageScanIndexView = {
+      data,
+      imageCandidates: [index.imageCandidates[0], index.imageCandidates[0], ...index.imageCandidates.slice(1)],
+    }
+    // 重复位置会被「已被跳跃越过」规则吃掉：这里用一个不含跳跃的短流暴露差异
+    const single = new Uint8Array(60).fill(0x41)
+    single.set(BMP_SIGNATURE, 0)
+    const singleSize = 54
+    single[2] = singleSize & 0xff
+    single[3] = (singleSize >> 8) & 0xff
+    single[4] = (singleSize >> 16) & 0xff
+    single[5] = (singleSize >> 24) & 0xff
+    const singleIndex = buildMagicScanIndex(single)
+    const singleDup: ImageScanIndexView = {
+      data: single,
+      imageCandidates: [singleIndex.imageCandidates[0], ...singleIndex.imageCandidates],
+    }
+    expect(imageKey(extractImagesFromStream(single, undefined, singleIndex))).toBe(
+      imageKey(extractImagesFromStream(single))
+    )
+    // 重复候选与 oracle 不同（oracle 只有一个候选位置）
+    expect(singleDup.imageCandidates.length).not.toBe(singleIndex.imageCandidates.length)
+    expect(dup.imageCandidates.length).not.toBe(index.imageCandidates.length)
   })
 })

@@ -34,19 +34,45 @@
  *
  * 回退保障：`index` 为 `undefined`、`index.data !== data` 或锚点不在索引内时
  * 一律退回原生 `data.indexOf`，因此**不传索引 = 逐字节等价旧实现**。
+ *
+ * ── Round 143：把图片扫描也并进这一趟 ──────────────────────────────────
+ * 同一份 `parseWithFormat` 里，`WordDocument` 流还会被 `imageExtractor` 的图片
+ * 魔数扫描器**再整扫一趟**（四个签名首字节 0x89/0xFF/0x47/0x42）。实测两者共扫
+ * 同一对象 **5.414 MB / 11.599 MB = 46.68%**。故本模块的单趟扫描改为覆盖 9 个
+ * 锚点：5 个魔数照旧分桶，4 个图片首字节收进一条**升序候选数组**
+ * （`imageCandidates`），图片扫描器改为在候选数组上游走（见
+ * `imageExtractor.scanImagesFromStream` 的等价性论证），于是那 5.4 MB 不再被扫第二遍。
+ *
+ * 注意 `imageCandidates` 是四个首字节的**并集**，不能当作单锚点桶使用 —— 因此
+ * `nextMagicOffset` 对图片首字节（槽位 > 5）显式退回原生 `indexOf`。
  */
+
+import { IMAGE_SIGNATURE_LEADS } from '../imageExtractor'
 
 /** 参与合并扫描的魔数首字节：图表 OLE/ZIP、shapes FDG、equations、wordart。 */
 const MAGIC_SCAN_LEADS = [0xd0, 0x50, 0xf0, 0xef, 0xe0]
 
-/** 首字节 → 桶下标 + 1；0 表示该字节不是锚点。 */
+/**
+ * Round 143：单趟扫描覆盖的**全部**锚点 = 5 个魔数首字节 + 4 个图片签名首字节。
+ *
+ * 动机：同一次 `parseWithFormat` 里，`WordDocument` 流会被 `buildMagicScanIndex`
+ * 与 `scanImagesFromStream` **各扫一整趟**。真实 27 份语料实测两者共扫同一对象
+ * **5.414 MB / 11.599 MB = 46.68%**（`r143-imgprobe.mjs`）。把 9 个锚点并进同一次
+ * 扫描，图片扫描器改为消费索引里的升序候选数组，即可省掉其中一整趟。
+ *
+ * 代价：并集密度从 0.970%（5 锚点）升到 2.68%（9 锚点），单趟本身慢约 18%
+ * （配对跳过命中率下降）；但换来的是少扫 5.4 MB，净收益为正（见 Round 143 changelog）。
+ */
+const SCAN_LEADS = [...MAGIC_SCAN_LEADS, ...IMAGE_SIGNATURE_LEADS]
+
+/** 首字节 → 槽位（1..5 为魔数，6..9 为图片）；0 表示该字节不是任何锚点。 */
 const LEAD_SLOT = new Uint8Array(256)
 
-/** 字节对 `(hi << 8) | lo` 中是否含锚点首字节；用于 2 字节跳跃快路径。 */
+/** 字节对 `(hi << 8) | lo` 中是否含任一锚点首字节；用于 2 字节跳跃快路径。 */
 const PAIR_HAS_LEAD = new Uint8Array(65536)
 
-for (let k = 0; k < MAGIC_SCAN_LEADS.length; k++) {
-  const lead = MAGIC_SCAN_LEADS[k]
+for (let k = 0; k < SCAN_LEADS.length; k++) {
+  const lead = SCAN_LEADS[k]
   LEAD_SLOT[lead] = k + 1
   for (let other = 0; other < 256; other++) {
     PAIR_HAS_LEAD[(lead << 8) | other] = 1
@@ -59,12 +85,18 @@ export interface MagicScanIndex {
   readonly data: Uint8Array
   /** 与 `MAGIC_SCAN_LEADS` 同序的升序偏移桶。 */
   readonly buckets: number[][]
+  /**
+   * 与 `IMAGE_SIGNATURE_LEADS` 对应的**升序**候选位置（四个首字节的并集）。
+   * 供 `imageExtractor.scanImagesFromStream` 替代逐字节扫描。
+   */
+  readonly imageCandidates: number[]
 }
 
-/** 一趟扫过 `data`，把 5 个锚点的全部偏移按锚点分桶。 */
+/** 一趟扫过 `data`，把 5 个魔数锚点分桶、4 个图片首字节收进升序候选数组。 */
 export function buildMagicScanIndex(data: Uint8Array): MagicScanIndex {
   const buckets: number[][] = []
   for (let k = 0; k < MAGIC_SCAN_LEADS.length; k++) buckets.push([])
+  const imageCandidates: number[] = []
 
   const len = data.length
   let i = 0
@@ -74,20 +106,29 @@ export function buildMagicScanIndex(data: Uint8Array): MagicScanIndex {
       continue
     }
     const slot = LEAD_SLOT[data[i]]
-    if (slot !== 0) buckets[slot - 1].push(i)
+    if (slot !== 0) {
+      if (slot <= MAGIC_SCAN_LEADS.length) buckets[slot - 1].push(i)
+      else imageCandidates.push(i)
+    }
     i++
   }
   // 末字节没有配对字节，单独收尾（漏掉它会让「锚点在最后一字节」的输入失配）。
   if (i < len) {
     const slot = LEAD_SLOT[data[i]]
-    if (slot !== 0) buckets[slot - 1].push(i)
+    if (slot !== 0) {
+      if (slot <= MAGIC_SCAN_LEADS.length) buckets[slot - 1].push(i)
+      else imageCandidates.push(i)
+    }
   }
 
-  return { data, buckets }
+  return { data, buckets, imageCandidates }
 }
 
 /**
  * `data.indexOf(lead, from)` 的等价替代：命中索引时在桶上二分，否则退回原生。
+ *
+ * 只有 5 个**魔数**锚点有桶；传入图片首字节（槽位 > 5）时同样退回原生，因为
+ * `imageCandidates` 是四个首字节的并集、按单一首字节查询会串结果。
  */
 export function nextMagicOffset(
   index: MagicScanIndex | undefined,
@@ -98,7 +139,7 @@ export function nextMagicOffset(
   if (index === undefined || index.data !== data) return data.indexOf(lead, from)
   if (lead < 0 || lead > 0xff) return data.indexOf(lead, from)
   const slot = LEAD_SLOT[lead]
-  if (slot === 0) return data.indexOf(lead, from)
+  if (slot === 0 || slot > MAGIC_SCAN_LEADS.length) return data.indexOf(lead, from)
 
   // 与 `indexOf` 的 `ToIntegerOrInfinity` 对齐：**向零截断**、负数相对流末尾、NaN 视作 0。
   let target = Math.trunc(from)

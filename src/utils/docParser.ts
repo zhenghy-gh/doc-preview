@@ -52,7 +52,7 @@ import { extractChartsFromDirectory, extractChartsFromWordDocumentStream } from 
 import type { ChartInfo } from './chartParser'
 import { extractWordArtFromDirectory, extractWordArtFromDrawingData } from './wordArtParser'
 import type { WordArtInfo } from './wordArtParser'
-import { buildMagicScanIndex } from './docparser/magicScanIndex'
+import { buildMagicScanIndex, type MagicScanIndex } from './docparser/magicScanIndex'
 
 // ═══ T4-P1 docparser 八模块委托导入 ═══
 import { extractImages, extractPictures, extractProperties, extractDop } from './docparser/assets/documentAssets'
@@ -234,6 +234,20 @@ export class DocParser {
    */
   private readonly imageWorkCache: ImageWorkCache = createImageWorkCache()
 
+  /**
+   * Round 143：同一次 `parseWithFormat()` 内为 `WordDocument` 流建的共享魔数扫描索引。
+   *
+   * 由 `parseFormatRuns` 在四个魔数扫描器之前惰性建一次；`extractImages` /
+   * `extractPictures` 随后对**同一条** `wordDocData` 再做图片魔数扫描时直接消费
+   * 索引里的升序候选数组，省掉第二趟全流扫描（实测两者共扫同一对象
+   * 5.414 MB / 11.599 MB = 46.68%）。
+   *
+   * 只对**同一条流**有效：`imageExtractor` 内部按 `index.data === data` 判身份，
+   * 扫 `Data` 流或窗口被 `scanBudget` 截断时自动退回逐字节路径。每次
+   * `parseWithFormat()` 开始清空，不跨解析驻留。
+   */
+  private magicScanIndex: MagicScanIndex | undefined
+
   constructor(buffer: ArrayBuffer, maxScanBytes?: number) {
     this.buffer = buffer
     this.ole = new OleParser(buffer)
@@ -310,6 +324,8 @@ export class DocParser {
     // Round 139：每次解析开始时清空图片扫描缓存，保证缓存只服务于「同一次解析」
     // （同一视图对象在两次 parseWithFormat 之间可能对应被改写过的 buffer）。
     this.imageWorkCache.scans.clear()
+    // Round 143：共享魔数扫描索引同样只服务于同一次解析。
+    this.magicScanIndex = undefined
     try {
       logger.info('开始解析带格式的 DOC 文件')
       onProgress?.('verifying', 5)
@@ -992,8 +1008,11 @@ export class DocParser {
     // 合计 5 趟原生 `indexOf`（shapes 0xF0 / equations 0xEF / charts 0xD0+0x50 /
     // wordart 0xE0）。这里为这条流建一次共享索引，把 5 趟合并成一趟。
     // 索引只在同一次 parse 内、且只对同一条流生效；不传时各扫描器逐字节等价旧实现。
+    // Round 143：索引同时挂到实例上，供后面的 `extractImages` / `extractPictures`
+    // 对**同一条** `wordDocData` 做图片魔数扫描时复用（省掉第二趟全流扫描）。
     const magicIndex =
       wordDocData && wordDocData.length > 0 ? buildMagicScanIndex(wordDocData) : undefined
+    this.magicScanIndex = magicIndex
 
     // Parse shapes (Office Art Drawing Container)
     // Floating images have shape anchors that describe their position/size
@@ -1659,11 +1678,11 @@ export class DocParser {
   }
 
   private extractImages(directory: DirectoryEntry[], wordDocData?: Uint8Array): string[] {
-    return extractImages(this.assetCtx, directory, wordDocData, this.imageWorkCache)
+    return extractImages(this.assetCtx, directory, wordDocData, this.imageWorkCache, this.magicScanIndex)
   }
 
   private extractPictures(directory: DirectoryEntry[], chpxRuns: ChpxRun[] = [], wordDocData?: Uint8Array) {
-    return extractPictures(this.assetCtx, directory, chpxRuns, wordDocData, this.imageWorkCache)
+    return extractPictures(this.assetCtx, directory, chpxRuns, wordDocData, this.imageWorkCache, this.magicScanIndex)
   }
 
   private extractProperties(directory: DirectoryEntry[]): DocumentProperties | null {
