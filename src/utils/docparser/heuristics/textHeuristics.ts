@@ -362,7 +362,14 @@ export function detectCharacterStyles(text: string): CharStyleSegment[] {
     }
 
     const styles: CharStyleSegment[] = []
-    let currentStyle: CharStyle | null = null
+    // Round 144：慢路径原先**每个字符**都物化一个 CharStyle 对象，再交给 isSameStyle
+    // 与上一字符比较。真实 27 份语料实测：慢路径每轮迭代 241,756 字符、最终只产出
+    // 1,578 个样式段 ⇒ 99.3% 的对象是纯浪费（也是 GC 的主要来源之一）。
+    // 这里改为只跟踪标量 (fontName, underline)，在**真正产出一个样式段时**才物化对象。
+    // 等价性见 `tests/textHeuristics.round144.test.ts` 的旧实现逐行转写 oracle。
+    let hasCurrent = false
+    let currentFont: string | undefined
+    let currentUnderline = false
     let styleStart = 0
     // Running count of CJK chars in text[0, i). Lets us decide the fallback Chinese
     // font in O(1) per char instead of re-scanning the whole prefix (was O(n^2)).
@@ -383,34 +390,57 @@ export function detectCharacterStyles(text: string): CharStyleSegment[] {
       const isLowerCase = code >= 0x61 && code <= 0x7a
       const isWhitespace = isWhitespaceCode(code)
 
-      let charStyle: CharStyle | null = null
-      if (isWhitespace) charStyle = { underline: false }
+      // 与旧实现的物化结果逐键对应：空白字符**没有** fontName 键（undefined），
+      // 其余分支都有；且只有数字字符可能带下划线，其余分支恒为 false。
+      let fontName: string | undefined
+      let underline = false
+      if (isWhitespace) fontName = undefined
       else if (isDigit) {
         if (dateUnitPositions === null) dateUnitPositions = collectDateUnitPositions(text)
-        charStyle = { fontName: 'Times New Roman', underline: shouldHaveUnderline(text, i, dateUnitPositions) }
+        fontName = 'Times New Roman'
+        underline = shouldHaveUnderline(text, i, dateUnitPositions)
       }
-      else if (isUpperCase || isLowerCase) charStyle = { fontName: 'Times New Roman', underline: false }
-      else if (isChinese) charStyle = { fontName: '仿宋', underline: false }
+      else if (isUpperCase || isLowerCase) fontName = 'Times New Roman'
+      else if (isChinese) fontName = '仿宋'
       else {
         // Fallback font decision based on CJK density of the preceding text.
-        const fontName = (i === 0 || chineseSoFar === 0)
+        fontName = (i === 0 || chineseSoFar === 0)
           ? 'Times New Roman'
           : (chineseSoFar / i > 0.7 ? '宋体' : '仿宋')
-        charStyle = { fontName, underline: false }
       }
 
       if (isChinese) chineseSoFar++
 
-      // isSameStyle 是纯函数：原来在同一个分支里连调两次，这里只算一次。
-      if (currentStyle) {
-        if (isSameStyle(currentStyle, charStyle)) continue
-        styles.push({ start: styleStart, end: i, style: currentStyle })
+      // 内联 isSameStyle 的语义：任一方 fontName 为 undefined 时只比较 underline，
+      // 否则同时比较 fontName 与 underline。
+      if (hasCurrent) {
+        if (
+          (currentFont === undefined || fontName === undefined || currentFont === fontName) &&
+          currentUnderline === underline
+        ) continue
+        styles.push({
+          start: styleStart,
+          end: i,
+          style: currentFont === undefined
+            ? { underline: currentUnderline }
+            : { fontName: currentFont, underline: currentUnderline },
+        })
       }
-      currentStyle = charStyle
+      currentFont = fontName
+      currentUnderline = underline
+      hasCurrent = true
       styleStart = i
     }
 
-    if (currentStyle) styles.push({ start: styleStart, end: text.length, style: currentStyle })
+    if (hasCurrent) {
+      styles.push({
+        start: styleStart,
+        end: text.length,
+        style: currentFont === undefined
+          ? { underline: currentUnderline }
+          : { fontName: currentFont, underline: currentUnderline },
+      })
+    }
 
     // 冒号位置已在上面那次遍历里收集完（Round 106），后处理见 applyColonUnderline。
     applyColonUnderline(styles, colonPositions, text.length)
