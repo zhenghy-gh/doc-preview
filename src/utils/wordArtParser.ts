@@ -1,5 +1,6 @@
 import { logger } from './logger'
 import { DirectoryEntry, StreamData } from './oleParser'
+import { nextMagicOffset, type MagicScanIndex } from './docparser/magicScanIndex'
 
 export type WordArtEffect = 
   | 'gradient' | 'shadow' | 'emboss' | 'bevel' | 'outline'
@@ -240,7 +241,7 @@ export function extractWordArtFromDirectory(
   return wordArts
 }
 
-export function extractWordArtFromDrawingData(data: Uint8Array): WordArtInfo[] {
+export function extractWordArtFromDrawingData(data: Uint8Array, magicIndex?: MagicScanIndex): WordArtInfo[] {
   const wordArts: WordArtInfo[] = []
 
   // 与原来的 `for (let offset = 0; offset < data.length - 100; offset++)` 覆盖
@@ -262,7 +263,7 @@ export function extractWordArtFromDrawingData(data: Uint8Array): WordArtInfo[] {
       //   纯逐字节        11.9 ms /  1.8 ms
       //   每次都跳         2.9 ms / 10.2 ms   ← 全 0xE0 时退化 5.5x
       //   本实现           2.9 ms /  1.3 ms   ← 两边都拿到
-      offset = data.indexOf(WORDART_MARKER_LEAD, offset + 1)
+      offset = nextMagicOffset(magicIndex, data, WORDART_MARKER_LEAD, offset + 1)
       if (offset < 0 || offset >= limit) break
       continue
     }

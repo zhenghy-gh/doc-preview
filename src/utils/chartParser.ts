@@ -1,6 +1,7 @@
 import { logger } from './logger'
 import { DirectoryEntry, StreamData } from './oleParser'
 import { extractImagesFromStream, imagesToDataUrls } from './imageExtractor'
+import { nextMagicOffset, type MagicScanIndex } from './docparser/magicScanIndex'
 
 // 图表类型族（ChartType / ChartSubtype / ChartInfo）原先在本模块与 docFormat.ts
 // 各定义一份，结构逐字相同。现以 docFormat.ts 为唯一来源，此处按原符号名再导出，
@@ -184,7 +185,15 @@ export function extractChartsFromDirectory(
  * 真实语料实测：0xD0 密度 0.115 %、0x50 密度 0.528 %（合计 0.64 %），
  * 即约 99.4 % 的偏移被 `indexOf` 原生搜索一次性跨过。
  */
-export function extractChartsFromWordDocumentStream(data: Uint8Array): ChartInfo[] {
+/**
+ * 从 `WordDocument` 流里找 OLE / ZIP 两种容器签名。
+ *
+ * Round 142：可选的 `magicIndex` 由调用方在同一次 parse 内为同一条流构建一次，
+ * 供本函数与 shapes / equations / wordart 三个扫描器共用（原先四个扫描器合计
+ * 要在这条流上跑 5 趟原生 `indexOf`）。`magicIndex` 省略或不属于 `data` 时
+ * `nextMagicOffset` 自动退回原生 `indexOf`，逐字节等价旧实现。
+ */
+export function extractChartsFromWordDocumentStream(data: Uint8Array, magicIndex?: MagicScanIndex): ChartInfo[] {
   const charts: ChartInfo[] = []
 
   const limit = data.length - 100
@@ -192,20 +201,20 @@ export function extractChartsFromWordDocumentStream(data: Uint8Array): ChartInfo
 
   // 耗尽哨兵：必须大于任何合法偏移与 limit。
   const EXHAUSTED = data.length + 1
-  let oleAt = data.indexOf(0xD0, 0)
+  let oleAt = nextMagicOffset(magicIndex, data, 0xD0, 0)
   if (oleAt < 0) oleAt = EXHAUSTED
-  let zipAt = data.indexOf(0x50, 0)
+  let zipAt = nextMagicOffset(magicIndex, data, 0x50, 0)
   if (zipAt < 0) zipAt = EXHAUSTED
   let from = 0
 
   for (;;) {
     // 产出图表后 from 会跳到 endOffset + 5，落后的游标需要补齐。
     if (oleAt < from) {
-      oleAt = data.indexOf(0xD0, from)
+      oleAt = nextMagicOffset(magicIndex, data, 0xD0, from)
       if (oleAt < 0) oleAt = EXHAUSTED
     }
     if (zipAt < from) {
-      zipAt = data.indexOf(0x50, from)
+      zipAt = nextMagicOffset(magicIndex, data, 0x50, from)
       if (zipAt < 0) zipAt = EXHAUSTED
     }
 
@@ -221,11 +230,11 @@ export function extractChartsFromWordDocumentStream(data: Uint8Array): ChartInfo
 
     // 消费游标（两个首字节不同，故至多命中一个分支）。
     if (offset === oleAt) {
-      oleAt = data.indexOf(0xD0, offset + 1)
+      oleAt = nextMagicOffset(magicIndex, data, 0xD0, offset + 1)
       if (oleAt < 0) oleAt = EXHAUSTED
     }
     if (offset === zipAt) {
-      zipAt = data.indexOf(0x50, offset + 1)
+      zipAt = nextMagicOffset(magicIndex, data, 0x50, offset + 1)
       if (zipAt < 0) zipAt = EXHAUSTED
     }
 

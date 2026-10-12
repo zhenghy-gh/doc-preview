@@ -52,6 +52,7 @@ import { extractChartsFromDirectory, extractChartsFromWordDocumentStream } from 
 import type { ChartInfo } from './chartParser'
 import { extractWordArtFromDirectory, extractWordArtFromDrawingData } from './wordArtParser'
 import type { WordArtInfo } from './wordArtParser'
+import { buildMagicScanIndex } from './docparser/magicScanIndex'
 
 // ═══ T4-P1 docparser 八模块委托导入 ═══
 import { extractImages, extractPictures, extractProperties, extractDop } from './docparser/assets/documentAssets'
@@ -987,6 +988,13 @@ export class DocParser {
     }
 /* v8 ignore stop */
 
+    // Round 142：下面四个扫描器都在同一条 `wordDocData` 上做全缓冲魔数查找，
+    // 合计 5 趟原生 `indexOf`（shapes 0xF0 / equations 0xEF / charts 0xD0+0x50 /
+    // wordart 0xE0）。这里为这条流建一次共享索引，把 5 趟合并成一趟。
+    // 索引只在同一次 parse 内、且只对同一条流生效；不传时各扫描器逐字节等价旧实现。
+    const magicIndex =
+      wordDocData && wordDocData.length > 0 ? buildMagicScanIndex(wordDocData) : undefined
+
     // Parse shapes (Office Art Drawing Container)
     // Floating images have shape anchors that describe their position/size
     try {
@@ -1001,7 +1009,7 @@ export class DocParser {
         }
       }
       if (wordDocData && wordDocData.length > 0) {
-        const docShapes = extractShapesFromWordDocumentStream(wordDocData)
+        const docShapes = extractShapesFromWordDocumentStream(wordDocData, magicIndex)
         for (const shape of docShapes) {
           if (!shapes.some(s => s.spid === shape.spid)) {
             shapes.push(shape)
@@ -1028,7 +1036,7 @@ export class DocParser {
       }
 
       if (wordDocData && wordDocData.length > 0) {
-        const docEquations = extractEquationsFromWordDocumentStream(wordDocData)
+        const docEquations = extractEquationsFromWordDocumentStream(wordDocData, magicIndex)
         for (const eq of docEquations) {
           if (!equations.some(e => e.eqnText === eq.eqnText)) {
             equations.push(eq)
@@ -1055,7 +1063,7 @@ export class DocParser {
       }
 
       if (wordDocData && wordDocData.length > 0) {
-        const docCharts = extractChartsFromWordDocumentStream(wordDocData)
+        const docCharts = extractChartsFromWordDocumentStream(wordDocData, magicIndex)
         for (const chart of docCharts) {
           if (!charts.some(c => c.name === chart.name)) {
             charts.push(chart)
@@ -1082,7 +1090,7 @@ export class DocParser {
       }
 
       if (wordDocData && wordDocData.length > 0) {
-        const docWordArts = extractWordArtFromDrawingData(wordDocData)
+        const docWordArts = extractWordArtFromDrawingData(wordDocData, magicIndex)
         for (const wa of docWordArts) {
           if (!wordArts.some(w => w.name === wa.name && w.text === wa.text)) {
             wordArts.push(wa)

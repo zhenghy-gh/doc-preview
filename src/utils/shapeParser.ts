@@ -34,6 +34,7 @@
  */
 
 import { readUint16, readUint32, readInt32 } from './binaryReader'
+import { nextMagicOffset, type MagicScanIndex } from './docparser/magicScanIndex'
 
 export type ShapeType =
   | 'rectangle'
@@ -272,7 +273,13 @@ function parseFdg(data: Uint8Array, offset: number): ShapeInfo[] {
   return shapes
 }
 
-function extractShapes(data: Uint8Array): ShapeInfo[] {
+/**
+ * 逐偏移扫描 FDG 记录头。
+ *
+ * Round 142：可选的 `magicIndex` 供 `WordDocument` 调用方复用同一次 parse 内
+ * 已建好的共享扫描索引；省略或不属于 `data` 时退回原生 `indexOf`。
+ */
+function extractShapes(data: Uint8Array, magicIndex?: MagicScanIndex): ShapeInfo[] {
   if (!data || data.length < 64) return []
 
   const shapes: ShapeInfo[] = []
@@ -311,7 +318,7 @@ function extractShapes(data: Uint8Array): ShapeInfo[] {
         offset++
         continue
       }
-      const p = data.indexOf(FDG_TYPE_HI, offset + 4)
+      const p = nextMagicOffset(magicIndex, data, FDG_TYPE_HI, offset + 4)
       if (p < 0) break
       offset = p - 3
       continue
@@ -341,6 +348,6 @@ export function extractShapesFromDataStream(dataStream: Uint8Array): ShapeInfo[]
   return extractShapes(dataStream)
 }
 
-export function extractShapesFromWordDocumentStream(wordDocData: Uint8Array): ShapeInfo[] {
-  return extractShapes(wordDocData)
+export function extractShapesFromWordDocumentStream(wordDocData: Uint8Array, magicIndex?: MagicScanIndex): ShapeInfo[] {
+  return extractShapes(wordDocData, magicIndex)
 }

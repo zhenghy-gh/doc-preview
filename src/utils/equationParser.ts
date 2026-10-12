@@ -1,6 +1,7 @@
 import { logger } from './logger'
 import { DirectoryEntry, StreamData } from './oleParser'
 import { readUint16, readUint32 } from './binaryReader'
+import { nextMagicOffset, type MagicScanIndex } from './docparser/magicScanIndex'
 
 export interface EquationInfo {
   id: number
@@ -141,7 +142,7 @@ export function extractEquationsFromDirectory(
   return equations
 }
 
-export function extractEquationsFromWordDocumentStream(data: Uint8Array): EquationInfo[] {
+export function extractEquationsFromWordDocumentStream(data: Uint8Array, magicIndex?: MagicScanIndex): EquationInfo[] {
   const equations: EquationInfo[] = []
   const limit = data.length - 100
   let offset = 0
@@ -157,7 +158,7 @@ export function extractEquationsFromWordDocumentStream(data: Uint8Array): Equati
     // 输入上每次只前进 1 字节、却多付一次原生调用，反而比逐字节慢。
     // 实测（真实语料 6.79x / 1 MB 全 0xEF 1.33x）——两端都拿到。
     if (data[offset] !== EQN_MAGIC_LEAD) {
-      offset = data.indexOf(EQN_MAGIC_LEAD, offset + 1)
+      offset = nextMagicOffset(magicIndex, data, EQN_MAGIC_LEAD, offset + 1)
       if (offset < 0 || offset >= limit) break
       continue
     }
