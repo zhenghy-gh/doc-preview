@@ -248,6 +248,24 @@ export class DocParser {
    */
   private magicScanIndex: MagicScanIndex | undefined
 
+  /**
+   * Round 146：同一次解析内按 `which`(0|1) 共享的表格流（0Table/1Table）解析结果。
+   *
+   * 一次 `parseWithFormat()` 经 5 个上游入口反复调 `findTableStream`，每次都
+   * `readStream` 出一份新的表格流拷贝（真实 27 份语料实测：141 次调用、
+   * 重复读取 4.78 MB，占全部 readStream 重复字节的 77.8%）。这里把结果按
+   * `which` 缓存，`parse()` / `parseWithFormat()` 开始处清空，保证缓存只服务
+   * 于「同一次解析」——同一 OLE 文件在两次解析之间可能被改写（Round 139
+   * ImageWorkCache 同模式）。
+   *
+   * 语义等价的前提：所有表格流消费方**只读**（已逐一读码确认：subarray、
+   * 边界检查后的读表解析；`tests/clxReader.tableStreamCache.test.ts` 用
+   * 27 份真实流守住「消费后字节不变」）。`OleParser.readStream` 本体不动，
+   * 其「每次返回调用方独占副本」的公开契约（tests/oleParser.test.ts:790-799）
+   * 不受影响。
+   */
+  private readonly tableStreamCache = new Map<0 | 1, StreamData | null>()
+
   constructor(buffer: ArrayBuffer, maxScanBytes?: number) {
     this.buffer = buffer
     this.ole = new OleParser(buffer)
@@ -267,6 +285,8 @@ export class DocParser {
   parse(): { text: string; success: boolean; error?: string } {
     try {
       logger.info('开始解析 DOC 文件')
+      // Round 146：表格流缓存只服务于同一次解析，入口处清空。
+      this.tableStreamCache.clear()
 
       if (!this.ole.isOleFile()) {
         const error = this.ole.getFormatErrorString()
@@ -326,6 +346,8 @@ export class DocParser {
     this.imageWorkCache.scans.clear()
     // Round 143：共享魔数扫描索引同样只服务于同一次解析。
     this.magicScanIndex = undefined
+    // Round 146：表格流缓存同理，每次解析开始清空。
+    this.tableStreamCache.clear()
     try {
       logger.info('开始解析带格式的 DOC 文件')
       onProgress?.('verifying', 5)
@@ -1708,6 +1730,7 @@ export class DocParser {
       readUint16: clxReadUint16,
       readUint32: clxReadUint32,
       readTableStream: this.readTableStream.bind(this),
+      tableStreams: this.tableStreamCache,
     }
   }
 

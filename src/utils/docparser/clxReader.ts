@@ -13,7 +13,7 @@
  * 纯度：禁 import vue/.vue、禁反向 import ../docParser（契约 §2.2 规则 2）。
  */
 import { logger } from '../logger'
-import type { OleParser, DirectoryEntry } from '../oleParser'
+import type { OleParser, DirectoryEntry, StreamData } from '../oleParser'
 import type { FibData } from '../fibParser'
 import { parseClxPieces, type ClxBasicCtx } from './pieceTable'
 import { readUint16, readUint32 } from '../binaryReader'
@@ -230,6 +230,41 @@ function decodeRangeWithoutGuard(
 export interface ClxContext extends ClxBasicCtx {
   ole: OleParser
   readUint32(data: Uint8Array, offset: number): number
+  /**
+   * Round 146：可选的表格流解析缓存（一次解析内按 `which`(0|1) 键控）。
+   *
+   * 一次 `parseWithFormat()` 会经 5 个上游入口（`docParser` 的
+   * `parseFormatRuns` / FKP 惰性建表 / `extractFormattedText` /
+   * `storySplitter` 的 PlcfHdd / `documentAssets` 的 DOP）反复调
+   * `findTableStream`，每次都 `readStream` 出一份**新的 1Table 拷贝**
+   * （真实 27 份语料实测 141 次调用、重复读取 4.78 MB）。本缓存把同一
+   * `which` 的解析结果在**同一次解析内**共享：首次 miss 时照旧走
+   * `findTableStream`（含其 fallback 语义与日志），命中时直接复用。
+   *
+   * 语义等价的前提：**所有消费方对表格流只读**（subarray / 边界检查后 读表）。
+   * 缓存省略时行为与本补丁之前逐字节一致；缓存生命周期由调用方
+   * （DocParser）在每次解析开始处 clear，不跨解析驻留。
+   */
+  tableStreams?: Map<0 | 1, StreamData | null>
+}
+
+/**
+ * `findTableStream` 的可缓存包装：先查 `ctx.tableStreams`（按 `which`），
+ * miss 才真正解析并写回。`undefined` 表示 miss，`null` 表示「已解析且
+ * 无表格流」——两者必须区分，否则会把无表格流的文件反复重解析。
+ */
+function findTableStreamForClx(
+  ctx: ClxContext,
+  directory: DirectoryEntry[],
+  which: 0 | 1,
+): StreamData | null {
+  const cache = ctx.tableStreams
+  if (cache === undefined) return ctx.ole.findTableStream(directory, which)
+  const hit = cache.get(which)
+  if (hit !== undefined) return hit
+  const stream = ctx.ole.findTableStream(directory, which)
+  cache.set(which, stream)
+  return stream
 }
 
 export function readClxData(
@@ -241,7 +276,7 @@ export function readClxData(
     if (fib.lcbClx <= 0) return null
 
     const which: 0 | 1 = fib.fWhichTblStm ? 1 : 0
-    const tableStream = ctx.ole.findTableStream(directory, which)
+    const tableStream = findTableStreamForClx(ctx, directory, which)
     if (tableStream) {
       const tableData = tableStream.data
       if (fib.fcClx + fib.lcbClx <= tableData.length) {
@@ -268,7 +303,7 @@ export function readTableStream(
     directory: DirectoryEntry[],
   ): Uint8Array | null {
     const which: 0 | 1 = fib.fWhichTblStm ? 1 : 0
-    const tableStream = ctx.ole.findTableStream(directory, which)
+    const tableStream = findTableStreamForClx(ctx, directory, which)
     if (tableStream && tableStream.data.length > 0) {
       return tableStream.data
     }
