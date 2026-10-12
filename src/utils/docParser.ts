@@ -55,6 +55,7 @@ import type { WordArtInfo } from './wordArtParser'
 
 // ═══ T4-P1 docparser 八模块委托导入 ═══
 import { extractImages, extractPictures, extractProperties, extractDop } from './docparser/assets/documentAssets'
+import { createImageWorkCache, type ImageWorkCache } from './imageExtractor'
 import { hasProperties } from './propertyParser'
 import type { DocumentProperties } from './propertyParser'
 import type { DopData } from './dopParser'
@@ -221,6 +222,17 @@ export class DocParser {
   /** DEF-004：启发式扫描是否已触达 maxScanBytes 上限（encCtx.scanLimit 透传给 encodingDetector） */
   private scanLimitReached = false
 
+  /**
+   * Round 139：同一次 `parseWithFormat()` 内共享的图片魔数扫描缓存。
+   *
+   * `document.images` 与 `document.pictures` 两条提取路径会对**同一个**
+   * `wordDocData` 视图各扫一遍；共用一个按对象身份键控的缓存可省掉其中一次
+   * 重复全流扫描（真实 27 份语料实测 = 全部扫描字节的 41.9%）。
+   * 每次 `parseWithFormat()` 开始清空，保证「同一次解析内同一视图 ⇒ 同一结果」，
+   * 不跨解析驻留。等价性论证见 `imageExtractor.ImageWorkCache`。
+   */
+  private readonly imageWorkCache: ImageWorkCache = createImageWorkCache()
+
   constructor(buffer: ArrayBuffer, maxScanBytes?: number) {
     this.buffer = buffer
     this.ole = new OleParser(buffer)
@@ -294,6 +306,9 @@ export class DocParser {
    *   `document.paragraphs` is an array of `{ text, charFormat, paraFormat }`.
    */
   parseWithFormat(onProgress?: ProgressCallback): ParseResult {
+    // Round 139：每次解析开始时清空图片扫描缓存，保证缓存只服务于「同一次解析」
+    // （同一视图对象在两次 parseWithFormat 之间可能对应被改写过的 buffer）。
+    this.imageWorkCache.scans.clear()
     try {
       logger.info('开始解析带格式的 DOC 文件')
       onProgress?.('verifying', 5)
@@ -1636,11 +1651,11 @@ export class DocParser {
   }
 
   private extractImages(directory: DirectoryEntry[], wordDocData?: Uint8Array): string[] {
-    return extractImages(this.assetCtx, directory, wordDocData)
+    return extractImages(this.assetCtx, directory, wordDocData, this.imageWorkCache)
   }
 
   private extractPictures(directory: DirectoryEntry[], chpxRuns: ChpxRun[] = [], wordDocData?: Uint8Array) {
-    return extractPictures(this.assetCtx, directory, chpxRuns, wordDocData)
+    return extractPictures(this.assetCtx, directory, chpxRuns, wordDocData, this.imageWorkCache)
   }
 
   private extractProperties(directory: DirectoryEntry[]): DocumentProperties | null {

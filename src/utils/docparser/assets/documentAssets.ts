@@ -14,7 +14,7 @@ import type { OleParser, DirectoryEntry } from '../../oleParser'
 import type { FibData } from '../../fibParser'
 import type { ChpxRun } from '../../formatParser'
 import { extractImagesFromStream, imagesToDataUrls, bytesToBase64DataUrl } from '../../imageExtractor'
-import type { ExtractedImage, ImageFormat } from '../../imageExtractor'
+import type { ExtractedImage, ImageFormat, ImageWorkCache } from '../../imageExtractor'
 import { extractPicturesFromDataStream, parsePicfAt } from '../../pictureParser'
 import type { ParsedPicture } from '../../pictureParser'
 import { parseSummaryInformation, parseDocumentSummaryInformation } from '../../propertyParser'
@@ -35,10 +35,19 @@ maxScanBytes: number
 readTableStream(fib: FibData, directory: DirectoryEntry[]): Uint8Array | null
 }
 
+/**
+ * 提取 `document.images`（data URL 列表）。
+ *
+ * `cache`（可选，Round 139）：按视图对象身份复用魔数扫描结果。`extractPictures`
+ * 稍后会对**同一个** `wordDocData` 再扫一遍，共用同一缓存即可省掉那一次重复
+ * 全流扫描（真实 27 份语料实测占全部扫描字节的 41.9%）。省略 `cache` 时与旧
+ * 实现逐字节等价。等价性论证见 `imageExtractor.ImageWorkCache`。
+ */
 export function extractImages(
   ctx: AssetExtractionContext,
   directory: DirectoryEntry[],
   wordDocData?: Uint8Array,
+  cache?: ImageWorkCache,
 ): string[] {
   try {
     const candidates: Uint8Array[] = []
@@ -68,7 +77,7 @@ export function extractImages(
       if (window.length < candidate.length) {
         logger.warn(`图片魔数兜底扫描达预算 ${scanBudget} 字节上限，剩余 ${candidate.length - scanBudget} 字节未扫（PERF-T2 预算化）`)
       }
-      const found = extractImagesFromStream(window)
+      const found = extractImagesFromStream(window, cache)
       for (const img of found) {
         if (images.length >= MAX_IMAGES) break
         images.push(img)
@@ -91,7 +100,7 @@ export function extractImages(
       unique.push(img)
     }
 
-    return imagesToDataUrls(unique)
+    return imagesToDataUrls(unique, cache)
   } catch (err) {
     logger.warn('图片提取失败:', err instanceof Error ? err.message : String(err))
     return []
@@ -103,12 +112,15 @@ export function extractImages(
  *
  * Uses PICF envelope detection when possible, falling back to magic-number
  * scanning. Returns structured picture objects instead of plain data URLs.
+ *
+ * `cache`（可选，Round 139）：仅用于底层的魔数扫描去重，见 `extractImages`。
  */
 export function extractPictures(
     ctx: AssetExtractionContext,
     directory: DirectoryEntry[],
     chpxRuns: ChpxRun[] = [],
     wordDocData?: Uint8Array,
+    cache?: ImageWorkCache,
   ): Array<{
     format: string
     dataUrl: string
@@ -148,7 +160,7 @@ export function extractPictures(
       }
 
       if (pictures.length === 0) {
-        const scanned = extractPicturesFromDataStream(dataStreamData)
+        const scanned = extractPicturesFromDataStream(dataStreamData, cache)
         pictures.push(...scanned.slice(0, MAX_IMAGES))
       }
     }
@@ -157,7 +169,7 @@ export function extractPictures(
     // has no pictures (common for libwv/non-standard .doc files where
     // images are embedded directly in the document stream).
     if (pictures.length === 0 && wordDocData && wordDocData.length > 0) {
-      const scanned = extractPicturesFromDataStream(wordDocData)
+      const scanned = extractPicturesFromDataStream(wordDocData, cache)
       pictures.push(...scanned.slice(0, MAX_IMAGES))
       logger.info(`从 WordDocument 流扫描到 ${pictures.length} 个图片`)
     }
@@ -179,7 +191,7 @@ export function extractPictures(
 
       // PERF-T2：复用 imageExtractor 的快速编码器（apply 分块直编，
       // 免逐字符拼接），兆级嵌入图编码耗时下降一个数量级。
-      const dataUrl = bytesToBase64DataUrl(pic.data, pic.format as ImageFormat)
+      const dataUrl = bytesToBase64DataUrl(pic.data, pic.format as ImageFormat, cache)
 
       const item: {
         format: string

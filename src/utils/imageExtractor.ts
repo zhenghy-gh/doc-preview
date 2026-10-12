@@ -404,9 +404,62 @@ function pushImageAt(
   return -1
 }
 
-export function extractImagesFromStream(data: Uint8Array): ExtractedImage[] {
-  if (!data || data.length < 8) return []
+/**
+ * Round 139：**同一次解析内**共享的「魔数扫描 + base64 编码」结果缓存（可选）。
+ *
+ * ── 为什么需要 ────────────────────────────────────────────────────────
+ * `documentAssets.extractImages`（产出 `document.images`）与
+ * `documentAssets.extractPictures`（产出 `document.pictures`）都会在同一次解析里
+ * 对**同一个** `wordDocData` 视图做魔数扫描，并把扫到的同一批图片各自 base64
+ * 编码一遍：
+ *   - `extractImages` 直接扫 `wordDocData`（`Data` 流缺失/无图时的兜底来源）；
+ *   - `extractPictures` 在 PICF 路径一无所获时，经
+ *     `extractPicturesFromDataStream(wordDocData)` 再扫一遍同一个视图。
+ *
+ * 真实 27 份语料按「每次 `parseWithFormat` 为一个 epoch」实测：
+ *   - 魔数扫描：`extractImagesFromStream` 69 次调用、共扫 11.01 MB、54 个不同视图，
+ *     其中 **15 次是同 epoch 内对同一 `wordDocData` 的重复扫描 = 4.61 MB**，
+ *     占全部扫描字节的 **41.9%**（其余重复为零）；
+ *   - base64 编码：`bytesToBase64` 69 次调用、共编码 3.07 MB；**共享扫描结果后**
+ *     有 3 次命中同一批图片字节 = 1.50 MB，占已编码字节的 **49.0%**。
+ *     （注意：这 3 次重复是「扫描去重」的**下游效应**——两条路径拿到同一批
+ *     `img.data` 视图对象后才出现；未共享扫描时测得重复为 0。两处缓存必须
+ *     成对启用，只启用扫描缓存反而会把这 1.5 MB 白白编码两遍。）
+ *
+ * ── 为什么按对象身份键控是**可证等价**的 ──────────────────────────────
+ * 缓存**默认不启用**（`cache` 省略时两条路径逐字节等价于旧实现）。只有
+ * `DocParser` 在一次 `parseWithFormat()` 内显式传同一个缓存实例，且：
+ *   - 两个调用点拿到的是**同一个** `wordDocData` 对象（同一次
+ *     `findWordDocumentStream().data`），两次调用之间没有任何代码写入该视图
+ *     —— 解析全程只读；
+ *   - `extractImages` 的预算窗口在未截断时就是 `candidate` 本身（同一个对象），
+ *     截断时 `subarray` 是**新对象**，自然落到不同的键上，不会串用；
+ *   - 缓存里存的是纯函数的返回值，消费方只读遍历（`push` / 读 `img.data`、
+ *     `img.format`），从不改动数组或图片对象；
+ *   - `dataUrls` 的键是图片字节视图、值里同时记了 `format`，命中时校验格式一致，
+ *     避免同一字节视图被以不同 MIME 编码时串用；
+ *   - `OleParser.readStream` 每次调用都 `new Uint8Array`，因此 `Data` 流的两次
+ *     读取天然是不同对象、不会互相命中（那部分重复属于「同内容不同对象」，
+ *     本轮不处理）。
+ * 因此「同一个视图对象 ⇒ 同一份扫描结果 / 同一份 data URL」在同一次解析内成立。
+ *
+ * 生命周期：缓存由 `DocParser` 实例持有（每次 `parseWithFormat` 开始清空），
+ * 随解析器一起被 GC，不跨解析驻留，也不是模块级全局状态。
+ */
+export interface ImageWorkCache {
+  /** 视图对象 → 魔数扫描结果（同一对象只扫一次）。 */
+  scans: Map<Uint8Array, ExtractedImage[]>
+  /** 图片字节视图对象 → 已编码的 data URL（同一对象只编码一次）。 */
+  dataUrls: Map<Uint8Array, { format: ImageFormat; url: string }>
+}
 
+/** 新建一个空的图片工作缓存（供 `DocParser` 每次解析复用一个实例）。 */
+export function createImageWorkCache(): ImageWorkCache {
+  return { scans: new Map(), dataUrls: new Map() }
+}
+
+/** 无缓存的魔数扫描主体（纯函数，`extractImagesFromStream` 的唯一实现）。 */
+function scanImagesFromStream(data: Uint8Array): ExtractedImage[] {
   const images: ExtractedImage[] = []
   const len = data.length
   let i = 0
@@ -432,6 +485,23 @@ export function extractImagesFromStream(data: Uint8Array): ExtractedImage[] {
   return images
 }
 
+/**
+ * 扫描 `data` 里的嵌入图片。
+ *
+ * `cache` 省略时行为与历史实现逐字节相同；传入时按视图对象身份复用扫描结果
+ * （见 `ImageWorkCache` 的等价性论证）。
+ */
+export function extractImagesFromStream(data: Uint8Array, cache?: ImageWorkCache): ExtractedImage[] {
+  if (!data || data.length < 8) return []
+  if (cache) {
+    const hit = cache.scans.get(data)
+    if (hit !== undefined) return hit
+  }
+  const result = scanImagesFromStream(data)
+  if (cache) cache.scans.set(data, result)
+  return result
+}
+
 /** MIME type for each supported format. */
 export function imageFormatMime(format: ImageFormat): string {
   switch (format) {
@@ -449,11 +519,23 @@ export function imageFormatMime(format: ImageFormat): string {
  * 逐块编码的实现已统一到 `binaryReader.bytesToBase64`（那里也记了分块为什么是
  * 0x2000、为什么不能用 `TextDecoder('latin1')`、为什么不能传 `Array.from`）。
  * 本函数只负责加 `data:` 前缀。
+ *
+ * Round 139：`cache` 省略时逐字节等价于旧实现；传入时按**字节视图对象身份**复用
+ * 已编码的 data URL。键里同时记了 `format`，命中时校验格式一致，避免同一字节
+ * 视图被以不同 MIME 编码时串用。真实语料实测命中 3 次 / 1.50 MB
+ * （占已编码字节 49.0%），是扫描去重的下游效应，两处缓存须成对启用
+ * （见 `ImageWorkCache`）。
  */
-export function bytesToBase64DataUrl(bytes: Uint8Array, format: ImageFormat): string {
-  return `data:${imageFormatMime(format)};base64,${bytesToBase64(bytes)}`
+export function bytesToBase64DataUrl(bytes: Uint8Array, format: ImageFormat, cache?: ImageWorkCache): string {
+  if (cache) {
+    const hit = cache.dataUrls.get(bytes)
+    if (hit !== undefined && hit.format === format) return hit.url
+  }
+  const url = `data:${imageFormatMime(format)};base64,${bytesToBase64(bytes)}`
+  if (cache) cache.dataUrls.set(bytes, { format, url })
+  return url
 }
 
-export function imagesToDataUrls(images: ExtractedImage[]): string[] {
-  return images.map(img => bytesToBase64DataUrl(img.data, img.format))
+export function imagesToDataUrls(images: ExtractedImage[], cache?: ImageWorkCache): string[] {
+  return images.map(img => bytesToBase64DataUrl(img.data, img.format, cache))
 }
