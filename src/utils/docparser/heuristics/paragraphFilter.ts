@@ -575,39 +575,50 @@ export function hasTooManyJunkChars(text: string): boolean {
       const len = paraText.length
       if (len >= BODY_MIN_LEN) {
         // Long paragraph
-        paragraphs[i].charFormat = paragraphs[i].charFormat || {}
-        paragraphs[i].charFormat.fontSize = 10.5
-        paragraphs[i].paraFormat = paragraphs[i].paraFormat || {}
-        paragraphs[i].paraFormat.alignment = 'justify'
-        paragraphs[i].paraFormat.firstLineIndent = 24
-      } else if (len > 0) {
-        // Short paragraph in body section: check if it's a section heading
+        para.charFormat = para.charFormat || {}
+        para.charFormat.fontSize = 10.5
+        para.paraFormat = para.paraFormat || {}
+        para.paraFormat.alignment = 'justify'
+        para.paraFormat.firstLineIndent = 24
+      } else {
+        // Short paragraph in body section: check if it's a section heading.
         // A section heading is a short paragraph (< 100 chars) surrounded by
         // long body paragraphs or table/structure elements.
+        //
+        // Round 160：原实现无条件先算出 `prevIsBody` 与 `nextIsLong` 再进 `if`，
+        // 但计数插桩显示短段落分支里 `prevIsBody` 仅 1.53% 为真
+        // （772,800 次迭代中 11,850 次）⇒ 98.5% 的情况下 `nextPara` 的
+        // 数组/属性加载与 `nextPara.text.includes('\u0007')` 都是白算。
+        // 改为「先判 prevIsBody，为真才去算 nextIsLong」，命中标题时直接
+        // `continue`，语义与原 `if (…) {…} else {…}` 逐字节等价。
+        //
+        // 另外，进入本 `else` 时必有 `1 <= len < BODY_MIN_LEN`：上面的
+        // `if (paraText.length === 0) continue` 已排除空段，同一 `if/else`
+        // 的前半支已吃掉 `len >= BODY_MIN_LEN`。故原 `else if (len > 0)`
+        // 里的 `len > 0` 与原条件里的 `len < 100` 都是恒真，一并去掉。
         const prevPara = i > 0 ? paragraphs[i - 1] : null
-        const nextPara = i < paragraphs.length - 1 ? paragraphs[i + 1] : null
-        const prevIsBody = prevPara && prevPara.text.length >= BODY_MIN_LEN && !prevPara.paraFormat?.listType
-        const nextIsLong = nextPara && (nextPara.text.length >= BODY_MIN_LEN || nextPara.text.includes('\u0007'))
-        
-        if (prevIsBody && nextIsLong && len < 100) {
-          // Section heading: 18pt (小二) bold
-          paragraphs[i].charFormat = paragraphs[i].charFormat || {}
-          paragraphs[i].charFormat.fontSize = 18
-          paragraphs[i].charFormat.bold = true
-          paragraphs[i].paraFormat = paragraphs[i].paraFormat || {}
-          paragraphs[i].paraFormat.alignment = 'left'
-          paragraphs[i].paraFormat.firstLineIndent = 0
-        } else {
-          // Regular short body paragraph
-          paragraphs[i].charFormat = paragraphs[i].charFormat || {}
-          paragraphs[i].charFormat.fontSize = 10.5
-          paragraphs[i].charFormat.bold = false
-          paragraphs[i].charFormat.italic = false
-          paragraphs[i].charFormat.underline = false
-          paragraphs[i].paraFormat = paragraphs[i].paraFormat || {}
-          paragraphs[i].paraFormat.alignment = 'justify'
-          paragraphs[i].paraFormat.firstLineIndent = 0
+        if (prevPara && prevPara.text.length >= BODY_MIN_LEN && !prevPara.paraFormat?.listType) {
+          const nextPara = i < paragraphs.length - 1 ? paragraphs[i + 1] : null
+          if (nextPara && (nextPara.text.length >= BODY_MIN_LEN || nextPara.text.includes('\u0007'))) {
+            // Section heading: 18pt (小二) bold
+            para.charFormat = para.charFormat || {}
+            para.charFormat.fontSize = 18
+            para.charFormat.bold = true
+            para.paraFormat = para.paraFormat || {}
+            para.paraFormat.alignment = 'left'
+            para.paraFormat.firstLineIndent = 0
+            continue
+          }
         }
+        // Regular short body paragraph
+        para.charFormat = para.charFormat || {}
+        para.charFormat.fontSize = 10.5
+        para.charFormat.bold = false
+        para.charFormat.italic = false
+        para.charFormat.underline = false
+        para.paraFormat = para.paraFormat || {}
+        para.paraFormat.alignment = 'justify'
+        para.paraFormat.firstLineIndent = 0
       }
     }
 
