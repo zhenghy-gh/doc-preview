@@ -1341,3 +1341,11 @@
 - 等价：`tests/clxReader.fastDecode.test.ts` 15/15（真实语料逐区间差分、两分支全覆盖）。
 - 测量：同进程配对 r149-paired.mjs，80 对中位比值 0.992（+0.8%）、胜 44/80(55%)；放大 300 对后中位 1.00012（中性）、均值 1.00413（候选慢 0.4%）、胜 149/300(49.67%)——小样本 +0.8% 系 R145/R146 噪声陷阱。归因：V8 已内联 isValidPrintableChar（物理内联无增量）、分配削减未转化为端到端收益（GC 非本函数主导）。
 - 给下一轮：150 转查 createParagraphsWithRealFormats 内部对象展开（spread / `Object.keys().length` 分配）可否安全收口而不破坏 Round144 键序约束；applyStructuralFormats 维持默认否决；bytesToBase64 / buildMagicScanIndex 已最优。下一轮 150，目标 208。
+
+## Round 150/100 — 2026-10-13
+- 候选撤回（createParagraphsWithRealFormats 热循环 `Object.keys(x).length>0` → 非分配式 `hasKeys` 微优化端到端无稳定收益），不升号、不发布，轮次计入。源码 `git checkout` 还原。详见 docs/changelog/2026-10-13-round150-optimization.md。
+- 用户选「安全微优化续做 150」。前提：post-148 HEAD --cpu-prof createParagraphsWithRealFormats 12.75%（第 1 大）、applyStructuralFormats 13.56%（默认否决）、GC 11.05%。
+- 候选：formatRecovery.ts 新增模块级 `hasKeys`（for-in + hasOwnProperty），替换热循环 5 处 + style 预解析 1 处 `Object.keys(x).length>0`。
+- 等价：27 份 parseWithFormat 落盘与 baseline `diff -rq` 逐字节完全一致；formatParser/paragraphStyleRenderer/structuralFormatCleanup 162 测试通过；vue-tsc 0。
+- 测量：同进程配对 r149-paired.mjs 400 对，中位比值 0.9964（候选中位快 0.36%）、均值比值 1.00418（候选均值慢 0.4%）、胜 215/400(53.75%)——中性；均值转负说明 for-in+hasOwnProperty 未胜过 V8 已优化的 Object.keys，且分配削减未转化端到端收益。
+- 战略：连续两轮（149/150）安全微优化均中性，确认「安全微优化面」已榨尽；剩余热点仅 createParagraphsWithRealFormats（对象 spread / Round144 键序约束，高风险）与 applyStructuralFormats（默认否决）。建议暂停或转风险结构改动。下一轮 151（或暂停），目标 208。
