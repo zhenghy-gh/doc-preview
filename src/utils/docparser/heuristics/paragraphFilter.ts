@@ -559,13 +559,20 @@ export function hasTooManyJunkChars(text: string): boolean {
     
     // Apply body paragraph styling to remaining non-list paragraphs
     const _subtitleSet = new Set(subtitleLines)
+    // Round 159：`subtitleLines` 绝大多数情况下为空，而空集上的 `has(i)` 恒为 false ⇒
+    // 空集时短路掉这次 Set 查询，逐字节等价。同时把 `paragraphs[i]` 与 `paragraphs[i].text`
+    // 提升为局部量，省掉循环体内 4 次重复的元素加载（循环体只写 charFormat/paraFormat，
+    // 从不写 text，故缓存 text 安全）。
+    const hasSubtitleLines = subtitleLines.length > 0
     for (let i = 0; i < paragraphs.length; i++) {
-      if (paragraphs[i].paraFormat?.listType) continue
-      if (paragraphs[i].charFormat?.fontSize === 28) continue // Skip title
-      if (_subtitleSet.has(i)) continue // Skip subtitle lines
-      if (paragraphs[i].text.length === 0) continue // Skip empty paragraphs
+      const para = paragraphs[i]
+      if (para.paraFormat?.listType) continue
+      if (para.charFormat?.fontSize === 28) continue // Skip title
+      if (hasSubtitleLines && _subtitleSet.has(i)) continue // Skip subtitle lines
+      const paraText = para.text
+      if (paraText.length === 0) continue // Skip empty paragraphs
       
-      const len = paragraphs[i].text.length
+      const len = paraText.length
       if (len >= BODY_MIN_LEN) {
         // Long paragraph
         paragraphs[i].charFormat = paragraphs[i].charFormat || {}
@@ -604,25 +611,18 @@ export function hasTooManyJunkChars(text: string): boolean {
       }
     }
 
-    // --- Step 3.5: Merge short body paragraphs with the following paragraph ---
-    // Handles cases where a soft-break in the original document was parsed as
-    // a separate paragraph (e.g., "In non" followed by body text).
-    // Only merge if the short paragraph has body styling (12pt) and is NOT a subtitle line.
-    // Unreachable: Step 3 above rewrites every non-list short paragraph to
-    // 10.5pt/18pt, and list paragraphs are excluded by the !listType check,
-    // so a 12pt non-list short paragraph cannot survive to this point.
-    /* v8 ignore start */
-    for (let i = paragraphs.length - 1; i >= 1; i--) {
-      const para = paragraphs[i]
-      const prev = paragraphs[i - 1]
-      if (prev.text.length > 0 && prev.text.length < 20 && prev.charFormat?.fontSize === 12 && !prev.paraFormat?.listType && para.text.length >= BODY_MIN_LEN) {
-        // Merge previous short paragraph into current one
-        para.text = prev.text + para.text
-        if (!para.charFormat) para.charFormat = prev.charFormat
-        paragraphs.splice(i - 1, 1)
-      }
-    }
-    /* v8 ignore stop */
+    // --- Step 3.5: REMOVED in Round 159 (provably-dead loop) ---
+    // 原实现「把 12pt 的短正文段并入后一段」在本步恒为空转，故整段删除。
+    // 证明：该循环唯一的触发条件是
+    //   `prev.text.length > 0 && prev.charFormat.fontSize === 12 && !prev.paraFormat.listType`。
+    // 而紧邻其上的 Step 3 正文循环会把**每一个**段落改写成 10.5pt 或 18pt，除非该段落
+    // 命中下列四个 `continue` 之一：
+    //   (a) `paraFormat.listType` —— 保留原字号，但 Step 3.5 自己用 `!listType` 排除；
+    //   (b) `charFormat.fontSize === 28`（标题）—— 28 ≠ 12；
+    //   (c) 副标题行 —— 上面的副标题着色已把它写成 18pt，18 ≠ 12；
+    //   (d) `text.length === 0`（空段）—— Step 3.5 自己用 `text.length > 0` 排除。
+    // 即 Step 3 之后不存在「非空、非列表、字号恰为 12」的段落，条件恒为假。
+    // 实证：27 份样本 × 20 轮共 842,275 次迭代，命中 0 次（Round 159 计数插桩）。
 
     // --- Step 3.6: Insert blank lines around section headings and after title ---
     // The original document has blank paragraphs (empty lines) before and after

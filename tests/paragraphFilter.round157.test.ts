@@ -5,7 +5,7 @@
 //   `__hasEmbeddedPic` 只在 Step 2 的 `if (text.includes('\u0001'))` 分支内、
 //   且「剥离占位符后仍有非空白内容」时才置位 ⇒ **标志恒蕴含 includes**。
 //   加之 Step 2 之后没有任何路径会从 `para.text` 里删掉 `\u0001`
-//   （Step 3.5 的合并只是把 `prev.text` 前插，Step 3.6 只插入空段落），
+//   （Step 3.5 已于 Round 159 被证明恒为空转并删除；Step 3.6 只插入空段落），
 //   故 `includes && flag` 与 `flag` 在全部输入上恒等。
 //
 // 参照实现 = **改动前**的判定口径，用同一批合成输入对照（慢但等价对照）。
