@@ -105,6 +105,48 @@ function lowerBound(sorted: readonly number[], x: number): number {
 const HAS_CJK_RE = /[\u4e00-\u9fff]/
 
 /**
+ * ── Round 163：同段落跨消费者共享 `text.trim()` 与「整段含 CJK」探测 ──────────
+ *
+ * 对**同一段文本**，`detectAlignment`、`detectListInfo`、`guessCharFormatCore`
+ * 三个消费者各跑一次 `text.trim()`（3 次）与各跑一次 `HAS_CJK_RE.test(text)`
+ * （2 次）。逐字节等价前提：`String.prototype.trim` 与 `HAS_CJK_RE.test`
+ * 都是**文本取值的纯函数**（对同一字符串恒返回同一结果）。
+ *
+ * 因此这里用一个「按值键控的单条目记忆」：只要连续调用传入的 `text` 取值相同，
+ * 就直接复用上次算出的 `trimmed` / `hasCJK`；取值一变（或首次）立即重算。
+ * 由于 `trim`/`test` 只依赖字符串**取值**，命中记忆与重新计算的结果必然逐位相同
+ * —— 记忆命中与否只影响耗时，不影响任何可观察输出。
+ *
+ * 三个消费者在同一段落的处理中**连续**被调用（`detectParagraphFormat` 内
+ * `detectAlignment → detectListInfo`，随后 `guessCharFormat*` → `guessCharFormatCore`，
+ * 中间不经过其它文本），故每个段落稳定命中 3 次（省 2 次 `trim` + 1 次 CJK 探测）。
+ */
+let sharedProfileText: string | null = null
+let sharedProfileTrimmed = ''
+let sharedProfileHasCJK = false
+
+/** 取值变化时重算共享档案；取值相同则保持上次结果。 */
+function refreshSharedProfile(text: string): void {
+  if (text !== sharedProfileText) {
+    sharedProfileText = text
+    sharedProfileTrimmed = text.trim()
+    sharedProfileHasCJK = HAS_CJK_RE.test(text)
+  }
+}
+
+/** 共享 `text.trim()`（同取值连调时复用上次结果，逐位等价）。 */
+function sharedTrim(text: string): string {
+  refreshSharedProfile(text)
+  return sharedProfileTrimmed
+}
+
+/** 共享 `HAS_CJK_RE.test(text)`（同取值连调时复用上次结果，逐位等价）。 */
+function sharedHasCJK(text: string): boolean {
+  refreshSharedProfile(text)
+  return sharedProfileHasCJK
+}
+
+/**
  * 一趟扫描同时统计「中文字符数」与「空白字符数」。
  *
  * `guessCharFormat` 与 `detectAlignment` 原先各对同一段文本跑两趟
@@ -230,14 +272,14 @@ function guessCharFormatCore(text: string, withStyles: boolean): CharacterFormat
     let chineseCount = 0
     let chineseRatio = 0
     let strippedLength = 0
-    if (HAS_CJK_RE.test(text)) {
+    if (sharedHasCJK(text)) {
       const [c, w] = countChineseAndWhitespace(text)
       chineseCount = c
       chineseRatio = c / totalLength
       // 原先 `text.replace(/\s/g, '')` 只为拿长度，现直接计数，省掉一次整串分配。
       strippedLength = totalLength - w
     }
-    const trimmed = text.trim()
+    const trimmed = sharedTrim(text)
 
     // Default font: Chinese docs use Song, English use Times New Roman
     if (chineseCount >= 2) {
@@ -559,7 +601,7 @@ export function detectListInfo(text: string): { listType: 'ordered' | 'unordered
     // 原先 match(/^[\s\u3000\t]*/) + 两次 replace 共 3 次整串分配，现单趟扫描。
     // Round 138: compute indentation only for a matching list marker.
 
-    const trimmed = text.trim()
+    const trimmed = sharedTrim(text)
     if (trimmed.length < 2) return null
 
     // ── Round 158：首字符分派 ──────────────────────────────────────────────
@@ -642,7 +684,7 @@ export function detectListInfo(text: string): { listType: 'ordered' | 'unordered
   }
 
 export function detectAlignment(text: string, index: number, totalParagraphs: number): ParagraphFormat['alignment'] | null {
-    const trimmed = text.trim()
+    const trimmed = sharedTrim(text)
     const totalLen = trimmed.length
     // 原先每次调用要 trim()/trimStart()/trimEnd()×2/replace()/match() 共 6 次分配。
     // 前导/尾部空白改为计数（trimStart/trimEnd 只用于取长度），
@@ -654,7 +696,7 @@ export function detectAlignment(text: string, index: number, totalParagraphs: nu
     // `strippedLen` 不会被读取，故整次逐字符计数可省。
     let chineseCount = 0
     let strippedLen = 0
-    if (HAS_CJK_RE.test(text)) {
+    if (sharedHasCJK(text)) {
       const [c, w] = countChineseAndWhitespace(trimmed)
       chineseCount = c
       strippedLen = totalLen - w
