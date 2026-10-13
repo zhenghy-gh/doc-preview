@@ -1349,3 +1349,11 @@
 - 等价：27 份 parseWithFormat 落盘与 baseline `diff -rq` 逐字节完全一致；formatParser/paragraphStyleRenderer/structuralFormatCleanup 162 测试通过；vue-tsc 0。
 - 测量：同进程配对 r149-paired.mjs 400 对，中位比值 0.9964（候选中位快 0.36%）、均值比值 1.00418（候选均值慢 0.4%）、胜 215/400(53.75%)——中性；均值转负说明 for-in+hasOwnProperty 未胜过 V8 已优化的 Object.keys，且分配削减未转化端到端收益。
 - 战略：连续两轮（149/150）安全微优化均中性，确认「安全微优化面」已榨尽；剩余热点仅 createParagraphsWithRealFormats（对象 spread / Round144 键序约束，高风险）与 applyStructuralFormats（默认否决）。建议暂停或转风险结构改动。下一轮 151（或暂停），目标 208。
+
+## Round 151/100 — 2026-10-13 — 候选撤回（mergeCharFormatForParagraph 每 run 展开消除反而退化）
+- 用户选「试 line-1076 展开消除」。前提：post-148 HEAD --cpu-prof mergeCharFormatForParagraph 2.70%（第 8 大）；其热循环第 1076 行 `const format = styleFormat ? { ...styleFormat, ...run.format } : run.format` 在「存在 styleFormat 的 run」上每 run 分配对象。
+- 候选：formatParser.ts 用 `pick<T>` 闭包（hasOwnProperty 复刻展开「自有可枚举键优先」语义）逐项读 12 字段，去掉每 run 对象分配。
+- 等价：27 份 parseWithFormat 落盘与 baseline（r149-head.mjs）diff -rq 逐字节完全一致；npm test 1735/1735 通过；vue-tsc 0。
+- 测量：同进程配对 r149-paired.mjs 400 对，baseMedian 82.25ms / candMedian 93.40ms、**中位比值 1.13291（候选慢 13.3%）**、均值 1.13878（慢 13.9%）、胜 16/400(4%)——**明确退化**（非中性）。
+- 归因：候选在「无 styleFormat」的多数 run 上也执行 12 次 hasOwnProperty.call + 闭包派发，把原零开销常见路径变成调用开销；短命小对象由 V8 分代 GC 近乎免费回收，手动派发开销远超其分配成本。
+- 战略：连续三轮（149/150 中性、151 退化）安全微优化均无效，确认安全微优化面已确实榨尽；仅余高风险结构路径（createParagraphsWithRealFormats 对象 spread 重构须钉死 Round144 键序、applyStructuralFormats 默认否决）。下一轮 152（或暂停），目标 208。
