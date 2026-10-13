@@ -1333,3 +1333,11 @@
 - 已否决：bytesToBase64 分块 btoa（CHUNK=8190=3 的倍数逐块 btoa 后拼接，21 种真实尺寸输出逐字符相同、数学严格等价）隔离实测 0.968× 更慢，不落地。
 - 条目身份键控的结构优势：跨文档/跨流串键在结构上不存在，护栏负控改为针对本设计真实失败模式（切片/键退化/读错流）。
 - 给下一轮：createParagraphsWithRealFormats 仍第 1 大（内部展开约 2%，注意 resolved-先行键序约束）；applyStructuralFormats 维持默认否决；bytesToBase64 0x2000 已最优；decodeRangeWithoutGuard 3.80% 未动。下一轮 149，目标 208。
+
+## Round 149/100 — 2026-10-13
+- 候选撤回（decodeRangeWithoutGuard 微优化端到端无稳定收益），不升号、不发布，轮次计入。源码 `git checkout` 还原，fastDecode 护栏仍 15/15。详见 docs/changelog/2026-10-13-round149-optimization.md。
+- 前提：post-148 HEAD 的 --cpu-prof 自耗占比 decodeRangeWithoutGuard 3.14%、createParagraphsWithRealFormats 12.75%、applyStructuralFormats 13.56%、GC 11.05%；Round148 交接标注 decodeRangeWithoutGuard「未动」且有 ~1.1x 微优化（判定/分配/访存）空间。
+- 候选：① 模块级可增长 scratch Uint16Array 复用，去每调用 `new Uint16Array(n)` 分配；② 内联 isValidPrintableChar 去每字符调用。
+- 等价：`tests/clxReader.fastDecode.test.ts` 15/15（真实语料逐区间差分、两分支全覆盖）。
+- 测量：同进程配对 r149-paired.mjs，80 对中位比值 0.992（+0.8%）、胜 44/80(55%)；放大 300 对后中位 1.00012（中性）、均值 1.00413（候选慢 0.4%）、胜 149/300(49.67%)——小样本 +0.8% 系 R145/R146 噪声陷阱。归因：V8 已内联 isValidPrintableChar（物理内联无增量）、分配削减未转化为端到端收益（GC 非本函数主导）。
+- 给下一轮：150 转查 createParagraphsWithRealFormats 内部对象展开（spread / `Object.keys().length` 分配）可否安全收口而不破坏 Round144 键序约束；applyStructuralFormats 维持默认否决；bytesToBase64 / buildMagicScanIndex 已最优。下一轮 150，目标 208。
