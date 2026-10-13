@@ -1370,3 +1370,10 @@
 - 等价：27 份 parseWithFormat 落盘与 baseline（r149-head.mjs）diff -rq 逐字节一致；textHeuristics.round144 键序护栏 11/11；formatParser 137/137；vue-tsc 0。
 - 测量：同进程配对 r149-paired.mjs 400 对，中位比值 0.99512（候选中位快 0.49%）、均值 1.0041（慢 0.41%）、胜 219/400(54.75%)——中性（同 149/150 噪声地板）。即便去掉被持有输出对象分配，V8 分代 GC 仍近免费、Object.assign 调用开销抵消 GC 节省。
 - 战略：低/无风险空间（含风险路径安全子集）确证无稳定收益。剩余仅 738/744 高风险共享缓存原地合并（不推荐）、applyStructuralFormats 默认否决。建议暂停。下一轮 154（或暂停），目标 208。
+
+## Round 154/100 — 2026-10-13 — 候选撤回（applyStructuralFormats 每候选组临时数组消除，中性）
+- 用户改目标为 **1000 轮**（targetRound=1000），续跑首轮；转向第 2 大自耗 applyStructuralFormats 13.56%（交接默认否决但未证否）。
+- 候选：paragraphFilter.ts 列表组检测 3 处把「push 进临时 lengths: number[] 再两次 reduce」改为「直接由 visibleTextLengths 单趟求和+单趟平方和」算 avg/variance/cv（第 3 处仍按 paragraphs[j].text 去 \u0001）。纯计算、不改输出对象。
+- 等价：27 份 parseWithFormat 落盘与 baseline（r149-head.mjs）diff -rq 逐字节一致（构造性等价）；structuralFormatCleanup+paragraphStyleRenderer 25/25；vue-tsc 0。
+- 测量：同进程配对 r149-paired.mjs 400 对中位 0.9948、均值 0.99401（候选快 0.6%）、胜 54.25%；800 对中位 0.99609、均值 1.00097（候选慢 0.1%）、胜 54.0%——**400→800 均值符号由正翻中性/负** ⇒ 小样本噪声（同 149）。中位恒 ~0.996、胜率恒 ~54%（低于历史采纳阈值 57%+）→ 中性。
+- 战略：**第 6 个连续中性/退化候选**（149/150/153/154 中性、151 退化、152 无点），解析路径低/无风险面确证榨尽。向 1000 轮推进若要有真实收益，仅剩高风险结构改动（738/744 共享缓存，正确性风险，不推荐）或**转向不同优化面**（渲染/bundle/未覆盖热点）。下一轮 155，目标 1000。
