@@ -1377,3 +1377,10 @@
 - 等价：27 份 parseWithFormat 落盘与 baseline（r149-head.mjs）diff -rq 逐字节一致（构造性等价）；structuralFormatCleanup+paragraphStyleRenderer 25/25；vue-tsc 0。
 - 测量：同进程配对 r149-paired.mjs 400 对中位 0.9948、均值 0.99401（候选快 0.6%）、胜 54.25%；800 对中位 0.99609、均值 1.00097（候选慢 0.1%）、胜 54.0%——**400→800 均值符号由正翻中性/负** ⇒ 小样本噪声（同 149）。中位恒 ~0.996、胜率恒 ~54%（低于历史采纳阈值 57%+）→ 中性。
 - 战略：**第 6 个连续中性/退化候选**（149/150/153/154 中性、151 退化、152 无点），解析路径低/无风险面确证榨尽。向 1000 轮推进若要有真实收益，仅剩高风险结构改动（738/744 共享缓存，正确性风险，不推荐）或**转向不同优化面**（渲染/bundle/未覆盖热点）。下一轮 155，目标 1000。
+
+## Round 155/100 — 2026-10-13 — 候选撤回（活代码原地合并被 Round133 非变异护栏否决；并揭出 150/153 优化的是死代码）
+- **发现 1（死代码）**：`src/utils/docparser/formatRecovery.ts` **无任何 `src/` 引用**（`grep -rn "formatRecovery" src/` 零命中），`FormatRecoveryContext` 在 dist-lib bundle 中出现 **0 次** ⇒ 被 tree-shake，不在产物内。其导出的 `parseFormatRuns`/`createParagraphsWithRealFormats`/`tryParseFormatsFromTableStream`/`applyParsedStylesToParagraphs` 是 `docParser.ts` 活实现的**平行副本**（活实现为类私有方法，`docParser.ts:1186/1985/2075`）。Git 史：commit `5222a9a chore: exclude pre-existing format recovery file`；progress 记为「被刻意停放的半成品…不可达故已被 tree-shake，删除不会减小包体」。
+- **账本更正**：**Round 150（`Object.keys→hasKeys`）与 Round 153（安全子集展开→`Object.assign`）改动的是死代码**，其「中性」性能结论**不构成优化证据**（被测代码根本不执行）；两轮仍按协议计入轮次，但证据等级降级为「无效」。
+- **发现 2（活代码候选）**：活热点为 `src/utils/docParser.ts:1186` 的 `createParagraphsWithRealFormats`（12.75%，第 1 大）。候选：把 L1355 `{ ...newPara.paraFormat, ...papx.format }` 与 L1447 `{ ...newPara.charFormat, ...merged }` 改为原地 `Object.assign`（键序与展开逐键一致；L1379/1385 目标含共享 `resolved` 缓存，必须保留展开）。
+- 验证：27 份 `parseWithFormat` 落盘与 baseline **逐字节一致**；`vue-tsc` 0；但 `tests/docParser.test.ts` **失败 9 项** —— Round 133 `expectLegacyMerge` 护栏（`tests/docParser.test.ts:2330-2376`）要求合并**产生新对象且不改动输入**（`actual!==base`、`getOwnPropertyDescriptors(base)` 不变）。原地 `Object.assign` 返回 `base` 并改写它，**结构上不可能同时满足零分配与「新对象+输入不变」**。
+- 结论：候选与正确性护栏直接冲突，判定**不可采纳**，按协议撤回（`git checkout -- src/utils/docParser.ts`），不升号、不发布，轮次计入。**教训（新）**：优化前必须确认目标文件在构建图内（有 `src/` 引用或导出名出现在 bundle）；仅凭剖析函数名去 `src/` 找「同名文件」会误中平行死代码副本。连续七轮（149/150/153/154 中性、151 退化、152 无点、155 护栏否决）解析路径低/无风险面均无稳定收益；须**转向不同优化面**。下一轮 156，目标 1000。
