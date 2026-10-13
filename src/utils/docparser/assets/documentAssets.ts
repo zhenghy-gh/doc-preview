@@ -21,6 +21,8 @@ import { parseSummaryInformation, parseDocumentSummaryInformation } from '../../
 import type { DocumentProperties } from '../../propertyParser'
 import { parseDop } from '../../dopParser'
 import type { DopData } from '../../dopParser'
+import { readDataStreamShared } from '../dataStreamCache'
+import type { DataStreamCache } from '../dataStreamCache'
 
 /** 原 DocParser.MAX_IMAGES（私有静态，随域迁出并转公开导出） */
 export const MAX_IMAGES = 50
@@ -29,10 +31,17 @@ export const MIN_IMAGE_SCAN_BYTES = 1024 * 1024
 
 /** 资产提取会话上下文：原类实例依赖的显式注入面 */
 export interface AssetExtractionContext {
-ole: OleParser
-maxScanBytes: number
-/** 表流读取（B 域 clxReader 迁移前由 docParser 类实现提供；仅 extractDop 需要） */
-readTableStream(fib: FibData, directory: DirectoryEntry[]): Uint8Array | null
+  ole: OleParser
+  maxScanBytes: number
+  /** 表流读取（B 域 clxReader 迁移前由 docParser 类实现提供；仅 extractDop 需要） */
+  readTableStream(fib: FibData, directory: DirectoryEntry[]): Uint8Array | null
+  /**
+   * Round 148：可选的 `Data` 流读取缓存（一次解析内按目录条目身份键控）。
+   * `extractImages` / `extractPictures` 各读一遍同一条 `Data` 流，共享后
+   * 第二次起直接复用视图。省略时与旧实现逐字节等价；生命周期由 DocParser
+   * 在每次解析开始处 clear。等价性论证见 `dataStreamCache.readDataStreamShared`。
+   */
+  dataStreams?: DataStreamCache
 }
 
 /**
@@ -60,12 +69,11 @@ export function extractImages(
     const candidates: Uint8Array[] = []
 
     // Primary: the `Data` stream is where Word stores embedded pictures.
-    const dataEntry = ctx.ole.findStreamByName(directory, 'Data')
-    if (dataEntry) {
-      const dataStream = ctx.ole.readStream(dataEntry)
-      if (dataStream.data && dataStream.data.length > 0) {
-        candidates.push(dataStream.data)
-      }
+    // Round 148：与 extractPictures / parseFormatRuns / splitHeaderParts 共享同一次
+    // 解析内的 Data 流读取（按目录条目身份键控，缺省不含缓存时逐字节等价旧实现）。
+    const dataStreamData = readDataStreamShared(ctx.ole, directory, ctx.dataStreams)
+    if (dataStreamData !== null) {
+      candidates.push(dataStreamData)
     }
 
     // Secondary fallback: some producers embed images directly in the
@@ -141,14 +149,12 @@ export function extractPictures(
     cp?: number
   }> {
     try {
-    const dataEntry = ctx.ole.findStreamByName(directory, 'Data')
-    let dataStreamData: Uint8Array | null = null
-    if (dataEntry) {
-      const dataStream = ctx.ole.readStream(dataEntry)
-      if (dataStream.data && dataStream.data.length >= 64) {
-        dataStreamData = dataStream.data
-      }
-    }
+    // Round 148：Data 流与 extractImages / parseFormatRuns / splitHeaderParts
+    // 在同一次解析内共享（见 dataStreamCache.readDataStreamShared）。
+    // 旧实现在此处的门槛是 `data.length >= 64`，共享视图后仍由本处自行施加。
+    const dataStreamShared = readDataStreamShared(ctx.ole, directory, ctx.dataStreams)
+    const dataStreamData: Uint8Array | null =
+      dataStreamShared !== null && dataStreamShared.length >= 64 ? dataStreamShared : null
 
     const pictures: ParsedPicture[] = []
     const seenFcPics = new Set<number>()

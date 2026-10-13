@@ -22,6 +22,8 @@ import type { OleParser, DirectoryEntry } from '../oleParser'
 import type { DopData } from '../dopParser'
 import type { ChpxRun } from '../formatParser'
 import type { DocumentStories, HeaderFooterPartType, HeaderFooterPartContent } from '../docFormat'
+import { readDataStreamShared } from './dataStreamCache'
+import type { DataStreamCache } from './dataStreamCache'
 
 /** A 域会话上下文：结构化兼容 clxReader.ClxContext */
 export interface StorySplitterContext {
@@ -31,6 +33,13 @@ export interface StorySplitterContext {
   readUint32(data: Uint8Array, offset: number): number
   /** 表流读取（splitHeaderParts 的 PlcfHdd 路径需要） */
   readTableStream(fib: FibData, directory: DirectoryEntry[]): Uint8Array | null
+  /**
+   * Round 148：可选的 `Data` 流读取缓存（一次解析内按目录条目身份键控）。
+   * splitHeaderParts 的页眉页脚图片路径与 extractImages / extractPictures /
+   * parseFormatRuns 共享同一条 Data 流。省略时逐字节等价旧实现；
+   * 生命周期由 DocParser 在每次解析开始处 clear。
+   */
+  dataStreams?: DataStreamCache
 }
 
 export interface StoryText {
@@ -216,18 +225,17 @@ export function splitHeaderParts(
     // 提取页眉页脚区域中的图片（通过 chpxRuns 中的 fcPic）
     const headerPictures: ParsedPicture[] = []
     if (chpxRuns.length > 0 && directory) {
-      const dataEntry = ctx.ole.findStreamByName(directory, 'Data')
-      if (dataEntry) {
-        const dataStream = ctx.ole.readStream(dataEntry)
-        if (dataStream.data && dataStream.data.length > 0) {
-          const seenFcPics = new Set<number>()
-          for (const run of chpxRuns) {
-            if (run.fcPic !== undefined && !seenFcPics.has(run.fcPic)) {
-              seenFcPics.add(run.fcPic)
-              const pic = parsePicfAt(dataStream.data, run.fcPic)
-              if (pic) {
-                headerPictures.push(pic)
-              }
+      // Round 148：Data 流与 extractImages / extractPictures / parseFormatRuns
+      // 在同一次解析内共享（见 dataStreamCache.readDataStreamShared）。
+      const dataStreamData = readDataStreamShared(ctx.ole, directory, ctx.dataStreams)
+      if (dataStreamData !== null) {
+        const seenFcPics = new Set<number>()
+        for (const run of chpxRuns) {
+          if (run.fcPic !== undefined && !seenFcPics.has(run.fcPic)) {
+            seenFcPics.add(run.fcPic)
+            const pic = parsePicfAt(dataStreamData, run.fcPic)
+            if (pic) {
+              headerPictures.push(pic)
             }
           }
         }

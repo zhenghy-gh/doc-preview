@@ -81,6 +81,7 @@ import {
 } from './docparser/clxReader'
 import { parseClxPieces } from './docparser/pieceTable'
 import { parseClxWithStories, toDocumentStories } from './docparser/storySplitter'
+import { readDataStreamShared } from './docparser/dataStreamCache'
 import { guessCharFormat, guessCharFormatWithoutStyles, detectParagraphFormat, detectListInfo, detectAlignment } from './docparser/heuristics/textHeuristics'
 import {
   cleanParagraph, shouldSkipParagraph, hasSignificantContent,
@@ -266,6 +267,26 @@ export class DocParser {
    */
   private readonly tableStreamCache = new Map<0 | 1, StreamData | null>()
 
+  /**
+   * Round 148：同一次解析内按 **Data 目录条目身份** 共享的 `Data` 流读取结果。
+   *
+   * 一次解析经 4 个上游入口反复读同一条 `Data` 流（`parseFormatRuns` 的
+   * `extractShapesFromDataStream`、`documentAssets` 的 `extractImages` /
+   * `extractPictures`、`storySplitter` 的 `splitHeaderParts` 页眉页脚图片），
+   * 每次都 `readStream` 出一份新的全流拷贝（真实 27 份语料实测：58 次调用、
+   * 共读 2,236,262 字节，约 18–22 个文档有 Data 流、平均 3.25 次重复读）。
+   * 这是 Round 146 表格流缓存之后遗留的「同内容不同对象」型重复——
+   * `readStream` 每次 `new Uint8Array`，故改按**条目对象**（而非视图对象）
+   * 键控才可及。`parse()` / `parseWithFormat()` 开始处清空，不跨解析驻留。
+   *
+   * 语义等价的前提：四个消费方对 Data 流**全部只读**（已逐一读码确认：
+   * 边界检查后的魔数扫描 / `parsePicfAt` 字段读取 / `subarray` 取窗；
+   * 27 份语料全结果逐字节比对守住）。`OleParser.readStream` 本体不动，
+   * 其「每次返回调用方独占副本」的公开契约不受影响——缓存由 DocParser
+   * 在解析作用域内显式共享，不是 `readStream` 自身行为的变化。
+   */
+  private readonly dataStreamCache = new Map<DirectoryEntry, Uint8Array | null>()
+
   constructor(buffer: ArrayBuffer, maxScanBytes?: number) {
     this.buffer = buffer
     this.ole = new OleParser(buffer)
@@ -287,6 +308,8 @@ export class DocParser {
       logger.info('开始解析 DOC 文件')
       // Round 146：表格流缓存只服务于同一次解析，入口处清空。
       this.tableStreamCache.clear()
+      // Round 148：Data 流读取缓存同理。
+      this.dataStreamCache.clear()
 
       if (!this.ole.isOleFile()) {
         const error = this.ole.getFormatErrorString()
@@ -348,6 +371,8 @@ export class DocParser {
     this.magicScanIndex = undefined
     // Round 146：表格流缓存同理，每次解析开始清空。
     this.tableStreamCache.clear()
+    // Round 148：Data 流读取缓存同理，每次解析开始清空。
+    this.dataStreamCache.clear()
     try {
       logger.info('开始解析带格式的 DOC 文件')
       onProgress?.('verifying', 5)
@@ -1039,14 +1064,13 @@ export class DocParser {
     // Parse shapes (Office Art Drawing Container)
     // Floating images have shape anchors that describe their position/size
     try {
-      const dataEntry = this.ole.findStreamByName(directory, 'Data')
-      if (dataEntry) {
-        const dataStream = this.ole.readStream(dataEntry)
-        if (dataStream.data && dataStream.data.length > 0) {
-          const dataShapes = extractShapesFromDataStream(dataStream.data)
-          if (dataShapes.length > 0) {
-            shapes.push(...dataShapes)
-          }
+      // Round 148：Data 流与 extractImages / extractPictures / splitHeaderParts
+      // 在同一次解析内共享（按目录条目身份键控，见 dataStreamCache）。
+      const dataStreamData = readDataStreamShared(this.ole, directory, this.dataStreamCache)
+      if (dataStreamData !== null) {
+        const dataShapes = extractShapesFromDataStream(dataStreamData)
+        if (dataShapes.length > 0) {
+          shapes.push(...dataShapes)
         }
       }
       if (wordDocData && wordDocData.length > 0) {
@@ -1733,6 +1757,7 @@ export class DocParser {
       ole: this.ole,
       maxScanBytes: this.maxScanBytes,
       readTableStream: this.readTableStream.bind(this),
+      dataStreams: this.dataStreamCache,
     }
   }
 
@@ -1744,6 +1769,7 @@ export class DocParser {
       readUint32: clxReadUint32,
       readTableStream: this.readTableStream.bind(this),
       tableStreams: this.tableStreamCache,
+      dataStreams: this.dataStreamCache,
     }
   }
 

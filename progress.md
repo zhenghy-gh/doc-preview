@@ -1318,3 +1318,18 @@
 - 性能（同进程配对端到端 r147-paired.mjs 400 轮）：中位 +7.657ms/轮、均值 +7.54ms、候选更快 378/400(94.5%)、二项 z=17.8、p≈0，约 +8.1%（Round145 基线 ~94ms/轮）。候选为纯重构：bundle raw −583B / gzip +45B（净中性）。
 - 护栏：并发 worker tests/docParser.round147.test.ts 293 行 11/11（65536 码元穷举 + 真实语料决策层差分 9 merged 变体含对抗 + 97% 段落 charFormatFromReal 无 styles / >1000 非真实段 styles=detectCharacterStyles + 4 负控 + 元断言）；更新 3 个旧护栏随新路由（docParser.test.ts expectLegacyMerge/check 增 vi.spyOn(textHeuristics 导出,'guessCharFormatWithoutStyles').mockReturnValue(base) 并迁移调用断言；textHeuristics.round140.test.ts 验证 guessCharFormatWithoutStyles=guessCharFormat 减 styles、计数 guessCharFormat 非真实段 1012 / guessCharFormatWithoutStyles 真实段 32690 / 合计 33702）。
 - 给下一轮：createParagraphsWithRealFormats 仍第 1 大自耗（~13–15%），其内部对象展开（约 3.7%）与 bytesToBase64 分块 fromCharCode.apply（约 2.90%）仍待复核；applyStructuralFormats（写-读依赖链、合并上限<1%、等价风险高）本轮评估为默认否决降级备份，未落地；剖析 top4 均千刀万剐型。详见 docs/changelog/2026-10-12-round147-optimization.md，下一轮 148，目标 208。
+
+## Round 148/100 — 2026-10-13
+- 采纳「同一次解析内按 Data 目录条目身份共享 Data 流读取」，版本 0.7.68→0.7.69。Round146 表格流缓存之后遗留的「同内容不同对象」型重复（readStream 每次 new Uint8Array，Round139 的视图身份键控抓不到）。
+- 前提：--cpu-prof（40 轮×27 份，median 90.98ms）top：createParagraphsWithRealFormats 11.56%、GC 10.52%、applyStructuralFormats 12.79%（两份副本）、buildMagicScanIndex 4.24%、bytesToBase64 4.16%。探针 r148-dataprobe.mjs：readStream('Data') 58 次/轮、2,236,262 B，4 个上游入口（parseFormatRuns→shapes / extractImages / extractPictures / splitHeaderParts 页眉页脚图片），平均 3.25 次重复读。
+- 测量注记：recon-profile.mjs 硬编码 Round146 旧 bundle 致首次剖析作废；新 r148-profile.mjs 参数化 bundle 路径。
+- 实现：新模块 docparser/dataStreamCache.ts（readDataStreamShared，按条目对象键控，缺流/空流返 null 不占键位）；docParser.dataStreamCache 实例字段两入口 clear；AssetExtractionContext/StorySplitterContext 加可选 dataStreams；四消费点改走共享函数并保留各自长度门槛（>0 / >=64）；readStream 本体不动。
+- 隔离基准（r148-isodata.mjs，配对 60 轮）：readStream('Data') 总耗时 0.486→0.164ms/轮（配对中位差 −0.3135ms、58/60 胜出），读取 58→18 次、2,236,262→688,052 B。
+- 下游效应（接线后重测）：共享视图使 extractPictures 的 Data 兜底扫描与图片 base64 命中 Round139 ImageWorkCache（旧实现新对象天然不命中）；剖析 readRegularStream 63→41、bytesToBase64 152→116、buildMagicScanIndex 155→129、GC 385→322 ticks（方向性佐证）。
+- 端到端（最终源码同进程配对 n=400）：中位 +0.544%、配对中位差 −0.542ms、配对均值 −0.275ms、newMin−oldMin −0.883ms、胜 230/400（57.5%）；累计 6 会话 1389/2400=57.9%（z≈7.7, p≈1e-14）。协议交错 4×NEW/4×OLD 独立进程 min 1/4 组更快、其余在跨会话漂移±4%内，按 Round146 纪律采信配对口径。
+- 等价性与门禁：27 份 16,247,039 字符逐字节一致（esbuild cand / dist-lib cand / dist-lib HEAD 基线三路）；bench-diff 148≡146 除 cycle/timestamp 逐字段相同；全量 npm test 84 文件 1735 项 + vue-tsc + lint + app/lib 双构建全通过（test/lint 串行）。
+- 包体（git worktree /tmp/dp148-head-wt 同工具链基线，用后移除）：doc-preview.js raw +1,518/gzip-9 +477；umd.cjs raw +177/gzip-9 +33。
+- 护栏 tests/dataStreamCache.test.ts 13 项（等价性 27 份、Proxy 计数每文件恰 1 次读、端到端 DocParser 四消费方合计 1 次读+连续两次解析各 1 次+images 非空、只读性四消费函数+篡改元断言、3 负控+慢等价对照、源码接线元断言）；离树负控注入生产 3 组（sliceHit / assetCtx 摘 dataStreams / parseWithFormat 入口 clear 移除）各检出 2 项失败，字节级还原后 13/13。
+- 已否决：bytesToBase64 分块 btoa（CHUNK=8190=3 的倍数逐块 btoa 后拼接，21 种真实尺寸输出逐字符相同、数学严格等价）隔离实测 0.968× 更慢，不落地。
+- 条目身份键控的结构优势：跨文档/跨流串键在结构上不存在，护栏负控改为针对本设计真实失败模式（切片/键退化/读错流）。
+- 给下一轮：createParagraphsWithRealFormats 仍第 1 大（内部展开约 2%，注意 resolved-先行键序约束）；applyStructuralFormats 维持默认否决；bytesToBase64 0x2000 已最优；decodeRangeWithoutGuard 3.80% 未动。下一轮 149，目标 208。
