@@ -1363,3 +1363,10 @@
 - 勘察 src/utils/docParser.ts:1466 的 extractFormattedText：纯编排/分发方法，每文档仅一次调用；自耗 3.65% 由每文档一次性开销构成（变量声明、parseFormatRuns ~22 字段解构、mainText.trim()/.length、logger 调用、1571–1591 行 ~20 字段大返回对象），**无逐字符/逐段落热循环**——重活均在被分别归因的子调用（createParagraphsWithRealFormats 12.75% / parseFormatRuns / applyStructuralFormats 13.56% / filterParagraphsWithGenericLogic）。
 - 结论：本方法无可剥离安全微优化点；任何改动只作用于每文档一次路径、端到端无可见收益，且按 151 教训加派发反而可能退化。未改源码、未发布。
 - 安全面穷尽确认：decodeRangeWithoutGuard(149 中性)、Object.keys→hasKeys(150 中性)、mergeCharFormatForParagraph 展开(151 退化 13.3%)、bytesToBase64/buildMagicScanIndex(已最优)、applyStructuralFormats(默认否决)、createParagraphsWithRealFormats(高风险未动)、extractFormattedText(152 勘察无热循环)。**确证安全微优化面已榨尽**。建议暂停或转风险结构改动。下一轮 153（或暂停），目标 208。
+
+## Round 153/100 — 2026-10-13 — 候选撤回（createParagraphsWithRealFormats 安全子集展开→Object.assign，中性）
+- 用户选「走风险结构改动：重构 createParagraphsWithRealFormats 对象 spread」。该函数 post-148 自耗 12.75%（第 1 大），内 6 处展开构建段落 paraFormat/charFormat。
+- 安全子集：714/831/836/853 展开目标是每段落私有对象（newPara.paraFormat/charFormat 来自 detectParagraphFormat/guessCharFormat 返回新对象、merged 每段落新建）→ 原地 Object.assign 复用、键序与展开逐键一致；738/744 目标是 resolveStyleFormat 返回的共享对象（resolvedParagraphStyles 缓存），原地合并污染缓存，保留展开。
+- 等价：27 份 parseWithFormat 落盘与 baseline（r149-head.mjs）diff -rq 逐字节一致；textHeuristics.round144 键序护栏 11/11；formatParser 137/137；vue-tsc 0。
+- 测量：同进程配对 r149-paired.mjs 400 对，中位比值 0.99512（候选中位快 0.49%）、均值 1.0041（慢 0.41%）、胜 219/400(54.75%)——中性（同 149/150 噪声地板）。即便去掉被持有输出对象分配，V8 分代 GC 仍近免费、Object.assign 调用开销抵消 GC 节省。
+- 战略：低/无风险空间（含风险路径安全子集）确证无稳定收益。剩余仅 738/744 高风险共享缓存原地合并（不推荐）、applyStructuralFormats 默认否决。建议暂停。下一轮 154（或暂停），目标 208。
