@@ -192,8 +192,35 @@ const LIST_BULLET_ASCII_ALT_RE = /^[•\*]\s/
 const LIST_BULLET_CJK_RE = /^[○●▪▸►→◇◆]\s/
 const LIST_BULLET_SQUARE_RE = /^[▪▫◦‣⁃]\s/
 
+/**
+ * 启发式字符格式（不含 `styles`）。
+ *
+ * ── Round 147 ──────────────────────────────────────────────────────────
+ * 旧 `guessCharFormat` 每次都无条件调用 `detectCharacterStyles`。但
+ * `createParagraphsWithRealFormats` 在真实 CHPX 格式可用时会把
+ * `charFormat.styles` **整个键丢掉**（`{...charFormat, ...merged}` 后的 rest
+ * 解构排除 styles）——真实 27 份语料实测 97% 的段落走这条路，即绝大部分
+ * `detectCharacterStyles` 的产出（自耗 4.02% + 正则 1.10%）是纯浪费。
+ *
+ * `guessCharFormatWithoutStyles` 与 `guessCharFormat` 产出**逐键相同，
+ * 只差 styles 键不存在**；`guessCharFormatCore` 是唯一的实现体。
+ */
 export function guessCharFormat(text: string, _paragraphIndex?: number): CharacterFormat {
-    const charFormat: CharacterFormat = { styles: [] }
+    const charFormat = guessCharFormatCore(text, true)
+    // 键序保持：styles 由 core 以字面量首键建出，赋值不改变其位置。
+    charFormat.styles = detectCharacterStyles(text)
+    return charFormat
+}
+
+/** 同 {@link guessCharFormat}，但不产出 `charFormat.styles` 键（见上）。 */
+export function guessCharFormatWithoutStyles(text: string, _paragraphIndex?: number): CharacterFormat {
+    return guessCharFormatCore(text, false)
+}
+
+function guessCharFormatCore(text: string, withStyles: boolean): CharacterFormat {
+    // withStyles 为假时**不建 styles 键**（不是建空数组再删）——旧实现在
+    // 真实格式路径会把这个键整个丢掉，缺键与空数组键在 JSON 输出上不同。
+    const charFormat: CharacterFormat = withStyles ? { styles: [] } : {}
     const totalLength = text.length
     // ── Round 112：无 CJK 时跳过 O(n) 中文/空白计数 ──────────────────────
     // 真实语料 99.98 % 的段落不含 CJK。此时 `chineseCount` 必为 0，于是
@@ -254,7 +281,6 @@ export function guessCharFormat(text: string, _paragraphIndex?: number): Charact
       }
     }
 
-    charFormat.styles = detectCharacterStyles(text)
     return charFormat
   }
 

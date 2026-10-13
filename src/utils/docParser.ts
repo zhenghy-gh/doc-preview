@@ -81,7 +81,7 @@ import {
 } from './docparser/clxReader'
 import { parseClxPieces } from './docparser/pieceTable'
 import { parseClxWithStories, toDocumentStories } from './docparser/storySplitter'
-import { guessCharFormat, detectParagraphFormat, detectListInfo, detectAlignment } from './docparser/heuristics/textHeuristics'
+import { guessCharFormat, guessCharFormatWithoutStyles, detectParagraphFormat, detectListInfo, detectAlignment } from './docparser/heuristics/textHeuristics'
 import {
   cleanParagraph, shouldSkipParagraph, hasSignificantContent,
   filterParagraphsWithGenericLogic as pf_filterParagraphsWithGenericLogic,
@@ -1223,10 +1223,72 @@ export class DocParser {
       const cleaned = this.cleanParagraph(textToClean.trim())
       if (!this.shouldSkipParagraph(cleaned) && cleaned.length > 0) {
         const paraFormat = this.detectParagraphFormat(cleaned, i, allParagraphs.length)
-        const charFormat = this.guessCharFormat(cleaned, i)
         if (pageBreakBefore) {
           paraFormat.pageBreakBefore = true
         }
+        const cpStart = para.cpStart
+        const cpEnd = cpStart + para.text.length
+        // ── Round 147：先算 merged（真实 CHPX 合并结果），再决定是否值得算 styles ──
+        // 旧顺序是「先 guessCharFormat（含 detectCharacterStyles）→ … → 合并真实格式时
+        // 把 styles 键整个丢掉」。真实语料 97% 的段落有真实格式，那部分 styles 全是
+        // 白算。merged 只依赖 cpStart/cpEnd/cleaned.length 与 pieceMap/chpxRuns/
+        // characterStyleFormats/fontNames，全部在 newPara 之前就已知，可以安全前移。
+        // 1. Try piece-level CHPX first (most accurate when prm/fChp is set)
+        let merged: Partial<CharacterFormat> = {}
+        let usedPieceChp = false
+        if (pieceMap && pieceMap.length > 0) {
+          // Find pieces that overlap the paragraph's [cpStart, cpEnd).
+          // We need to know the paragraph's range in piece-map coordinates.
+          // Since pieceMap and para are both based on `text`, para.cpStart
+          // IS the offset in the same coordinate system.
+          while (pieceCursor < pieceMap.length && pieceMap[pieceCursor].end <= cpStart) {
+            pieceCursor++
+          }
+          const overlapping: Array<{ start: number; end: number; chpxIndex?: number }> = []
+          for (let pi = pieceCursor; pi < pieceMap.length && pieceMap[pi].start < cpEnd; pi++) {
+            const p = pieceMap[pi]
+            if (p.end > cpStart) overlapping.push(p)
+          }
+          if (overlapping.length > 0) {
+            const ratio = overlapping.reduce((s, p) => {
+              const overlapStart = Math.max(p.start, cpStart)
+              const overlapEnd = Math.min(p.end, cpEnd)
+              return s + (overlapEnd - overlapStart)
+            }, 0) / (cpEnd - cpStart)
+            // If overlapping pieces cover >= 50% of the paragraph, use them.
+            if (ratio >= 0.5) {
+              for (const p of overlapping) {
+                if (p.chpxIndex !== undefined && p.chpxIndex < chpxRuns.length) {
+                  const pieceChp = chpxRuns[p.chpxIndex]
+                  if (pieceChp.istd !== undefined) {
+                    const styleFormat = characterStyleFormats.get(pieceChp.istd)
+                    if (styleFormat) {
+                      merged = { ...merged, ...styleFormat }
+                      usedPieceChp = true
+                    }
+                  }
+                  if (pieceChp.format) {
+                    merged = { ...merged, ...pieceChp.format }
+                    usedPieceChp = true
+                  }
+                  if (pieceChp.fontIndex !== undefined && fontNames && fontNames[pieceChp.fontIndex]) {
+                    merged.fontName = fontNames[pieceChp.fontIndex]
+                    usedPieceChp = true
+                  }
+                }
+              }
+            }
+          }
+        }
+        // 2. Fall back to CHPX range matching when no piece-level data.
+        if (!usedPieceChp && chpxRuns.length > 0 && cleaned.length > 0) {
+          merged = mergeCharFormatForParagraph(chpxRuns, cpStart, cpEnd, fontNames, characterStyleFormats)
+        }
+        // 真实格式可用 ⇒ 旧实现会在下方把 styles 键丢掉 ⇒ 此时算 styles 纯属浪费。
+        const hasRealCharFormat = Object.keys(merged).length > 0
+        const charFormat = hasRealCharFormat
+          ? guessCharFormatWithoutStyles(cleaned, i)
+          : this.guessCharFormat(cleaned, i)
         const newPara: ParserParagraph = {
           text: cleaned,
           paraFormat,
@@ -1351,69 +1413,20 @@ export class DocParser {
           }
         }
 
-        const cpStart = para.cpStart
-        const cpEnd = cpStart + para.text.length
-        // 1. Try piece-level CHPX first (most accurate when prm/fChp is set)
-        let merged: Partial<CharacterFormat> = {}
-        let usedPieceChp = false
-        if (pieceMap && pieceMap.length > 0) {
-          // Find pieces that overlap the paragraph's [cpStart, cpEnd).
-          // We need to know the paragraph's range in piece-map coordinates.
-          // Since pieceMap and para are both based on `text`, para.cpStart
-          // IS the offset in the same coordinate system.
-          while (pieceCursor < pieceMap.length && pieceMap[pieceCursor].end <= cpStart) {
-            pieceCursor++
-          }
-          const overlapping: Array<{ start: number; end: number; chpxIndex?: number }> = []
-          for (let pi = pieceCursor; pi < pieceMap.length && pieceMap[pi].start < cpEnd; pi++) {
-            const p = pieceMap[pi]
-            if (p.end > cpStart) overlapping.push(p)
-          }
-          if (overlapping.length > 0) {
-            const ratio = overlapping.reduce((s, p) => {
-              const overlapStart = Math.max(p.start, cpStart)
-              const overlapEnd = Math.min(p.end, cpEnd)
-              return s + (overlapEnd - overlapStart)
-            }, 0) / (cpEnd - cpStart)
-            // If overlapping pieces cover >= 50% of the paragraph, use them.
-            if (ratio >= 0.5) {
-              for (const p of overlapping) {
-                if (p.chpxIndex !== undefined && p.chpxIndex < chpxRuns.length) {
-                  const pieceChp = chpxRuns[p.chpxIndex]
-                  if (pieceChp.istd !== undefined) {
-                    const styleFormat = characterStyleFormats.get(pieceChp.istd)
-                    if (styleFormat) {
-                      merged = { ...merged, ...styleFormat }
-                      usedPieceChp = true
-                    }
-                  }
-                  if (pieceChp.format) {
-                    merged = { ...merged, ...pieceChp.format }
-                    usedPieceChp = true
-                  }
-                  if (pieceChp.fontIndex !== undefined && fontNames && fontNames[pieceChp.fontIndex]) {
-                    merged.fontName = fontNames[pieceChp.fontIndex]
-                    usedPieceChp = true
-                  }
-                }
-              }
-            }
-          }
-        }
-        // 2. Fall back to CHPX range matching when no piece-level data.
-        if (!usedPieceChp && chpxRuns.length > 0 && cleaned.length > 0) {
-          merged = mergeCharFormatForParagraph(chpxRuns, cpStart, cpEnd, fontNames, characterStyleFormats)
-        }
-        if (Object.keys(merged).length > 0) {
+        if (hasRealCharFormat) {
           // Clear heuristic styles array since real CHPX format is available.
           // Round 107：原先先对象展开再 `delete newPara.charFormat.styles`，
           // 而 `delete` 会把新建对象打成字典模式（V8 上比展开本身还贵）。
-          // 改用「解构 rest 时排除 styles」，键集合与顺序（除 styles 外）完全一致。
-          const { styles: _heuristicStyles, ...realCharFormat } = {
-            ...newPara.charFormat,
-            ...merged,
+          // Round 147：charFormat 此时本就没有 styles 键（见上方
+          // guessCharFormatWithoutStyles），一次展开即可；`in` 兜底保持旧语义
+          // ——万一 merged 将来带上 styles 键，仍旧整键丢弃。
+          const realCharFormat = { ...newPara.charFormat, ...merged }
+          if ('styles' in realCharFormat) {
+            const { styles: _heuristicStyles, ...restCharFormat } = realCharFormat
+            newPara.charFormat = restCharFormat
+          } else {
+            newPara.charFormat = realCharFormat
           }
-          newPara.charFormat = realCharFormat
           newPara.charFormatFromReal = true
         }
 

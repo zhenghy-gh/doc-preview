@@ -1,13 +1,14 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { DocParser } from '../src/utils/docParser'
 import {
   countChineseAndWhitespace,
   detectCharacterStyles,
   guessCharFormat,
 } from '../src/utils/docparser/heuristics/textHeuristics'
+import * as textHeuristics from '../src/utils/docparser/heuristics/textHeuristics'
 import type { CharacterFormat } from '../src/utils/docFormat'
 
 // Round140：oracle 来自 ac61466a268ffe4b051d25a4f1ae65363af8ee59 的 git HEAD。
@@ -199,6 +200,21 @@ describe('Round 140：guessCharFormat 英文标题惰性求值', () => {
       if ((actual.styles?.length ?? 0) > 0) styles++
       return actual
     }
+    // Round 147：真实格式段落改走模块函数 guessCharFormatWithoutStyles（= guessCharFormat 减 styles 键）。
+    // 此处同时校验其产物等于旧 guessCharFormat 去掉 styles 键（含键序）。
+    const originalWithoutStyles = textHeuristics.guessCharFormatWithoutStyles
+    let callsWithoutStyles = 0
+    let stylesWithoutStyles = 0
+    const withoutStylesSpy = vi.spyOn(textHeuristics, 'guessCharFormatWithoutStyles').mockImplementation((text, index) => {
+      const full = round140OldGuessCharFormat(text, index)
+      const { styles: _s, ...rest } = full
+      const actual = originalWithoutStyles(text, index)
+      expect(actual).toEqual(rest)
+      expect(JSON.stringify(actual)).toBe(JSON.stringify(rest))
+      callsWithoutStyles++
+      if ((actual.styles?.length ?? 0) > 0) stylesWithoutStyles++
+      return actual
+    })
     try {
       const directory = path.resolve(process.cwd(), 'docs')
       const files = fs.readdirSync(directory).filter(name => /\.(doc|dot)$/.test(name)).sort()
@@ -212,9 +228,15 @@ describe('Round 140：guessCharFormat 英文标题惰性求值', () => {
       }
     } finally {
       proto.guessCharFormat = original
+      withoutStylesSpy.mockRestore()
     }
-    expect(calls).toBe(33702)
+    // Round 147 路由后：非真实段落走实例方法 guessCharFormat（仍带 styles），真实段落走
+    // guessCharFormatWithoutStyles（无 styles）；合计调用数不变。
+    expect(calls).toBe(1012)
     expect(styles).toBe(calls)
+    expect(callsWithoutStyles).toBe(32690)
+    expect(stylesWithoutStyles).toBe(0)
+    expect(calls + callsWithoutStyles).toBe(33702)
     expect(paragraphs).toBeGreaterThan(0)
   })
 })

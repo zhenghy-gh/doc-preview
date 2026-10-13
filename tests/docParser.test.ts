@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { strictEqual } from 'node:assert'
 import { readFileSync } from 'node:fs'
 import { DocParser, parseDocFileFromBuffer, parseDocFileWithFormat, parseDocFile } from '../src/utils/docParser'
+import * as textHeuristics from '../src/utils/docparser/heuristics/textHeuristics'
 
 describe('DocParser', () => {
   describe('parseDocFileFromBuffer', () => {
@@ -2335,6 +2336,10 @@ describe('Round126 real character format merge guards', () => {
     const mergedKeysBefore = Reflect.ownKeys(merged)
     const { styles: _styles, ...expected } = { ...base, ...merged }
     const guessCharFormat = vi.spyOn(parser as any, 'guessCharFormat').mockReturnValue(base)
+    // Round 147：真实格式段落改走模块函数 guessCharFormatWithoutStyles，需同步 mock 它
+    // 才能隔离启发式；候选在该路径会对含 styles 的 base 做 `if ('styles' in)` 剥离，与
+    // 上方 expected 的解构剥离一致。
+    const guessCharFormatWithoutStyles = vi.spyOn(textHeuristics, 'guessCharFormatWithoutStyles').mockReturnValue(base)
 
     try {
       const paragraphs = (parser as any).createParagraphsWithRealFormats(
@@ -2351,7 +2356,7 @@ describe('Round126 real character format merge guards', () => {
       expect(paragraphs).toHaveLength(1)
       expect(paragraphs[0].text).toBe(text)
       expect(paragraphs[0].charFormatFromReal).toBe(true)
-      expect(guessCharFormat).toHaveBeenCalledWith(text, 0)
+      expect(guessCharFormatWithoutStyles).toHaveBeenCalledWith(text, 0)
       const actual = paragraphs[0].charFormat
       expect(JSON.stringify(actual)).toBe(JSON.stringify(expected))
       expect(actual).toEqual(expected)
@@ -2366,6 +2371,7 @@ describe('Round126 real character format merge guards', () => {
       return actual
     } finally {
       guessCharFormat.mockRestore()
+      guessCharFormatWithoutStyles.mockRestore()
     }
   }
 
@@ -2775,6 +2781,9 @@ describe('Round128 resolved style presence guards', () => {
       end: run.cpEnd - 1, chpxIndex: index }))
     const paraSpy = vi.spyOn(parser as any, 'detectParagraphFormat').mockImplementation(() => ({ ...basePara }))
     const charSpy = vi.spyOn(parser as any, 'guessCharFormat').mockImplementation(() => ({ ...baseChar }))
+    // Round 147：真实格式段落改走模块函数 guessCharFormatWithoutStyles，需同步 mock 它；
+    // 候选在该路径会对含 styles 的 base 做 `if ('styles' in)` 剥离，与 legacyFormats 一致。
+    const charSpyWithoutStyles = vi.spyOn(textHeuristics, 'guessCharFormatWithoutStyles').mockImplementation(() => ({ ...baseChar }))
     try {
       const paragraphs = (parser as any).createParagraphsWithRealFormats(
         texts.join('\n'), chars.length ? chpx : [], runs, styles, [], chars.length ? pieces : undefined,
@@ -2795,13 +2804,15 @@ describe('Round128 resolved style presence guards', () => {
         expect(actual.charFormatFromReal).toBe(Object.keys(chars[index] ?? {}).length ? true : undefined)
       }
       expect(paraSpy).toHaveBeenCalledTimes(ids.length)
-      expect(charSpy).toHaveBeenCalledTimes(ids.length)
+      // Round 147：真实格式段落走 charSpyWithoutStyles，非真实段落走 charSpy，合计每段落一次。
+      expect(charSpy.mock.calls.length + charSpyWithoutStyles.mock.calls.length).toBe(ids.length)
       expect(styles).toEqual(before)
       expect(JSON.stringify(styles)).toBe(JSON.stringify(before))
       return paragraphs
     } finally {
       paraSpy.mockRestore()
       charSpy.mockRestore()
+      charSpyWithoutStyles.mockRestore()
     }
   }
 
