@@ -684,25 +684,30 @@ export function hasTooManyJunkChars(text: string): boolean {
     
     for (let i = paragraphs.length - 1; i >= 0; i--) {
       const para = paragraphs[i]
+      // Round 157：`__hasEmbeddedPic` 只在 Step 2 中 `text.includes('\u0001')` 为真时置位，
+      // 且此后没有任何路径会从 `para.text` 里删掉 `\u0001`（Step 3.5 的合并只是把
+      // `prev.text` 前插，不删字符；Step 3.6 只插入空段落），故 `__hasEmbeddedPic === true`
+      // 蕴含 `para.text.includes('\u0001')` —— 原先的 `text.includes('\u0001') &&` 是一次
+      // 恒真的全串扫描（语料 34.8k 段落/轮里仅 126 个真正命中），删掉即逐字节等价。
+      // 注意：Step 4 自身插入的 `picPara`（text 为纯 `\u0001`）没有该标志，两版都会跳过它。
+      if (!para.__hasEmbeddedPic) continue
       const text = para.text || ''
-      if (text.includes('\u0001') && para.__hasEmbeddedPic) {
-        const textWithoutPic = text.replace(PIC_PLACEHOLDER_RE, '')
-        const picPara: ParserParagraph = {
-          text: '\u0001',
-          charFormat: para.charFormat ? { ...para.charFormat, fontSize: 0 } : { fontSize: 0 },
-          paraFormat: { alignment: 'center' },
-        }
-        para.text = textWithoutPic
-        // If the original paragraph is inside a list group, place the image
-        // paragraph after the entire list group so it appears after all list items.
-        if (currentListStart >= 0 && i >= currentListStart && i < currentListEnd) {
-          // Insert at currentListEnd (after the last list item)
-          paragraphs.splice(currentListEnd, 0, picPara)
-          currentListEnd++ // account for the insertion
-        } else {
-          // Otherwise, insert right after the original paragraph
-          paragraphs.splice(i + 1, 0, picPara)
-        }
+      const textWithoutPic = text.replace(PIC_PLACEHOLDER_RE, '')
+      const picPara: ParserParagraph = {
+        text: '\u0001',
+        charFormat: para.charFormat ? { ...para.charFormat, fontSize: 0 } : { fontSize: 0 },
+        paraFormat: { alignment: 'center' },
+      }
+      para.text = textWithoutPic
+      // If the original paragraph is inside a list group, place the image
+      // paragraph after the entire list group so it appears after all list items.
+      if (currentListStart >= 0 && i >= currentListStart && i < currentListEnd) {
+        // Insert at currentListEnd (after the last list item)
+        paragraphs.splice(currentListEnd, 0, picPara)
+        currentListEnd++ // account for the insertion
+      } else {
+        // Otherwise, insert right after the original paragraph
+        paragraphs.splice(i + 1, 0, picPara)
       }
     }
   }
