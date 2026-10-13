@@ -40,6 +40,45 @@ const XML_HEADER = '<?xml'
 const FREESECT = -1       // 0xFFFFFFFF
 const ENDOFCHAIN = -2     // 0xFFFFFFFE
 
+// ── FAT / MiniFAT 链遍历的循环检测：共享世代戳位图 ──────────────────────
+// 原先 4 处链遍历各持一个 `new Set<number>()` 记录已访问扇区。Round 161 插桩
+// 实测 `visited` 操作 48,652 次/轮（`readRegularStream` 占 78.8%），而 Set 的
+// **分配**与**哈希**都远比一次 TypedArray 下标读写贵。
+//
+// 换成「模块级共享 Uint32Array + 每调用自增世代号」后两者都省掉：
+//   - 不需要清零——上一次调用留下的戳记是**更小的世代号**，与本调用不同即视为未访问；
+//   - 不需要分配——数组只在首次需要时增长一次，之后长期复用。
+// 隔离基准（每轮 1,153 次链遍历、含分配）：Set 0.4895 ms → 世代戳 **0.0803 ms**（6.1×）；
+// 作为对照，Round 161 被否决的「每次 `new Uint8Array(fat.length)`」只到 0.2930 ms，
+// 因为分配成本抵消了哈希节省。
+//
+// **等价性前提**：下面 4 处循环的守卫都含 `currentSector < fat.length`（或
+// `< miniFat.length`），故下标恒落在 `[0, size)` 内，位图必然覆盖。**因此本机制
+// 只用于这 4 处**：`_getExtendedDifat` / `_normalizeDifat` 的 sector 值没有上界
+// 检查（TypedArray 越界写是静默 no-op ⇒ 会退化成「不做循环检测」），`resolveStyleFormat`
+// 的键是 istd（为其建位图不划算）——这三处一律保留原 `Set`。
+//
+// 内存：数组容量按 `size` 向上取 2 的幂，与 FAT 条目数同量级（≈ 文件大小/扇区大小
+// 的 4 倍字节），一次性常驻复用。调用方本就持有整个文件缓冲，故可忽略。
+let visitStamps = new Uint32Array(0)
+let visitEpoch = 0
+
+/** 为一次链式遍历取一个互不相同的世代号；必要时扩容 `visitStamps`。 */
+function beginVisit(size: number): number {
+  if (visitStamps.length < size) {
+    let n = visitStamps.length > 0 ? visitStamps.length : 1024
+    while (n < size) n *= 2
+    visitStamps = new Uint32Array(n)
+    visitEpoch = 0
+  }
+  // 世代号回绕：清空位图后从 1 重新开始（Uint32Array 的取值域是 [0, 0xffffffff]）。
+  if (visitEpoch >= 0xffffffff) {
+    visitStamps.fill(0)
+    visitEpoch = 0
+  }
+  return ++visitEpoch
+}
+
 export class OleParser {
   private buffer: ArrayBuffer
   private view: DataView
@@ -266,16 +305,18 @@ export class OleParser {
 
     let currentSector = header.firstDirectorySector
     let sectorIndex = 0
-    const visited = new Set<number>()
+    // 循环检测：共享世代戳位图（见 beginVisit）。守卫保证下标 < fat.length。
+    const epoch = beginVisit(fat.length)
+    const stamps = visitStamps
     const declaredSectors = header.directorySectorsCount > 0 ? header.directorySectorsCount : fat.length
     const maxIterations = Math.min(fat.length + 8, declaredSectors + 8)
 
     while (currentSector >= 0 && currentSector < fat.length && fat[currentSector] !== FREESECT && sectorIndex < maxIterations) {
-      if (visited.has(currentSector)) {
+      if (stamps[currentSector] === epoch) {
         logger.warn(`目录 FAT 链检测到循环: sector=${currentSector}`)
         break
       }
-      visited.add(currentSector)
+      stamps[currentSector] = epoch
       sectorIndex++
       const offset = this.sectorToOffset(currentSector, header)
 
@@ -451,14 +492,16 @@ export class OleParser {
     const expectedSectors = Math.ceil(entry.size / sectorSize) + 8
     const maxIterations = Math.min(fat.length + 8, expectedSectors)
     let iterations = 0
-    const visited = new Set<number>()
+    // 循环检测：共享世代戳位图（见 beginVisit）。守卫保证下标 < fat.length。
+    const epoch = beginVisit(fat.length)
+    const stamps = visitStamps
 
     while (currentSector >= 0 && currentSector < fat.length && fat[currentSector] !== FREESECT && bytesRead < targetSize && iterations < maxIterations) {
-      if (visited.has(currentSector)) {
+      if (stamps[currentSector] === epoch) {
         logger.warn(`流 FAT 链检测到循环: sector=${currentSector}`)
         break
       }
-      visited.add(currentSector)
+      stamps[currentSector] = epoch
       iterations++
       const offset = this.sectorToOffset(currentSector, header)
 
@@ -498,13 +541,15 @@ export class OleParser {
 
     let currentSector = header.firstMiniFatSector
     let sectorIndex = 0
-    const visited = new Set<number>()
+    // 循环检测：共享世代戳位图（见 beginVisit）。守卫保证下标 < fat.length。
+    const epoch = beginVisit(fat.length)
+    const stamps = visitStamps
     while (currentSector >= 0 && currentSector < fat.length && fat[currentSector] !== FREESECT && sectorIndex < miniFatSectorCount) {
-      if (visited.has(currentSector)) {
+      if (stamps[currentSector] === epoch) {
         logger.warn(`MiniFAT 链检测到循环: sector=${currentSector}`)
         break
       }
-      visited.add(currentSector)
+      stamps[currentSector] = epoch
       sectorIndex++
       const offset = this.sectorToOffset(currentSector, header)
       if (offset + sectorSize > this.buffer.byteLength) {
@@ -537,16 +582,18 @@ export class OleParser {
     let currentMiniSector = entry.startSector
     let bytesRead = 0
     let iterations = 0
-    const visited = new Set<number>()
+    // 循环检测：共享世代戳位图（见 beginVisit）。守卫保证下标 < miniFat.length。
+    const epoch = beginVisit(miniFat.length)
+    const stamps = visitStamps
     // Derive the cyclic-chain guard from the stream size (see readRegularStream).
     const maxIterations = Math.min(miniFat.length + 8, Math.ceil(targetSize / miniSectorSize) + 8)
 
     while (currentMiniSector >= 0 && currentMiniSector < miniFat.length && miniFat[currentMiniSector] !== FREESECT && bytesRead < targetSize && iterations < maxIterations) {
-      if (visited.has(currentMiniSector)) {
+      if (stamps[currentMiniSector] === epoch) {
         logger.warn(`迷你流链检测到循环: miniSector=${currentMiniSector}`)
         break
       }
-      visited.add(currentMiniSector)
+      stamps[currentMiniSector] = epoch
       iterations++
       const offset = currentMiniSector * miniSectorSize
       if (offset < 0 || offset >= rootStreamData.length) {
