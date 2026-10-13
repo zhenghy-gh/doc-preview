@@ -1384,3 +1384,12 @@
 - **发现 2（活代码候选）**：活热点为 `src/utils/docParser.ts:1186` 的 `createParagraphsWithRealFormats`（12.75%，第 1 大）。候选：把 L1355 `{ ...newPara.paraFormat, ...papx.format }` 与 L1447 `{ ...newPara.charFormat, ...merged }` 改为原地 `Object.assign`（键序与展开逐键一致；L1379/1385 目标含共享 `resolved` 缓存，必须保留展开）。
 - 验证：27 份 `parseWithFormat` 落盘与 baseline **逐字节一致**；`vue-tsc` 0；但 `tests/docParser.test.ts` **失败 9 项** —— Round 133 `expectLegacyMerge` 护栏（`tests/docParser.test.ts:2330-2376`）要求合并**产生新对象且不改动输入**（`actual!==base`、`getOwnPropertyDescriptors(base)` 不变）。原地 `Object.assign` 返回 `base` 并改写它，**结构上不可能同时满足零分配与「新对象+输入不变」**。
 - 结论：候选与正确性护栏直接冲突，判定**不可采纳**，按协议撤回（`git checkout -- src/utils/docParser.ts`），不升号、不发布，轮次计入。**教训（新）**：优化前必须确认目标文件在构建图内（有 `src/` 引用或导出名出现在 bundle）；仅凭剖析函数名去 `src/` 找「同名文件」会误中平行死代码副本。连续七轮（149/150/153/154 中性、151 退化、152 无点、155 护栏否决）解析路径低/无风险面均无稳定收益；须**转向不同优化面**。下一轮 156，目标 1000。
+
+## Round 156/100 — 2026-10-13 — 采纳（piece 级 CHPX 路径可用性门控：消除每段落都白算的 pieceMap 分支）——版本 0.7.70
+- **发现**：用计数补丁在真实 bundle 上插桩（27 份样本，20 轮）——`createParagraphsWithRealFormats` 的 pieceMap 分支对**每一个段落**（33,702/轮）都进入、overlapping 恒非空、ratio 恒 ≥0.5，但 **overlapping 中带 `chpxIndex` 的 piece = 0、`usedPieceChp` 置真 = 0**，故分支分配 `overlapping` 数组 + 捕获 cpStart/cpEnd 的 reduce 闭包 + 算 ratio 全部**白算**，结果被紧随的 fallback `mergeCharFormatForParagraph`（同 33,702/轮）完整覆盖。根因：`chpxIndex` 仅当 piece 的 PCD 置位 `fChp` 才有值（`pieceTable.ts:115,129`），这 27 份用 FKP 型 CHPX。
+- 附带排除：`{...styleFormat, ...run.format}` 只在 **2.04%** 的 run 上发生（Round 151 方向确证非瓶颈）；`mergeCharFormatForParagraph` 早退 0/33,702（成本在调用+二分，非分配）。
+- **候选**：段落循环前**一次性**判定 `piecePathUsable`（整份 pieceMap 是否存在 `p.chpxIndex !== undefined && p.chpxIndex < chpxRuns.length`），无则整段跳过 pieceMap 分支（`if (piecePathUsable && pieceMap)`）。等价性：分支内所有 `merged`/`usedPieceChp` 写入都在该条件内 ⇒ 无可用 piece 时分支对状态零副作用（`overlapping`/`ratio` 局部量、`pieceCursor` 仅本分支内用）。
+- 等价：27 份 parseWithFormat **逐字节一致**（16,247,039 字符，两路 shasum 均 `8f127d0b…`）。
+- 性能：同进程配对 r149-paired.mjs 400 对，baseMedian 85.063 / candMedian 83.864ms、**中位比值 0.98635（快 1.37%）**、**均值 0.9882（快 1.18%）**、**胜 251/400（62.75%）**——中位与均值同向为正，胜率显著高于阈值（57%+）与噪声地板（~54%）。**自 Round 148 以来首个端到端稳定为正的采纳轮。**
+- 护栏 tests/docParser.round156.test.ts 7 项（合成可区分输入：chpxRuns[0] 只覆盖 para0 前 5/20 字符 ⇒ fallback 返回 {}、piece 路径返回 {bold:true}）；**离树负控 A**（`if (false && pieceMap)` 无条件跳过）**3 项行为断言失败**、**负控 B**（门控丢 `< chpxRuns.length` 范围校验）**元断言失败**；恢复后 7/7。
+- 门禁：npm test **1742/1742（85 文件）** + vue-tsc 0 + lint 0 + app/lib 双构建全通过（test/lint 串行）。bench-diff 156≡148 除 cycle/timestamp 逐字段相同。包体（esbuild prof bundle）raw +303B。下一轮 157，目标 1000。

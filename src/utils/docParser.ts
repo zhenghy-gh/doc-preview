@@ -1222,6 +1222,25 @@ export class DocParser {
       if (Object.keys(format).length > 0) characterStyleFormats.set(style.istd, format)
     }
 
+    // ── Round 156：piece 级 CHPX 路径的可用性判定（一次/文档）──
+    // 下方 pieceMap 分支只有当某个 piece 真正带 CHPX 索引（PCD.fChp 置位 →
+    // chpxIndex 有值且在 chpxRuns 范围内）时才可能产出格式。对 FKP 型文档
+    // （真实 CHPX 由 mergeCharFormatForParagraph 从 CHPX bin table 合并，piece
+    // 无 fChp），该分支对**每一个段落**都白算：分配 overlapping 数组、跑一次
+    // 捕获 cpStart/cpEnd 的 reduce 闭包、算 ratio，却因 p.chpxIndex 恒为
+    // undefined 而从不写入 merged/usedPieceChp，结果被下方 fallback 覆盖。
+    // 先一次性判定「整份 pieceMap 里是否存在可用的 piece CHPX」，无则整段跳过。
+    let piecePathUsable = false
+    if (pieceMap && pieceMap.length > 0) {
+      for (let pi = 0; pi < pieceMap.length; pi++) {
+        const p = pieceMap[pi]
+        if (p.chpxIndex !== undefined && p.chpxIndex < chpxRuns.length) {
+          piecePathUsable = true
+          break
+        }
+      }
+    }
+
     for (let i = 0; i < allParagraphs.length; i++) {
       const para = allParagraphs[i]
       const rawText = para.text
@@ -1260,7 +1279,7 @@ export class DocParser {
         // 1. Try piece-level CHPX first (most accurate when prm/fChp is set)
         let merged: Partial<CharacterFormat> = {}
         let usedPieceChp = false
-        if (pieceMap && pieceMap.length > 0) {
+        if (piecePathUsable && pieceMap) {
           // Find pieces that overlap the paragraph's [cpStart, cpEnd).
           // We need to know the paragraph's range in piece-map coordinates.
           // Since pieceMap and para are both based on `text`, para.cpStart
