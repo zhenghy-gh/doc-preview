@@ -1357,3 +1357,9 @@
 - 测量：同进程配对 r149-paired.mjs 400 对，baseMedian 82.25ms / candMedian 93.40ms、**中位比值 1.13291（候选慢 13.3%）**、均值 1.13878（慢 13.9%）、胜 16/400(4%)——**明确退化**（非中性）。
 - 归因：候选在「无 styleFormat」的多数 run 上也执行 12 次 hasOwnProperty.call + 闭包派发，把原零开销常见路径变成调用开销；短命小对象由 V8 分代 GC 近乎免费回收，手动派发开销远超其分配成本。
 - 战略：连续三轮（149/150 中性、151 退化）安全微优化均无效，确认安全微优化面已确实榨尽；仅余高风险结构路径（createParagraphsWithRealFormats 对象 spread 重构须钉死 Round144 键序、applyStructuralFormats 默认否决）。下一轮 152（或暂停），目标 208。
+
+## Round 152/100 — 2026-10-13 — 无可行安全候选（extractFormattedText 勘察，安全面确证榨尽）
+- 用户选「试 extractFormattedText（最后一个未探安全候选）」。前提：post-148 HEAD --cpu-prof extractFormattedText 3.65%（第 5 大自耗）。
+- 勘察 src/utils/docParser.ts:1466 的 extractFormattedText：纯编排/分发方法，每文档仅一次调用；自耗 3.65% 由每文档一次性开销构成（变量声明、parseFormatRuns ~22 字段解构、mainText.trim()/.length、logger 调用、1571–1591 行 ~20 字段大返回对象），**无逐字符/逐段落热循环**——重活均在被分别归因的子调用（createParagraphsWithRealFormats 12.75% / parseFormatRuns / applyStructuralFormats 13.56% / filterParagraphsWithGenericLogic）。
+- 结论：本方法无可剥离安全微优化点；任何改动只作用于每文档一次路径、端到端无可见收益，且按 151 教训加派发反而可能退化。未改源码、未发布。
+- 安全面穷尽确认：decodeRangeWithoutGuard(149 中性)、Object.keys→hasKeys(150 中性)、mergeCharFormatForParagraph 展开(151 退化 13.3%)、bytesToBase64/buildMagicScanIndex(已最优)、applyStructuralFormats(默认否决)、createParagraphsWithRealFormats(高风险未动)、extractFormattedText(152 勘察无热循环)。**确证安全微优化面已榨尽**。建议暂停或转风险结构改动。下一轮 153（或暂停），目标 208。
