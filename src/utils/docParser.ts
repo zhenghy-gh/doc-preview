@@ -30,7 +30,7 @@ import type { StreamData, DirectoryEntry } from './oleParser'
 import { parseFib } from './fibParser'
 import type { ParseErrorCode } from './docFormat'
 import type { FibData, RgCcp } from './fibParser'
-import { parseChpxRuns, parsePapxRuns, parseChpxRunsFromFkp, parsePapxRunsFromFkp, mergeCharFormatForParagraph } from './formatParser'
+import { parseChpxRuns, parsePapxRuns, parseChpxRunsFromFkp, parsePapxRunsFromFkp, mergeCharFormatForParagraph, findPapxRunContaining } from './formatParser'
 import type { PieceFcRange } from './formatParser'
 import type { ChpxRun, PapxRun } from './formatParser'
 import { parseStylesheet, resolveStyleFormat, getHeadingLevel, detectStyleSet } from './styleParser'
@@ -1356,15 +1356,11 @@ export class DocParser {
             ? para.cpStart + para.text.length - 1
             : para.cpStart + para.text.length
           // Runs are sorted by cpStart: binary-search the run containing markCp.
-          let lo = 0
-          let hi = papxRuns.length - 1
-          while (lo <= hi) {
-            const mid = (lo + hi) >> 1
-            const run = papxRuns[mid]
-            if (run.cpEnd <= markCp) lo = mid + 1
-            else if (run.cpStart > markCp) hi = mid - 1
-            else { papx = run; break }
-          }
+          // Round 166：查询收口到 `findPapxRunContaining`（内含按 papxRuns 身份键控的
+          // 顺序游标，段落按文档序处理 ⇒ markCp 单调不减 ⇒ 上次命中下标是本次合法下界；
+          // 等价性论证见 formatParser.ts 中该函数的注释）。
+          const idx = findPapxRunContaining(papxRuns, markCp)
+          if (idx >= 0) papx = papxRuns[idx]
           if (!papx && para.originalIndex < papxRuns.length) {
             papx = papxRuns[para.originalIndex]
           }
