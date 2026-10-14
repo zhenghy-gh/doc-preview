@@ -158,6 +158,31 @@ interface StoryPieceMap {
 }
 
 /**
+ * Round 169：按 istd 缓存的「已解析样式格式」条目。
+ *
+ * `paraHasKeys` / `charHasKeys` 就是原先每段落各算一次的
+ * `resolved.paraFormat && Object.keys(resolved.paraFormat).length > 0`
+ * （以及 charFormat 的同形判断）。`resolveStyleFormat` 每次返回新建对象、
+ * 无模块级缓存，该对象存进局部 Map 后全程只读，故这两个布尔量是它的纯函数，
+ * 提升到解析点即逐位等价（实测 68,758 → 188 次/轮）。
+ */
+interface ResolvedParagraphStyleEntry {
+  resolved: ReturnType<typeof resolveStyleFormat>
+  paraHasKeys: boolean
+  charHasKeys: boolean
+}
+
+/**
+ * Round 169：`parseFormatRuns` 的字符样式（sprmCIstd）合并循环里按 istd 缓存的条目。
+ * 与上面的 `ResolvedParagraphStyleEntry` 同源同形，只是该处只用到 charFormat / fontIndex。
+ */
+interface ResolvedCharStyleEntry {
+  charFormat?: Partial<CharacterFormat>
+  charHasKeys: boolean
+  fontIndex?: number
+}
+
+/**
  * 把整篇文本按段落标记 '\n'（0x0A）切成 parts，并给出每个 part 的 CP 起点与段序号。
  *
  * Round 108：切点从「逐字符扫描 `charCodeAt(i) !== 10`」改为 `indexOf('\n')` 跳跃。
@@ -852,16 +877,34 @@ export class DocParser {
     // style (e.g. Hyperlink, Strong), so resolve the istdBase chain and
     // merge it underneath the run's direct formatting.
     if (styles.length > 0 && chpxRuns.length > 0) {
+      // Round 169：`styles.find(...)` 与 `resolveStyleFormat(styles, istd)` 原先
+      // **每个 run 各跑一次**（实测 1,354 次/轮），而两者都只依赖 `(styles, istd)`
+      // —— `styles` 在本方法内不变、`resolveStyleFormat` 每次返回新建对象且无模块级
+      // 缓存、其返回值此后只读 ⇒ 按 istd 缓存逐位等价。
+      // `styles.find` 取**首个**匹配，故建表时也只保留首个（与 `find` 语义一致）。
+      const charStyleById = new Map<number, StyleDefinition>()
+      for (const s of styles) if (!charStyleById.has(s.istd)) charStyleById.set(s.istd, s)
+      const resolvedCharStyles = new Map<number, ResolvedCharStyleEntry>()
       for (const run of chpxRuns) {
         if (run.istd === undefined) continue
-        const charStyle = styles.find(s => s.istd === run.istd)
+        const charStyle = charStyleById.get(run.istd)
         if (!charStyle || charStyle.type !== 'character') continue
-        const resolved = resolveStyleFormat(styles, run.istd)
-        if (resolved.charFormat && Object.keys(resolved.charFormat).length > 0) {
-          run.format = { ...resolved.charFormat, ...run.format }
+        let entry = resolvedCharStyles.get(run.istd)
+        if (!entry) {
+          const resolved = resolveStyleFormat(styles, run.istd)
+          const charFormat = resolved.charFormat
+          entry = {
+            charFormat,
+            charHasKeys: !!charFormat && Object.keys(charFormat).length > 0,
+            fontIndex: resolved.fontIndex,
+          }
+          resolvedCharStyles.set(run.istd, entry)
         }
-        if (run.fontIndex === undefined && resolved.fontIndex !== undefined) {
-          run.fontIndex = resolved.fontIndex
+        if (entry.charHasKeys) {
+          run.format = { ...entry.charFormat, ...run.format }
+        }
+        if (run.fontIndex === undefined && entry.fontIndex !== undefined) {
+          run.fontIndex = entry.fontIndex
         }
       }
     }
@@ -1208,7 +1251,8 @@ export class DocParser {
     for (const style of styles) styleById.set(style.istd, style)
     // Cache resolved paragraph styles: many paragraphs share the same istd, and
     // resolving the inheritance chain repeatedly recreates identical objects.
-    const resolvedParagraphStyles = new Map<number, ReturnType<typeof resolveStyleFormat>>()
+    // Round 169：同时缓存「格式对象非空」这一判断（见下方用例）。
+    const resolvedParagraphStyles = new Map<number, ResolvedParagraphStyleEntry>()
     // Keep piece lookup linear over the document instead of filtering every
     // paragraph. Large documents can contain tens of thousands of paragraphs.
     let pieceCursor = 0
@@ -1384,19 +1428,35 @@ export class DocParser {
               // Resolve the full style formatting along the istdBase
               // inheritance chain (e.g. Heading 3 → Heading 1 → Normal),
               // then let direct PAPX/CHPX overrides win.
-              let resolved = resolvedParagraphStyles.get(papx.istd)
-              if (!resolved) {
-                resolved = resolveStyleFormat(styles, papx.istd)
-                resolvedParagraphStyles.set(papx.istd, resolved)
+              //
+              // Round 169：`Object.keys(resolved.paraFormat).length > 0` 与
+              // `Object.keys(resolved.charFormat).length > 0` 原先**每段落各跑一次**
+              // （实测 33,702 + 35,056 = 68,758 次/轮），只为判断「空不空」。
+              // `resolveStyleFormat` 每次返回**新建**对象且无模块级缓存，该对象存进
+              // 本方法局部 Map 后**全程只读**（下面两处都只做「展开进新对象」），
+              // ⇒ 「非空」是该对象的纯函数，可提升到解析点一次性算出。
+              // 实测 `resolveStyleFormat` 未命中仅 94 次/轮 ⇒ 68,758 → 188 次/轮。
+              let entry = resolvedParagraphStyles.get(papx.istd)
+              if (!entry) {
+                const resolved = resolveStyleFormat(styles, papx.istd)
+                const paraFormat = resolved.paraFormat
+                const charFormat = resolved.charFormat
+                entry = {
+                  resolved,
+                  paraHasKeys: !!paraFormat && Object.keys(paraFormat).length > 0,
+                  charHasKeys: !!charFormat && Object.keys(charFormat).length > 0,
+                }
+                resolvedParagraphStyles.set(papx.istd, entry)
               }
-              if (resolved.paraFormat && Object.keys(resolved.paraFormat).length > 0) {
+              const resolved = entry.resolved
+              if (entry.paraHasKeys) {
                 // Style base format → PAPX overrides (already applied above)
                 newPara.paraFormat = {
                   ...resolved.paraFormat,
                   ...newPara.paraFormat,
                 }
               }
-              if (resolved.charFormat && Object.keys(resolved.charFormat).length > 0) {
+              if (entry.charHasKeys) {
                 newPara.charFormat = {
                   ...resolved.charFormat,
                   ...newPara.charFormat,
