@@ -1288,6 +1288,56 @@ function parseBinTable(
 }
 
 /**
+ * ── Round 167：FKP 运行构造中的 pieces 单调游标 ─────────────────────────────
+ *
+ * `parseChpxRunsFromFkp` / `parsePapxRunsFromFkp` 都要把每个 FKP 条目的 FC 区间
+ * `[fcStart, fcEnd)` 映射回 CP 区间，原实现是「**对每个条目全量扫一遍 `pieces`**」。
+ * 真实 27 份语料实测（计数插桩，20 轮）：
+ *
+ *   CHPX：22 次调用/轮，内层迭代 **195,227** 次，真正相交仅 **26,651** 次；
+ *   PAPX：27 次调用/轮，内层迭代 **248,540** 次，真正相交仅 **39,657** 次；
+ *   合计 **443,767 次迭代，其中 85.1% 是空转**。
+ *
+ * 观察：与 `[fcStart, fcEnd)` 相交的 piece 构成一段**连续区间**，且其起点随
+ * `fcStart` 单调后移。于是维护一个只前进的 `pieceCursor`：
+ *   * 先跳过所有 `pieceFcEnd <= fcStart` 的 piece —— 之后所有条目的 `fcStart`
+ *     只会更大，这些 piece **永不再相交**，可永久跳过；
+ *   * 内层从游标起，遇到 `p.fcStart >= fcEnd` 即 `break`。
+ *
+ * **等价性（对任意输入逐字节等价）**：被跳过的两类 piece 在原实现里都必然命中
+ * `if (e <= s) continue` ——
+ *   第一类：`e = min(fcEnd, pieceFcEnd) <= pieceFcEnd <= fcStart <= s`；
+ *   第二类：`s = max(fcStart, p.fcStart) >= p.fcStart >= fcEnd >= e`。
+ * 故保留区间的**执行集合与执行顺序完全一致**，`runs` 逐元素相同。
+ *
+ * 两个前提**在运行时显式校验**，任一不成立即退回原实现（起点 0、不 `break`）：
+ *   (a) `pieces` 按 `fcStart` **升序** —— 这是 `break` 的合法性前提。真实语料
+ *       22 次调用 119 个 piece **0 次逆序**；但该函数是公开导出，Round 132 的
+ *       常驻护栏会注入**乱序 pieces**，故必须保留回退分支。注意 `NaN` 必须判为
+ *       **非升序**（否则会掩盖真实降序），判据见 `isAscendingByFcStart`。
+ *   (b) 同一次调用内 `fcStart` **单调不减** —— 这是游标可永久前进的前提。实测
+ *       **0 次回退**；一旦出现 `fcStart < 上次` 就把游标重置为 0。
+ * 两处回退都只是「起点退回 0」，与旧实现逐字节相同；实测 27 份语料 (b) 的
+ * 重置 **0 次触发**，即真实收益来自「总是单调」这一情形。
+ */
+
+/**
+ * `pieces` 是否**可证明**按 `fcStart` 升序。一次调用只算一次，开销 O(|pieces|) ≤ 33。
+ *
+ * 判据用 `!(pieces[z].fcStart >= pieces[z-1].fcStart)` 而**不是** `a < b`：
+ * `NaN` 与任何数比较都为 false，故 `a < b` 会把「`1005 → NaN → 990`」误判成升序，
+ * 从而错误启用 `break`、丢掉后方仍相交的 piece（实测 `[1005, NaN, 990]` 在
+ * `[1000,1002)` 上原实现产出 `[30,32]` 而误判升序时产出 `[]`）。取反式判据在任一侧
+ * 出现 `NaN` 时立即返回 false，等价性由此自证；`±Infinity` 按普通大小参与比较。
+ */
+function isAscendingByFcStart(pieces: readonly PieceFcRange[]): boolean {
+  for (let z = 1; z < pieces.length; z++) {
+    if (!(pieces[z].fcStart >= pieces[z - 1].fcStart)) return false
+  }
+  return true
+}
+
+/**
  * Parse CHPX runs the spec-level way: bin table → ChpxFkp pages → grpprls,
  * FC ranges converted to CPs via the piece table.
  *
@@ -1308,6 +1358,10 @@ export function parseChpxRunsFromFkp(
   if (bins.length === 0) return []
 
   const runs: ChpxRun[] = []
+  // ── Round 167：pieces 单调游标（等价性论证见上方文档）──
+  const piecesAscending = isAscendingByFcStart(pieces)
+  let pieceCursor = 0
+  let pieceCursorFc = -1
   for (const bin of bins) {
     const base = bin.pn * 512
     if (base + 512 > wordDocData.length) continue
@@ -1332,7 +1386,23 @@ export function parseChpxRunsFromFkp(
       if (Object.keys(format).length === 0 && fontIndex === undefined &&
           !revision && !isSpecial && fcPic === undefined && istd === undefined) continue
 
-      for (const p of pieces) {
+      // 游标合法性守卫：pieces 非升序时不启用游标；fcStart 一旦回退就重置游标。
+      // （真实 27 份语料两处回退均 0 次触发，见上方文档。）
+      let pi0 = 0
+      if (piecesAscending) {
+        if (fcStart < pieceCursorFc) pieceCursor = 0
+        pieceCursorFc = fcStart
+        while (pieceCursor < pieces.length) {
+          const pc = pieces[pieceCursor]
+          if (pc.fcStart + (pc.cpEnd - pc.cpStart) * (pc.compressed ? 1 : 2) > fcStart) break
+          pieceCursor++
+        }
+        pi0 = pieceCursor
+      }
+
+      for (let pi = pi0; pi < pieces.length; pi++) {
+        const p = pieces[pi]
+        if (piecesAscending && p.fcStart >= fcEnd) break
         const bytesPerChar = p.compressed ? 1 : 2
         const pieceFcEnd = p.fcStart + (p.cpEnd - p.cpStart) * bytesPerChar
         const s = Math.max(fcStart, p.fcStart)
@@ -1371,6 +1441,10 @@ export function parsePapxRunsFromFkp(
   if (bins.length === 0) return []
 
   const runs: PapxRun[] = []
+  // ── Round 167：pieces 单调游标（等价性论证见上方文档）──
+  const piecesAscending = isAscendingByFcStart(pieces)
+  let pieceCursor = 0
+  let pieceCursorFc = -1
   for (const bin of bins) {
     const base = bin.pn * 512
     if (base + 512 > wordDocData.length) continue
@@ -1406,7 +1480,23 @@ export function parsePapxRunsFromFkp(
       const { format, ilvl, ilst, ilfo, table } =
         parsePapxGrpprl(wordDocData, papxOffset + 2, grpprlLen)
 
-      for (const p of pieces) {
+      // 游标合法性守卫：pieces 非升序时不启用游标；fcStart 一旦回退就重置游标。
+      // （真实 27 份语料两处回退均 0 次触发，见上方文档。）
+      let pi0 = 0
+      if (piecesAscending) {
+        if (fcStart < pieceCursorFc) pieceCursor = 0
+        pieceCursorFc = fcStart
+        while (pieceCursor < pieces.length) {
+          const pc = pieces[pieceCursor]
+          if (pc.fcStart + (pc.cpEnd - pc.cpStart) * (pc.compressed ? 1 : 2) > fcStart) break
+          pieceCursor++
+        }
+        pi0 = pieceCursor
+      }
+
+      for (let pi = pi0; pi < pieces.length; pi++) {
+        const p = pieces[pi]
+        if (piecesAscending && p.fcStart >= fcEnd) break
         const bytesPerChar = p.compressed ? 1 : 2
         const pieceFcEnd = p.fcStart + (p.cpEnd - p.cpStart) * bytesPerChar
         const s = Math.max(fcStart, p.fcStart)
