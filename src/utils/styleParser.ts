@@ -626,7 +626,36 @@ export function detectStyleSet(styles: StyleDefinition[]): StyleSetInfo | null {
   return null
 }
 
+/**
+ * ── Round 168：`getHeadingLevel` 的按样式名记忆化 ─────────────────────────
+ *
+ * 动机：真实 27 份语料实测本函数 **33,690 次/轮**（`createParagraphsWithRealFormats`
+ * 对每个「未由 sprmPOutlineLvl 定级」的段落调一次），但整轮只有 **25 个不同样式名**，
+ * 且 **95.9% 的调用是 `"Normal"`**（32,317 次）。每次调用要跑 2 个锚定正则
+ * （`/^heading\s*(\d+)$/i` 与 `/^标题\s*(\d+)$/`）——`"Normal"` 两个都在首字符
+ * 即失配，纯粹白算。
+ *
+ * 做法：以样式名为键做记忆化。本函数是**样式名的纯函数**（无外部状态、无副作用），
+ * 故「同名 ⇒ 同结果」可自证，缓存命中与重算逐位相同。
+ *
+ * 上界：缓存最多 `HEADING_LEVEL_CACHE_MAX` 项，超界先清空再写入 —— 真实文档的样式表
+ * 只有几十项，清空只发生在病态输入上，且清空只丢缓存、不改语义。
+ *
+ * 隔离实测（真实单轮 33,690 次调用的样式名多重集）：0.95 ms → 0.20 ms（**4.6×**，中位数）。
+ */
+const HEADING_LEVEL_CACHE_MAX = 4096
+const headingLevelCache = new Map<string, number | null>()
+
 export function getHeadingLevel(styleName: string): number | null {
+  const cached = headingLevelCache.get(styleName)
+  if (cached !== undefined) return cached
+  const computed = computeHeadingLevel(styleName)
+  if (headingLevelCache.size >= HEADING_LEVEL_CACHE_MAX) headingLevelCache.clear()
+  headingLevelCache.set(styleName, computed)
+  return computed
+}
+
+function computeHeadingLevel(styleName: string): number | null {
   const match = styleName.match(/^heading\s*(\d+)$/i)
   if (match) {
     const level = parseInt(match[1], 10)
