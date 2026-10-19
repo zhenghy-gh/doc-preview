@@ -4,10 +4,10 @@
   "targetRound": 1000,
   "completedRounds": 173,
   "currentRound": 174,
-  "inFlight": false,
+  "inFlight": true,
   "lastVersion": "0.7.86",
   "lastCommit": "e13f5b099e597769bbcd5a360eb11d14294913d6",
-  "updatedAt": "2026-10-19T01:38:53Z",
+  "updatedAt": "2026-10-19T01:39:28Z",
   "audit": {
     "at": "2026-10-13T02:47:29Z",
     "completedRounds": 148,
