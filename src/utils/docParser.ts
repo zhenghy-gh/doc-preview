@@ -1373,6 +1373,20 @@ export class DocParser {
         }
         // 真实格式可用 ⇒ 旧实现会在下方把 styles 键丢掉 ⇒ 此时算 styles 纯属浪费。
         const hasRealCharFormat = Object.keys(merged).length > 0
+        // ── Round 170：样式 charFormat 的「推迟展开基数」 ──
+        // 原实现当 `entry.charHasKeys && hasRealCharFormat` 时对 charFormat 展开**两次**：
+        //   ① 样式块里 `{ ...resolved.charFormat, ...newPara.charFormat }`
+        //   ② 真实格式块里 `{ ...newPara.charFormat, ...merged }`
+        // 第二次展开的输入正是第一次的输出 ⇒ 第一次那次展开在最终结果里**完全被覆盖**，
+        // 只贡献键序。计数插桩（27 份 × 20 轮）实测该组合占 **32,261/轮 = 95.7% 的段落**，
+        // 而三者平均键数仅 resolved=1.00 / newPara=2.01 / merged=1.14 ⇒ 剖析里那 3.56%
+        // （两行展开 2.03% + 1.53%）主要花在**每次展开的固定开销**（新建对象 + 巨型 IC），
+        // 不是键复制。故把样式基数**推迟**到第二次展开里一次性展开三源，
+        // 省掉整整一次对象分配与展开。
+        // 等价性：展开按「首次出现顺序」插入键、重复键保留首次位置 ⇒
+        // `{...a, ...b}` 再 `{...x, ...c}` 与 `{...a, ...b, ...c}` 的键集合与键序**完全相同**；
+        // 且 `newPara.charFormat` 在两次展开之间只被下面那段 `/* v8 ignore */` 不可达代码读过。
+        let charStyleBase: Partial<CharacterFormat> | undefined
         const charFormat = hasRealCharFormat
           ? guessCharFormatWithoutStyles(cleaned, i)
           : this.guessCharFormat(cleaned, i)
@@ -1457,9 +1471,14 @@ export class DocParser {
                 }
               }
               if (entry.charHasKeys) {
-                newPara.charFormat = {
-                  ...resolved.charFormat,
-                  ...newPara.charFormat,
+                if (hasRealCharFormat) {
+                  // Round 170：推迟到下方「真实格式合并」处一次性展开（见上方注释）。
+                  charStyleBase = resolved.charFormat
+                } else {
+                  newPara.charFormat = {
+                    ...resolved.charFormat,
+                    ...newPara.charFormat,
+                  }
                 }
               }
               // Apply style's font name
@@ -1519,7 +1538,11 @@ export class DocParser {
           // Round 147：charFormat 此时本就没有 styles 键（见上方
           // guessCharFormatWithoutStyles），一次展开即可；`in` 兜底保持旧语义
           // ——万一 merged 将来带上 styles 键，仍旧整键丢弃。
-          const realCharFormat = { ...newPara.charFormat, ...merged }
+          // Round 170：`charStyleBase` 非空时把「样式基数」并入这一次展开
+          // （三源：resolved → heuristic → merged），键序与原先的两次展开完全一致。
+          const realCharFormat = charStyleBase
+            ? { ...charStyleBase, ...newPara.charFormat, ...merged }
+            : { ...newPara.charFormat, ...merged }
           if ('styles' in realCharFormat) {
             const { styles: _heuristicStyles, ...restCharFormat } = realCharFormat
             newPara.charFormat = restCharFormat
