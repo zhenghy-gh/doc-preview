@@ -217,10 +217,30 @@ export function splitTextByParagraphMark(
     // 等价性：无 `\u0007\u0007` 时原 `subParts` 恒为 `[paraText]`，循环只 push 一次
     // 且 `cpStart = cp + 0 = cp` —— 与下面的直接 push 逐字段相同。
     if (paraText.includes('\u0007\u0007')) {
+      // ── Round 176：用 `indexOf` + `slice` 替代 `split(/(?<=\u0007\u0007)/)` ──
+      // V8 对**零宽 lookbehind** 的 split 很慢（剖析里该 `RegExp: (?<=\u0007\u0007)`
+      // 节点独占 **0.69%**），而其语义只是「在每个 `\u0007\u0007` **之后**切一刀」。
+      // 等价性：lookbehind 零宽匹配**允许重叠** —— `\u0007\u0007\u0007` 会在位置 2、3
+      // 各切一次（产出 `['\u0007\u0007','\u0007','']`），故下一次搜索必须从 `hit + 1`
+      // 起（不是 `hit + 2`）；末尾必补一个可能为空的 part（与 `split` 行为一致）。
+      // 循环内 `cut = hit + 2` 严格大于上一轮 `cut` ⇒ `slice(from, cut)` 永不越界。
       let subOffset = 0
-      for (const subText of paraText.split(/(?<=\u0007\u0007)/)) {
+      let from = 0
+      let hit = paraText.indexOf('\u0007\u0007', 0)
+      while (hit >= 0) {
+        const cut = hit + 2
+        const subText = paraText.slice(from, cut)
         parts.push({ text: subText, cpStart: cp + subOffset, originalIndex: partIndex })
         subOffset += subText.length
+        from = cut
+        hit = paraText.indexOf('\u0007\u0007', hit + 1)
+      }
+      const tail = paraText.slice(from)
+      // 末尾那个零宽切点要**丢掉**：`String.prototype.split` 遇到位于 `size` 的零宽匹配
+      // 会直接 break（`'\u0007\u0007'.split(/(?<=\u0007\u0007)/)` 只有 1 段，不是 2 段）。
+      // 故仅当 `from < paraText.length` 时才补尾部 part。
+      if (from < paraText.length) {
+        parts.push({ text: tail, cpStart: cp + subOffset, originalIndex: partIndex })
       }
     } else {
       parts.push({ text: paraText, cpStart: cp, originalIndex: partIndex })

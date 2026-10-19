@@ -259,9 +259,16 @@ describe('Round 173 C 组：接线元断言', () => {
     expect(C).toContain('parts.push({ text: paraText, cpStart: cp, originalIndex: partIndex })')
   })
 
-  it('C3 表格行分支仍用 lookbehind split 且 subOffset 累加', () => {
-    expect(C).toContain('for (const subText of paraText.split(/(?<=\\u0007\\u0007)/)) {')
+  it('C3 表格行分支仍在每个 `\\u0007\\u0007` 后切分，且 subOffset 累加', () => {
+    // Round 176 把 `split(/(?<=\u0007\u0007)/)` 换成了等价的 `indexOf` + `slice` 循环
+    // （20,021 样本差分 0 不一致 + 27 份逐字节一致 + 本文件 A1/A2/A3/B1 全过）。
+    // 故这里钉**契约**而非具体实现：分支必须仍搜索 `\u0007\u0007`、按 subText.length 累加、
+    // 并以 `cp + subOffset` 落 cpStart。
+    expect(C).toContain("indexOf('\\u0007\\u0007'")
     expect(C).toContain('subOffset += subText.length')
+    expect(C).toContain('cpStart: cp + subOffset')
+    // 旧 lookbehind 实现已移除（防止两条实现同时存在）
+    expect(CODE).not.toContain('(?<=')
   })
 
   it('C4 循环收尾逻辑未被改动（cp += len + 1 / partStart / partIndex / 换行推进）', () => {
