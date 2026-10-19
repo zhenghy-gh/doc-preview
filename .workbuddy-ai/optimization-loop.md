@@ -8,6 +8,8 @@
 - **终止轮次：Round 1000**（用户 2026-10-13 更新目标：原 208，改为 1000）。
 - 到达 1000 轮后**停止自动续跑**，做一次总结汇报，不再开启新轮。
 - 每一轮必须**完整闭环**才计入 `completedRounds`：代码 + 护栏 + 验证 + 提交 + 双包发布。
+- **发布暂停（用户 2026-10-19 指令）**：用户要求「npm 先不发布，继续做迭代」。暂停期间，一轮的闭环 = **代码 + 护栏 + 验证 + 提交**（跳过第 11/12 步的发布与 registry 核验），`completedRounds` 照常推进；`lastVersion` / `lastCommit` 指向本轮版本与提交。恢复发布时对**当时最新版本**做一次双包发布并补核验即可（npm 允许只发布比线上更高的版本）。
+- **当前批次**：170 → 270（100 轮，每轮结束后**自动进入下一轮**，无需用户确认）。
 
 ## 每轮固定流程（不可跳步）
 
@@ -22,7 +24,8 @@
 9. **升号**：`npm version 0.7.NN --no-git-tag-version`（不建 tag）。
 10. **提交**：`git commit`，工作区保持干净，一轮一提交。
 11. **发布**：`npm run release`（脚本强制 `--registry=https://registry.npmjs.org`），双包 `@zhenghy/doc-preview` + `doc-preview`。
-12. **核验发布**：`curl https://registry.npmjs.org/<pkg>` 查版本（registry 有传播延迟，scoped 包比 unscoped 慢，需 `sleep` 后重试）。
+    **⚠ 暂停中**（见「目标」小节）：跳过本步与第 12 步，等用户恢复发布时对最新版本补做一次。
+12. **核验发布**：`curl https://registry.npmjs.org/<pkg>` 查版本（registry 有传播延迟，scoped 包比 unscoped 慢，需 `sleep` 后重试）。**暂停期间跳过。**
 13. **清理临时产物**：`.prof*` / `.bench*` / `.e2e-*` 必须删净（`eslint .` 会扫到它们）。
 14. **更新状态**：把 `optimization-loop.json` 的 `completedRounds` / `currentRound` / `lastVersion` / `lastCommit` 前移。
 
