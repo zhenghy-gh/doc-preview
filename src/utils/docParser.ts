@@ -210,13 +210,20 @@ export function splitTextByParagraphMark(
   for (;;) {
     const cut = nl < 0 ? text.length : nl
     const paraText = text.slice(partStart, cut)
-    const subParts = paraText.includes('\u0007\u0007')
-      ? paraText.split(/(?<=\u0007\u0007)/)
-      : [paraText]
-    let subOffset = 0
-    for (const subText of subParts) {
-      parts.push({ text: subText, cpStart: cp + subOffset, originalIndex: partIndex })
-      subOffset += subText.length
+    // ── Round 173：把 `\u0007\u0007` 分支提到循环外 ──
+    // 原实现无条件构造 `[paraText]`（每段一个单元素数组）再用 `for...of` 迭代，
+    // 只为在「表格行」这一**极少数**情形下多切几刀。实测 34,945 段/轮里含
+    // `\u0007\u0007` 的极少，故常见路径白付一次数组分配 + 一次迭代器协议。
+    // 等价性：无 `\u0007\u0007` 时原 `subParts` 恒为 `[paraText]`，循环只 push 一次
+    // 且 `cpStart = cp + 0 = cp` —— 与下面的直接 push 逐字段相同。
+    if (paraText.includes('\u0007\u0007')) {
+      let subOffset = 0
+      for (const subText of paraText.split(/(?<=\u0007\u0007)/)) {
+        parts.push({ text: subText, cpStart: cp + subOffset, originalIndex: partIndex })
+        subOffset += subText.length
+      }
+    } else {
+      parts.push({ text: paraText, cpStart: cp, originalIndex: partIndex })
     }
     cp += paraText.length + 1 // +1 for the \n (paragraph mark)
     partStart = cut + 1
