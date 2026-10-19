@@ -347,6 +347,13 @@ export function hasTooManyJunkChars(text: string): boolean {
     let listGroupStart = -1
     const candidateGroups: { start: number; end: number; count: number; avgLen: number; cv: number }[] = []
     const visibleTextLengths = new Uint32Array(paragraphs.length)
+    // ── Round 171：把「本段是否含 \u0001」记下来，供下方 prefixBodyCounts 复用 ──
+    // 下方 `prefixBodyCounts` 循环原先对**每个段落**做一次 `t.startsWith('\u0001')`
+    // （实测 34,800 段/轮、命中仅 126 段），只为剥掉**开头**那一个占位符。
+    // 而本循环已经做过一次更严格的 `text.includes('\u0001')`（全串扫描，包含「开头」）
+    // ⇒ `picFlags[i] === 0` 蕴含 `!text.startsWith('\u0001')`，此时可直接用
+    // `visibleTextLengths[i]`（无占位符 ⇒ 两者相等），连 `paragraphs[i].text` 都不必再取。
+    const picFlags = new Uint8Array(paragraphs.length)
 
     for (let i = 0; i < paragraphs.length; i++) {
       const text = paragraphs[i].text
@@ -361,6 +368,7 @@ export function hasTooManyJunkChars(text: string): boolean {
       // 故长度逐位相同）。
       let len = text.length
       if (text.includes('\u0001')) {
+        picFlags[i] = 1
         const textWithoutPic = text.replace(PIC_PLACEHOLDER_RE, '')
         len = textWithoutPic.length
         if (textWithoutPic.trim().length > 0) {
@@ -421,9 +429,16 @@ export function hasTooManyJunkChars(text: string): boolean {
       // cost ~290ms).
       const prefixBodyCounts = new Int32Array(paragraphs.length + 1)
       for (let i = 0; i < paragraphs.length; i++) {
-        let t = paragraphs[i].text
-        if (t.startsWith('\u0001')) t = t.substring(1)
-        prefixBodyCounts[i + 1] = prefixBodyCounts[i] + (t.length > LIST_ITEM_MAX_LEN ? 1 : 0)
+        // Round 171：`picFlags[i] === 0` 时本段不含任何 `\u0001` ⇒ 无需 `startsWith`、
+        // 也无需再取 `paragraphs[i].text`；`visibleTextLengths[i]` 就是 `text.length`
+        // （Step 2 只在含占位符时才把它改成「去掉占位符后的长度」）。含占位符的极少数
+        // 段落仍走原逻辑：只剥**开头**那一个，再按长度判「正文段」。
+        let bodyLen = visibleTextLengths[i]
+        if (picFlags[i] !== 0) {
+          const t = paragraphs[i].text
+          bodyLen = (t.charCodeAt(0) === 1 ? t.substring(1) : t).length
+        }
+        prefixBodyCounts[i + 1] = prefixBodyCounts[i] + (bodyLen > LIST_ITEM_MAX_LEN ? 1 : 0)
       }
 
       // Filter groups with at least 3 items and reasonable length uniformity
