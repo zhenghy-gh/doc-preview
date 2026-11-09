@@ -61,6 +61,11 @@ describe('DocPreview source lifecycle', () => {
     expect(override?.textContent).toContain('.doc-preview.web-font-enabled .document-content')
     expect(override?.textContent).not.toContain('\n    .document-content')
 
+    await defaultPreview.setProps({ useWebFont: true })
+    await flushPromises()
+    expect(defaultPreview.find('.doc-preview').classes()).toContain('web-font-enabled')
+    expect(appendSpy.mock.calls.filter(([node]) => node.nodeName === 'LINK')).toHaveLength(1)
+
     optedIn.unmount()
     defaultPreview.unmount()
   })

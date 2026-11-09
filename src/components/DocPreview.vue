@@ -2920,6 +2920,10 @@ function handleKeydown(e: KeyboardEvent) {
 
 // ---- Watchers ----
 
+watch(() => props.useWebFont, (enabled) => {
+  if (enabled) loadWebFonts()
+})
+
 watch(() => props.source, (newSource) => {
   if (!newSource) {
     clearDocument()
