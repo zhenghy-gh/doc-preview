@@ -162,7 +162,7 @@ const emit = defineEmits<{
 const fileName = ref('')
 const htmlContent = ref('')
 const plainText = ref('')
-const loading = ref(true)
+const loading = ref(false)
 const error = ref('')
 const loadingTime = ref(0)
 const loadingTimer = ref<ReturnType<typeof setInterval> | null>(null)
@@ -172,6 +172,7 @@ const progressPercent = ref<number>(-1)
 
 // 上次加载的源（用于错误重试）
 const lastSource = ref<{ type: 'file'; file: File } | { type: 'url'; url: string } | null>(null)
+let loadGeneration = 0
 
 /** 将解析阶段映射为本地化的进度提示文字 */
 function getProgressStepText(stage: ParseProgressStage): string {
@@ -728,6 +729,7 @@ function formatFileSize(bytes: number): string {
 }
 
 function startLoadingTimer() {
+  stopLoadingTimer()
   loadingTime.value = 0
   loadingTimer.value = setInterval(() => loadingTime.value++, 1000)
 }
@@ -737,6 +739,84 @@ function stopLoadingTimer() {
     clearInterval(loadingTimer.value)
     loadingTimer.value = null
   }
+}
+
+function clearDocument() {
+  const wasLoading = loading.value
+  loadGeneration++
+  stopLoadingTimer()
+  lastSource.value = null
+  fileName.value = ''
+  fileSize.value = ''
+  loading.value = false
+  isUsingWorker.value = false
+  loadingTime.value = 0
+  progressStep.value = ''
+  progressPercent.value = -1
+  error.value = ''
+
+  htmlContent.value = ''
+  plainText.value = ''
+  pages.value = []
+  pageHeights.value = {}
+  visibleStart.value = 0
+  visibleEnd.value = 0
+  virtualScrollEnabled.value = true
+  currentPage.value = 1
+  totalPages.value = 1
+  pageHeight.value = PAGE_HEIGHT_A4
+  lastParseResult.value = null
+  outline.value = []
+  showOutline.value = false
+  isRichFormat.value = false
+  wordCount.value = 0
+  charCount.value = 0
+  paragraphCount.value = 0
+  chineseCharCount.value = 0
+
+  showSearch.value = false
+  searchQuery.value = ''
+  searchResults.value = []
+  currentSearchIndex.value = -1
+  originalHtml.value = ''
+
+  stories.value = null
+  showStories.value = false
+  images.value = []
+  pictures.value = []
+  hyperlinks.value = []
+  toc.value = []
+  showToc.value = false
+  index.value = []
+  showIndex.value = false
+  revisions.value = []
+  showRevisions.value = false
+  revisionMode.value = 'marks'
+  bookmarks.value = []
+  showBookmarks.value = false
+  sections.value = []
+  showSections.value = false
+  pageFields.value = []
+  showPageFields.value = false
+  crossReferences.value = []
+  showCrossReferences.value = false
+  shapes.value = []
+  showShapes.value = false
+  equations.value = []
+  showEquations.value = false
+  charts.value = []
+  wordArts.value = []
+  showWordArts.value = false
+  styleSet.value = null
+  showHiddenText.value = false
+  docProperties.value = null
+  showProperties.value = false
+  docFields.value = null
+  docFlags.value = null
+  showDocFlags.value = false
+  wordVersion.value = null
+
+  if (wasLoading) emit('loading', false)
 }
 
 // ---- Error boundary ----
@@ -751,6 +831,7 @@ onErrorCaptured((err) => {
 // ---- Load document ----
 
 const loadFromFile = async (file: File) => {
+  const generation = ++loadGeneration
   fileName.value = file.name
   fileSize.value = formatFileSize(file.size)
   loading.value = true
@@ -768,6 +849,7 @@ const loadFromFile = async (file: File) => {
     isUsingWorker.value = useWorker
 
     const onProgress = (stage: ParseProgressStage, percent: number) => {
+      if (generation !== loadGeneration) return
       progressStep.value = getProgressStepText(stage)
       progressPercent.value = percent
     }
@@ -776,15 +858,15 @@ const loadFromFile = async (file: File) => {
     if (useWorker) {
       progressStep.value = t('loading.progress.reading')
       const buffer = await file.arrayBuffer()
+      if (generation !== loadGeneration) return
       result = await parseWithWorker(buffer, undefined, onProgress)
     } else {
       result = await parseDocFileWithFormat(file)
     }
 
+    if (generation !== loadGeneration) return
     if (!result.success) {
       error.value = result.error || '解析失败'
-      loading.value = false
-      emit('loading', false)
       return
     }
     progressStep.value = t('loading.progress.rendering')
@@ -792,16 +874,21 @@ const loadFromFile = async (file: File) => {
     renderResult(result)
     emit('loaded')
   } catch (err) {
-    console.error('Error parsing DOC file:', err)
-    error.value = err instanceof Error ? err.message : '未知错误'
+    if (generation === loadGeneration) {
+      console.error('Error parsing DOC file:', err)
+      error.value = err instanceof Error ? err.message : '未知错误'
+    }
   } finally {
-    loading.value = false
-    emit('loading', false)
-    stopLoadingTimer()
+    if (generation === loadGeneration) {
+      loading.value = false
+      emit('loading', false)
+      stopLoadingTimer()
+    }
   }
 }
 
 const loadFromUrl = async (url: string) => {
+  const generation = ++loadGeneration
   fileName.value = url.split('/').pop() || url
   fileSize.value = ''
   loading.value = true
@@ -815,9 +902,11 @@ const loadFromUrl = async (url: string) => {
   try {
     progressStep.value = t('loading.progress.downloading')
     const response = await fetch(url)
+    if (generation !== loadGeneration) return
     if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`)
 
     const buffer = await response.arrayBuffer()
+    if (generation !== loadGeneration) return
     fileSize.value = formatFileSize(buffer.byteLength)
 
     // Use Worker for large files
@@ -826,6 +915,7 @@ const loadFromUrl = async (url: string) => {
     progressStep.value = t('loading.progress.parsing')
 
     const onProgress = (stage: ParseProgressStage, percent: number) => {
+      if (generation !== loadGeneration) return
       progressStep.value = getProgressStepText(stage)
       progressPercent.value = percent
     }
@@ -834,21 +924,24 @@ const loadFromUrl = async (url: string) => {
       ? await parseWithWorker(buffer, undefined, onProgress)
       : parseDocFileFromBuffer(buffer, fileName.value)
 
+    if (generation !== loadGeneration) return
     if (!result.success) {
       error.value = result.error || '解析失败'
-      loading.value = false
-      emit('loading', false)
       return
     }
     renderResult(result)
     emit('loaded')
   } catch (err) {
-    console.error('Error loading from URL:', err)
-    error.value = err instanceof Error ? err.message : '未知错误'
+    if (generation === loadGeneration) {
+      console.error('Error loading from URL:', err)
+      error.value = err instanceof Error ? err.message : '未知错误'
+    }
   } finally {
-    loading.value = false
-    emit('loading', false)
-    stopLoadingTimer()
+    if (generation === loadGeneration) {
+      loading.value = false
+      emit('loading', false)
+      stopLoadingTimer()
+    }
   }
 }
 
@@ -2827,9 +2920,11 @@ function handleKeydown(e: KeyboardEvent) {
 // ---- Watchers ----
 
 watch(() => props.source, (newSource) => {
-  if (newSource) {
-    typeof newSource === 'string' ? loadFromUrl(newSource) : loadFromFile(newSource)
+  if (!newSource) {
+    clearDocument()
+    return
   }
+  typeof newSource === 'string' ? loadFromUrl(newSource) : loadFromFile(newSource)
 })
 
 onMounted(() => {
@@ -2838,10 +2933,14 @@ onMounted(() => {
   window.addEventListener('resize', handleVirtualScroll, { passive: true })
   if (props.source) {
     typeof props.source === 'string' ? loadFromUrl(props.source) : loadFromFile(props.source)
+  } else {
+    clearDocument()
   }
 })
 
 onUnmounted(() => {
+  loadGeneration++
+  stopLoadingTimer()
   document.removeEventListener('keydown', handleKeydown)
   window.removeEventListener('scroll', handleVirtualScroll)
   window.removeEventListener('resize', handleVirtualScroll)
@@ -2852,6 +2951,8 @@ onUnmounted(() => {
 function reload() {
   if (props.source) {
     typeof props.source === 'string' ? loadFromUrl(props.source) : loadFromFile(props.source)
+  } else {
+    clearDocument()
   }
 }
 
