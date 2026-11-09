@@ -37,7 +37,7 @@ list type) and supports search, zoom, print, and dark mode.
   app; works with file upload, URL, or in-memory `File` object.
 - **Microsoft Word .doc (OLE2 / CFB)**: parses the legacy Word 97-2003 binary
   format directly, including UTF-16LE and 8-bit compressed text streams, FIB
-  headers, and heuristic format detection for font size / bold / alignment.
+  headers, with real CHP/PAP format recovery and heuristic fallback when needed.
 - **DOCX** is not supported by this package — for `.docx` (Open XML) files,
   use a dedicated DOCX parser. This package is the **`.doc` specialist**.
 - **Web Worker parsing**: files >1 MB are parsed off the main thread so the
@@ -287,20 +287,17 @@ if (result.success) {
 
 ## 工作原理
 
-本项目完全自主实现了 Microsoft Word 文档的解析器，包括：
+解析器在浏览器中读取 OLE/CFB 容器和 Word 二进制结构，提取文本、格式和可识别的嵌入内容，再由 Vue 组件渲染预览。完整功能项及实现状态见 [FEATURES.md](FEATURES.md)。
 
-1. **OLE/CFB 格式解析** - 解析复合文档格式，获取文档数据流
-2. **FIB (File Information Block) 解析** - 读取文档结构信息
-3. **文本提取** - 从 Word 6.0/95 格式中提取文本内容
-4. **格式信息提取** - 获取字体、字号、对齐等格式信息
-5. **HTML 渲染** - 将解析结果转换为 HTML 格式在浏览器中展示
+## 支持范围
 
-## 支持的格式
+- `.doc` 和 `.dot`（OLE2/CFB；主要面向 Word 97-2003 二进制格式）
+- Unicode/UTF-16LE 和 8-bit 压缩文本
+- 文本、表格、常见字符/段落格式、分页与分节信息
+- 可识别的图片、页眉页脚、脚注/尾注、书签、超链接、修订标记及部分 OLE 对象
+- `.docx`（Open XML）不支持
 
-- ✅ Microsoft Word 6.0/95 (.doc)
-- ✅ OLE 复合文档格式
-- ✅ ANSI 和 Unicode 编码的中文文档
-- ✅ 基本格式（字体、字号、对齐、加粗、下划线）
+格式还原取决于文件中的 Word 结构是否完整。解析器优先使用真实 CHP/PAP 格式表；缺少这些数据或遇到不常见变体时会使用启发式回退。复杂绘图、图表和公式并非完整的 Word 排版引擎，预览可能与 Microsoft Word 有差异。
 
 ## 替代方案对比 / Comparison
 
@@ -351,15 +348,14 @@ this package compares:
 
 ## 功能清单
 
-完整的 .doc 文件功能支持状态请参阅 [FEATURES.md](FEATURES.md)，包含 14 大类共 99 项功能的实现状态统计。
+完整的 .doc 文件功能支持状态请参阅 [FEATURES.md](FEATURES.md)，按 14 大类列出 119 项功能的实现状态（115 项已实现，4 项不支持）。
 
 ## 限制
 
-- 不支持 DOCX 格式（请使用专门的 DOCX 解析器）
-- 不支持复杂的图形、图片、宏等高级特性
-- 不支持修订模式、批注等协作功能
-- 格式检测基于启发式规则，不读取完整的 CHP/PAP 格式表
-- 某些由 macOS `textutil` 生成的 .doc 文件可能需要手动调整 fComplex 标志
+- 不解析 `.docx`、加密/密码保护的文档，也不执行 VBA 宏。
+- 图片、修订、脚注/尾注和批注 story 等可识别内容会尝试提取和展示；不保证支持每一种 Word 变体或完整还原定位与排版。
+- 格式恢复使用 CHP/PAP 表解析，并在相关结构缺失时回退到启发式；复杂图形、图表、公式的呈现可能与 Word 不同。
+- 少数由 macOS `textutil` 生成的文件可能缺少标准 FIB 偏移，解析结果会受源文件结构影响。
 
 ## 开发
 
