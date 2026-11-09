@@ -125,11 +125,14 @@ const handleFileChange = (event) => {
 
 ### 独立 HTML 页面使用
 
+先运行 `npm run build:lib` 生成 `dist`。将下面示例保存为项目根目录中的 HTML 文件，并通过本地 HTTP 静态服务器打开；不要直接使用 `file://`，因为浏览器会限制原生 ES module 导入。
+
 ```html
 <!DOCTYPE html>
 <html>
 <head>
   <title>DOC Preview Demo</title>
+  <link rel="stylesheet" href="./dist/doc-preview.css" />
   <script type="importmap">
     { "imports": { "vue": "https://unpkg.com/vue@3/dist/vue.esm-browser.js" } }
   </script>
@@ -141,14 +144,11 @@ const handleFileChange = (event) => {
 <body>
   <h1>DOC 文件预览</h1>
   
-  <input type="file" id="fileInput" accept=".doc" />
-  
   <div id="preview-container"></div>
 
   <script type="module">
     import { createApp } from 'vue'
     import { DocPreview } from './dist/doc-preview.js'
-    import './dist/doc-preview.css'
 
     createApp({
       components: { DocPreview },
