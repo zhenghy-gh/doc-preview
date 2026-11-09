@@ -1,6 +1,12 @@
 import { DocParser } from './docParser'
 import type { ProgressCallback } from './docParser'
+import workerAssetUrl from './docParser.worker?worker&url'
 import type { WorkerParseResponse } from './docParser.worker'
+
+const currentScriptUrl = typeof document !== 'undefined' && document.currentScript?.tagName === 'SCRIPT'
+  ? (document.currentScript as HTMLScriptElement).src
+  : undefined
+const workerBaseUrl = currentScriptUrl || import.meta.url
 
 export interface WorkerParseResult {
   success: boolean
@@ -12,7 +18,7 @@ export interface WorkerParseResult {
 /**
  * Parse a .doc file in a Web Worker to avoid blocking the main thread.
  *
- * Uses Vite's native worker bundling (`new Worker(new URL(...), { type: 'module' })`).
+ * Bundles the worker through Vite so app builds can cache it separately.
  * Falls back to main-thread parsing if Workers are unavailable.
  *
  * @param buffer - The .doc file as an ArrayBuffer.
@@ -28,10 +34,7 @@ export function parseWithWorker(
   return new Promise((resolve) => {
     // Attempt Web Worker path
     try {
-      const worker = new Worker(
-        new URL('./docParser.worker.ts', import.meta.url),
-        { type: 'module' },
-      )
+      const worker = new Worker(new URL(workerAssetUrl, workerBaseUrl), { type: 'module' })
 
       const timeout = setTimeout(() => {
         worker.terminate()

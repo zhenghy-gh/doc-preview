@@ -11,7 +11,7 @@ export default defineConfig(({ mode }) => {
       vue(),
       isLib && dts({
         entryRoot: resolve(__dirname, 'src'),
-        include: ['src/index.ts', 'src/utils/docParser.ts', 'src/utils/docFormat.ts', 'src/utils/parseWithWorker.ts', 'src/components/DocPreview.vue'],
+        include: ['src/index.ts', 'src/utils/docParser.ts', 'src/utils/docFormat.ts', 'src/utils/parseWithWorker.ts', 'src/components/DocPreview.vue', 'src/vite-env.d.ts'],
         outDir: resolve(__dirname, 'dist'),
         tsconfigPath: resolve(__dirname, 'tsconfig.json'),
       }),

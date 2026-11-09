@@ -34,7 +34,10 @@ jobs:
       - name: Test
         run: npm test
         
-      - name: Build
+      - name: Build library
+        run: npm run build:lib
+
+      - name: Build site
         run: npm run build
         
       - name: Setup Pages
