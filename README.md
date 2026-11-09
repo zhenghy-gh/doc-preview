@@ -88,10 +88,13 @@ yarn add @zhenghy/doc-preview
 ### CDN（unpkg）
 
 ```html
-<link rel="stylesheet" href="https://unpkg.com/@zhenghy/doc-preview/dist/style.css" />
+<link rel="stylesheet" href="https://unpkg.com/@zhenghy/doc-preview/dist/doc-preview.css" />
+<script type="importmap">
+  { "imports": { "vue": "https://unpkg.com/vue@3/dist/vue.esm-browser.js" } }
+</script>
 <script type="module">
   import { DocPreview } from 'https://unpkg.com/@zhenghy/doc-preview/dist/doc-preview.js'
-  // 全局可使用 window.DocPreview
+  // Use DocPreview in your Vue app.
 </script>
 ```
 
@@ -127,6 +130,9 @@ const handleFileChange = (event) => {
 <html>
 <head>
   <title>DOC Preview Demo</title>
+  <script type="importmap">
+    { "imports": { "vue": "https://unpkg.com/vue@3/dist/vue.esm-browser.js" } }
+  </script>
   <style>
     body { font-family: Arial, sans-serif; padding: 20px; }
     #preview-container { max-width: 800px; margin: 0 auto; }
@@ -140,9 +146,9 @@ const handleFileChange = (event) => {
   <div id="preview-container"></div>
 
   <script type="module">
-    import { createApp } from 'https://unpkg.com/vue@3/dist/vue.esm-browser.js'
+    import { createApp } from 'vue'
     import { DocPreview } from './dist/doc-preview.js'
-    import './dist/style.css'
+    import './dist/doc-preview.css'
 
     createApp({
       components: { DocPreview },

@@ -11,7 +11,8 @@
       "require": "./dist/doc-preview.umd.cjs",
       "types": "./dist/index.d.ts"
     },
-    "./dist/style.css": "./dist/style.css"
+    "./style.css": "./dist/doc-preview.css",
+    "./dist/style.css": "./dist/doc-preview.css"
   },
   "files": [
     "dist"
