@@ -498,7 +498,8 @@ const revisionItems = computed<Array<{ type: RevisionType; label: string; author
 })
 
 // --- Web Font ---
-const webFontLoaded = ref(false)
+const WEB_FONT_LINK_ID = 'doc-preview-web-fonts'
+const WEB_FONT_STYLE_ID = 'doc-preview-webfont-overrides'
 
 const FONT_ALIASES: Record<string, string[]> = {
   '宋体': ['Noto+Serif+SC', 'SimSun'],
@@ -522,16 +523,16 @@ const FONT_ALIASES: Record<string, string[]> = {
 }
 
 function loadWebFonts() {
-  if (!props.useWebFont || webFontLoaded.value) return
+  if (!props.useWebFont) return
+
+  injectWebFontOverrides()
+  if (document.getElementById(WEB_FONT_LINK_ID)) return
 
   const families = 'Noto+Serif+SC|Noto+Sans+SC|Noto+Serif|Noto+Sans'
   const link = document.createElement('link')
+  link.id = WEB_FONT_LINK_ID
   link.href = `https://fonts.googleapis.com/css2?family=${families}&display=swap`
   link.rel = 'stylesheet'
-  link.onload = () => {
-    webFontLoaded.value = true
-    injectWebFontOverrides()
-  }
   link.onerror = () => {
     console.warn('Web Font loading failed, falling back to system fonts')
   }
@@ -552,7 +553,7 @@ function getWebFontFamily(fontName?: string): string {
 function injectWebFontOverrides() {
   if (!props.useWebFont) return
 
-  const styleId = 'doc-preview-webfont-overrides'
+  const styleId = WEB_FONT_STYLE_ID
   let style = document.getElementById(styleId) as HTMLStyleElement
   if (!style) {
     style = document.createElement('style')
@@ -561,26 +562,26 @@ function injectWebFontOverrides() {
   }
 
   style.textContent = `
-    .document-content h1 {
+    .doc-preview.web-font-enabled .document-content h1 {
       font-family: 'Noto Serif SC', '华文中宋', 'SimHei', serif !important;
     }
-    .document-content h2 {
+    .doc-preview.web-font-enabled .document-content h2 {
       font-family: 'Noto Serif SC', '华文中宋', 'SimHei', serif !important;
     }
-    .document-content h3 {
+    .doc-preview.web-font-enabled .document-content h3 {
       font-family: 'Noto Serif SC', serif !important;
     }
-    .document-content p {
+    .doc-preview.web-font-enabled .document-content p {
       font-family: 'Noto Serif SC', '宋体', 'SimSun', serif !important;
     }
-    .document-content li {
+    .doc-preview.web-font-enabled .document-content li {
       font-family: 'Noto Serif SC', '宋体', 'SimSun', serif !important;
     }
-    .document-content th,
-    .document-content td {
+    .doc-preview.web-font-enabled .document-content th,
+    .doc-preview.web-font-enabled .document-content td {
       font-family: 'Noto Serif SC', '宋体', 'SimSun', serif !important;
     }
-    .document-content blockquote {
+    .doc-preview.web-font-enabled .document-content blockquote {
       font-family: 'Noto Serif SC', '宋体', serif !important;
     }
   `
@@ -2969,7 +2970,12 @@ defineExpose({ reload, getPlainText, focusContent })
 </script>
 
 <template>
-  <div class="doc-preview" :style="{ '--zoom': zoomLevel / 100 }" tabindex="-1">
+  <div
+    class="doc-preview"
+    :class="{ 'web-font-enabled': props.useWebFont }"
+    :style="{ '--zoom': zoomLevel / 100 }"
+    tabindex="-1"
+  >
     <a class="skip-link" href="#" @click.prevent="focusContent">跳到文档内容</a>
     <!-- Loading -->
     <LoadingOverlay

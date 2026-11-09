@@ -32,8 +32,37 @@ const parsedDocument = {
 describe('DocPreview source lifecycle', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
+    vi.restoreAllMocks()
     parseFile.mockReset()
     parseBuffer.mockReset()
+  })
+
+  it('scopes optional web font styles to opted-in previews and loads them once', async () => {
+    const appendToHead = document.head.appendChild.bind(document.head)
+    const appendSpy = vi.spyOn(document.head, 'appendChild').mockImplementation((node: Node) => {
+      if (node.nodeName === 'LINK' && (node as HTMLLinkElement).id === 'doc-preview-web-fonts') {
+        const marker = document.createElement('meta')
+        marker.id = 'doc-preview-web-fonts'
+        appendToHead(marker)
+        return node
+      }
+      return appendToHead(node)
+    })
+    parseFile.mockResolvedValue(parsedDocument)
+    const source = new File(['doc'], 'sample.doc')
+    const optedIn = mount(DocPreview, { props: { source, useWebFont: true } })
+    const defaultPreview = mount(DocPreview, { props: { source } })
+    await flushPromises()
+
+    expect(optedIn.find('.doc-preview').classes()).toContain('web-font-enabled')
+    expect(defaultPreview.find('.doc-preview').classes()).not.toContain('web-font-enabled')
+    expect(appendSpy.mock.calls.filter(([node]) => node.nodeName === 'LINK')).toHaveLength(1)
+    const override = document.querySelector('#doc-preview-webfont-overrides')
+    expect(override?.textContent).toContain('.doc-preview.web-font-enabled .document-content')
+    expect(override?.textContent).not.toContain('\n    .document-content')
+
+    optedIn.unmount()
+    defaultPreview.unmount()
   })
 
   it('starts idle when there is no source', async () => {
