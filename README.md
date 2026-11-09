@@ -194,9 +194,10 @@ const handleFileChange = (event) => {
 
 ### Props
 
-| 属性名 | 类型 | 必填 | 说明 |
-|--------|------|------|------|
-| `source` | `File \| string \| null` | 是 | 要预览的 DOC 文件对象或远程 URL 地址 |
+| 属性名 | 类型 | 必填 | 默认值 | 说明 |
+|--------|------|------|--------|------|
+| `source` | `File \| string \| null` | 是 | - | 本地文件或通过 `fetch()` 加载的 URL；跨域地址需允许 CORS。`null` 表示当前无文档源。 |
+| `useWebFont` | `boolean` | 否 | `false` | 启用后会从 Google Fonts 加载字体；默认关闭，不产生该第三方请求。 |
 
 ### 事件
 
@@ -216,6 +217,9 @@ previewRef.value?.reload()
 
 // 获取解析后的纯文本
 const text = previewRef.value?.getPlainText()
+
+// 滚动并聚焦到文档内容
+previewRef.value?.focusContent()
 ```
 
 ### 导出函数
