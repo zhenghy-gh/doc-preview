@@ -32,14 +32,19 @@ export function parseWithWorker(
   onProgress?: ProgressCallback,
 ): Promise<WorkerParseResult> {
   return new Promise((resolve) => {
+    let bufferTransferred = false
+
     // Attempt Web Worker path
     try {
       const worker = new Worker(new URL(workerAssetUrl, workerBaseUrl), { type: 'module' })
 
       const timeout = setTimeout(() => {
         worker.terminate()
-        // Fallback on timeout
-        fallbackParse(buffer, maxScanBytes, resolve, onProgress)
+        if (bufferTransferred) {
+          resolve({ success: false, error: 'Web Worker 解析超时（30 秒）' })
+        } else {
+          fallbackParse(buffer, maxScanBytes, resolve, onProgress)
+        }
       }, 30_000)
 
       worker.onmessage = (e: MessageEvent<WorkerParseResponse>) => {
@@ -60,14 +65,19 @@ export function parseWithWorker(
         })
       }
 
-      worker.onerror = () => {
+      worker.onerror = (event) => {
         clearTimeout(timeout)
         worker.terminate()
-        fallbackParse(buffer, maxScanBytes, resolve, onProgress)
+        if (bufferTransferred) {
+          resolve({ success: false, error: event.message || 'Web Worker 运行失败' })
+        } else {
+          fallbackParse(buffer, maxScanBytes, resolve, onProgress)
+        }
       }
 
       // Transfer buffer for zero-copy
       worker.postMessage({ buffer, maxScanBytes }, [buffer])
+      bufferTransferred = true
     } catch {
       // Workers unsupported (e.g. some older browsers) → main thread
       fallbackParse(buffer, maxScanBytes, resolve, onProgress)

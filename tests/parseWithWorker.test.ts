@@ -82,7 +82,7 @@ class MockWorker {
   static instances: MockWorker[] = []
   static behavior: 'success' | 'error' | 'progress' = 'success'
   onmessage: ((e: { data: any }) => void) | null = null
-  onerror: (() => void) | null = null
+  onerror: ((event: ErrorEvent) => void) | null = null
   terminated = false
   posted: Array<{ buffer: ArrayBuffer; maxScanBytes?: number }> = []
 
@@ -92,7 +92,7 @@ class MockWorker {
     setTimeout(() => {
       if (this.terminated) return
       if (MockWorker.behavior === 'error') {
-        this.onerror?.()
+        this.onerror?.({ message: 'synthetic worker failure' } as ErrorEvent)
         return
       }
       if (MockWorker.behavior === 'progress') {
@@ -111,8 +111,9 @@ class MockWorker {
     }, 0)
   }
 
-  postMessage(msg: { buffer: ArrayBuffer; maxScanBytes?: number }, _transfer?: any[]) {
+  postMessage(msg: { buffer: ArrayBuffer; maxScanBytes?: number }, transfer?: any[]) {
     this.posted.push(msg)
+    if (transfer?.includes(msg.buffer)) structuredClone(msg.buffer, { transfer: [msg.buffer] })
   }
 
   terminate() {
@@ -182,12 +183,14 @@ describe('parseWithWorker', () => {
     ])
   })
 
-  it('should fall back to main-thread parsing when the worker errors', async () => {
+  it('should report worker errors after transferring the input buffer', async () => {
     vi.stubGlobal('Worker', MockWorker)
     MockWorker.behavior = 'error'
-    const result = await parseWithWorker(buildValidOleBuffer())
-    expect(result.success).toBe(true)
-    expect(result.text).toContain('Hello World')
+    const buffer = buildValidOleBuffer()
+    const result = await parseWithWorker(buffer)
+    expect(buffer.byteLength).toBe(0)
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('synthetic worker failure')
   })
 
   it('should fall back to main-thread parsing when Worker constructor throws', async () => {
@@ -229,22 +232,25 @@ describe('parseWithWorker timeout and crash paths', () => {
     vi.useRealTimers()
   })
 
-  it('should fall back to main-thread parsing when the worker times out', async () => {
+  it('should report timeout after transferring the input buffer', async () => {
     class SilentWorker {
       onmessage: ((e: { data: any }) => void) | null = null
-      onerror: (() => void) | null = null
+      onerror: ((event: ErrorEvent) => void) | null = null
       terminated = false
-      postMessage() { /* never responds */ }
+      postMessage(msg: { buffer: ArrayBuffer }, transfer?: any[]) {
+        if (transfer?.includes(msg.buffer)) structuredClone(msg.buffer, { transfer: [msg.buffer] })
+      }
       terminate() { this.terminated = true }
     }
     vi.stubGlobal('Worker', SilentWorker)
     vi.useFakeTimers()
-    const promise = parseWithWorker(buildValidOleBuffer())
+    const buffer = buildValidOleBuffer()
+    const promise = parseWithWorker(buffer)
     await vi.advanceTimersByTimeAsync(30_000)
     const result = await promise
-    expect(result.success).toBe(true)
-    expect(result.text).toContain('Hello World')
-    expect(MockWorker.instances.length).toBe(0)
+    expect(buffer.byteLength).toBe(0)
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('超时')
   })
 
   it('should report failure when main-thread fallback parsing throws', async () => {
