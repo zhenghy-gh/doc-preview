@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { MAX_DOC_FILE_SIZE, readResponseWithLimit } from '../src/utils/docLimits'
+import { isDocFileTooLarge, MAX_DOC_FILE_SIZE, readResponseWithLimit } from '../src/utils/docLimits'
 
 function makeResponse(body: ReadableStream<Uint8Array>, headers = new Headers()): Response {
   return { headers, body } as Response
@@ -8,6 +8,12 @@ function makeResponse(body: ReadableStream<Uint8Array>, headers = new Headers())
 describe('MAX_DOC_FILE_SIZE', () => {
   it('matches the upload and parser limit of 50 MiB', () => {
     expect(MAX_DOC_FILE_SIZE).toBe(50 * 1024 * 1024)
+  })
+
+  it('accepts the exact limit and rejects the next byte', () => {
+    expect(isDocFileTooLarge(MAX_DOC_FILE_SIZE - 1)).toBe(false)
+    expect(isDocFileTooLarge(MAX_DOC_FILE_SIZE)).toBe(false)
+    expect(isDocFileTooLarge(MAX_DOC_FILE_SIZE + 1)).toBe(true)
   })
 })
 
