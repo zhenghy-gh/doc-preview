@@ -135,7 +135,7 @@ describe('parseWithWorker', () => {
     const result = await parseWithWorker({ byteLength: MAX_DOC_FILE_SIZE + 1 } as ArrayBuffer)
 
     expect(result.success).toBe(false)
-    expect(result.error).toContain('50 MB')
+    expect(result.error).toContain('50 MiB')
     expect(MockWorker.instances).toHaveLength(0)
   })
 

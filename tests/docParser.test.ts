@@ -14,11 +14,11 @@ describe('DocParser', () => {
       const textResult = await parseDocFile(oversizedFile)
 
       expect(bufferResult.success).toBe(false)
-      expect(bufferResult.error).toContain('50 MB')
+      expect(bufferResult.error).toContain('50 MiB')
       expect(formattedResult.success).toBe(false)
-      expect(formattedResult.error).toContain('50 MB')
+      expect(formattedResult.error).toContain('50 MiB')
       expect(textResult.success).toBe(false)
-      expect(textResult.error).toContain('50 MB')
+      expect(textResult.error).toContain('50 MiB')
     })
 
     it('should fail gracefully for empty buffer', () => {

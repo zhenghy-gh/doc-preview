@@ -1,7 +1,7 @@
 export const MAX_DOC_FILE_SIZE = 50 * 1024 * 1024
 
 export function getFileSizeLimitError(): string {
-  return '文件超过最大支持大小（50 MB）'
+  return '文件超过最大支持大小（50 MiB）'
 }
 
 export function isDocFileTooLarge(byteLength: number): boolean {

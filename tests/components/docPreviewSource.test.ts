@@ -93,7 +93,7 @@ describe('DocPreview source lifecycle', () => {
 
     expect(arrayBuffer).not.toHaveBeenCalled()
     expect(parseFile).not.toHaveBeenCalled()
-    expect(wrapper.find('.enhanced-error').text()).toContain('50 MB')
+    expect(wrapper.find('.enhanced-error').text()).toContain('50 MiB')
     wrapper.unmount()
   })
 
@@ -110,7 +110,7 @@ describe('DocPreview source lifecycle', () => {
 
     expect(cancel).toHaveBeenCalledOnce()
     expect(parseBuffer).not.toHaveBeenCalled()
-    expect(wrapper.find('.enhanced-error').text()).toContain('50 MB')
+    expect(wrapper.find('.enhanced-error').text()).toContain('50 MiB')
     wrapper.unmount()
   })
 
