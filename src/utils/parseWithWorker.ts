@@ -2,6 +2,7 @@ import { DocParser } from './docParser'
 import type { ProgressCallback } from './docParser'
 import workerAssetUrl from './docParser.worker?worker&url'
 import type { WorkerParseResponse } from './docParser.worker'
+import { MAX_DOC_FILE_SIZE, getFileSizeLimitError } from './docLimits'
 
 const currentScriptUrl = typeof document !== 'undefined' && document.currentScript?.tagName === 'SCRIPT'
   ? (document.currentScript as HTMLScriptElement).src
@@ -31,6 +32,9 @@ export function parseWithWorker(
   maxScanBytes?: number,
   onProgress?: ProgressCallback,
 ): Promise<WorkerParseResult> {
+  if (buffer.byteLength > MAX_DOC_FILE_SIZE) {
+    return Promise.resolve({ success: false, error: getFileSizeLimitError() })
+  }
   return new Promise((resolve) => {
     let bufferTransferred = false
     let worker: Worker | undefined

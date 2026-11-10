@@ -12,6 +12,7 @@ import { htmlToMarkdown } from '../utils/markdownExport'
 import { highlightTextMatches, clearSearchHighlights } from '../utils/searchUtils'
 import { escapeHtml, applyTabStops, formatTextWithInferredFormat } from '../utils/textRender'
 import { sanitizePreviewHtml } from '../utils/sanitizeHtml'
+import { MAX_DOC_FILE_SIZE, getFileSizeLimitError, readResponseWithLimit } from '../utils/docLimits'
 import { WORD_VERSION_LABELS, type WordVersion } from '../utils/fibParser'
 import { t } from '../utils/locale'
 // import DocStatsPanel from './DocStatsPanel.vue'
@@ -859,6 +860,11 @@ const loadFromFile = async (file: File) => {
   startLoadingTimer()
 
   try {
+    if (file.size > MAX_DOC_FILE_SIZE) {
+      error.value = getFileSizeLimitError()
+      emit('error', error.value)
+      return
+    }
     // Use Web Worker for large files to keep UI responsive
     const useWorker = isWorkerSupported && file.size > WORKER_THRESHOLD
     isUsingWorker.value = useWorker
@@ -923,7 +929,7 @@ const loadFromUrl = async (url: string) => {
     if (generation !== loadGeneration) return
     if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`)
 
-    const buffer = await response.arrayBuffer()
+    const buffer = await readResponseWithLimit(response)
     if (generation !== loadGeneration) return
     fileSize.value = formatFileSize(buffer.byteLength)
 

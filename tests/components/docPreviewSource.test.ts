@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import DocPreview from '../../src/components/DocPreview.vue'
+import { MAX_DOC_FILE_SIZE } from '../../src/utils/docLimits'
 
 const { parseFile, parseBuffer } = vi.hoisted(() => ({
   parseFile: vi.fn(),
@@ -77,6 +78,39 @@ describe('DocPreview source lifecycle', () => {
     expect(wrapper.find('.loading-container').exists()).toBe(false)
     expect(wrapper.vm.getPlainText()).toBe('')
 
+    wrapper.unmount()
+  })
+
+  it('rejects an oversized File before reading or parsing it', async () => {
+    const arrayBuffer = vi.fn()
+    const oversizedFile = {
+      name: 'oversized.doc',
+      size: MAX_DOC_FILE_SIZE + 1,
+      arrayBuffer,
+    } as unknown as File
+    const wrapper = mount(DocPreview, { props: { source: oversizedFile } })
+    await flushPromises()
+
+    expect(arrayBuffer).not.toHaveBeenCalled()
+    expect(parseFile).not.toHaveBeenCalled()
+    expect(wrapper.find('.enhanced-error').text()).toContain('50 MB')
+    wrapper.unmount()
+  })
+
+  it('rejects an oversized URL response before reading its body', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const cancel = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      headers: { get: () => String(MAX_DOC_FILE_SIZE + 1) },
+      body: { cancel },
+    }))
+    const wrapper = mount(DocPreview, { props: { source: 'https://example.test/oversized.doc' } })
+    await flushPromises()
+
+    expect(cancel).toHaveBeenCalledOnce()
+    expect(parseBuffer).not.toHaveBeenCalled()
+    expect(wrapper.find('.enhanced-error').text()).toContain('50 MB')
     wrapper.unmount()
   })
 

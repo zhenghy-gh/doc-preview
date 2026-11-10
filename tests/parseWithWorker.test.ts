@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { parseWithWorker } from '../src/utils/parseWithWorker'
+import { MAX_DOC_FILE_SIZE } from '../src/utils/docLimits'
 
 /** Minimal OLE2 fixture that DocParser can parse (from docParser.test.ts). */
 function buildValidOleBuffer(): ArrayBuffer {
@@ -127,6 +128,15 @@ describe('parseWithWorker', () => {
     vi.useRealTimers()
     MockWorker.instances = []
     MockWorker.behavior = 'success'
+  })
+
+  it('rejects oversized buffers before constructing a Worker', async () => {
+    vi.stubGlobal('Worker', MockWorker)
+    const result = await parseWithWorker({ byteLength: MAX_DOC_FILE_SIZE + 1 } as ArrayBuffer)
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('50 MB')
+    expect(MockWorker.instances).toHaveLength(0)
   })
 
   it('should fall back to main-thread parsing for empty buffer', async () => {

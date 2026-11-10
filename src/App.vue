@@ -2,8 +2,7 @@
 import { ref, watch } from 'vue'
 import DocPreview from './components/DocPreview.vue'
 import { currentLocale, setLocale, t } from './utils/locale'
-
-const MAX_FILE_SIZE = 50 * 1024 * 1024 // 50MB limit
+import { getFileSizeLimitError, isDocFileTooLarge } from './utils/docLimits'
 
 const selectedFile = ref<File | null>(null)
 const urlInput = ref('')
@@ -29,13 +28,7 @@ const formatErrorMessage = (file: File): string => {
 }
 
 const isValidFileSize = (file: File): boolean => {
-  return file.size <= MAX_FILE_SIZE
-}
-
-const formatFileSize = (bytes: number): string => {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  return !isDocFileTooLarge(file.size)
 }
 
 const handleFileChange = (event: Event) => {
@@ -52,7 +45,7 @@ const handleFileChange = (event: Event) => {
   }
 
   if (!isValidFileSize(file)) {
-    errorMessage.value = `文件过大 (${formatFileSize(file.size)})，最大支持 ${formatFileSize(MAX_FILE_SIZE)}`
+    errorMessage.value = getFileSizeLimitError()
     return
   }
 
@@ -75,7 +68,7 @@ const handleDrop = (event: DragEvent) => {
   }
 
   if (!isValidFileSize(file)) {
-    errorMessage.value = `文件过大 (${formatFileSize(file.size)})，最大支持 ${formatFileSize(MAX_FILE_SIZE)}`
+    errorMessage.value = getFileSizeLimitError()
     return
   }
 

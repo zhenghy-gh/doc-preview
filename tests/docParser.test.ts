@@ -1,9 +1,26 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { DocParser, parseDocFileFromBuffer, parseDocFileWithFormat, parseDocFile } from '../src/utils/docParser'
 import { parseFib } from '../src/utils/fibParser'
+import { MAX_DOC_FILE_SIZE } from '../src/utils/docLimits'
 
 describe('DocParser', () => {
   describe('parseDocFileFromBuffer', () => {
+    it('rejects oversized direct File and ArrayBuffer API inputs before reading', async () => {
+      const oversizedBuffer = { byteLength: MAX_DOC_FILE_SIZE + 1 } as ArrayBuffer
+      const oversizedFile = { size: MAX_DOC_FILE_SIZE + 1 } as File
+
+      const bufferResult = parseDocFileFromBuffer(oversizedBuffer)
+      const formattedResult = await parseDocFileWithFormat(oversizedFile)
+      const textResult = await parseDocFile(oversizedFile)
+
+      expect(bufferResult.success).toBe(false)
+      expect(bufferResult.error).toContain('50 MB')
+      expect(formattedResult.success).toBe(false)
+      expect(formattedResult.error).toContain('50 MB')
+      expect(textResult.success).toBe(false)
+      expect(textResult.error).toContain('50 MB')
+    })
+
     it('should fail gracefully for empty buffer', () => {
       const result = parseDocFileFromBuffer(new ArrayBuffer(0))
       expect(result.success).toBe(false)

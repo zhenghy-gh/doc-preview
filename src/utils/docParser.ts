@@ -1,4 +1,5 @@
 import { logger, enableDebugMode } from './logger'
+import { MAX_DOC_FILE_SIZE, getFileSizeLimitError } from './docLimits'
 
 /**
  * 解析进度阶段标识
@@ -158,6 +159,9 @@ export class DocParser {
    */
   parse(): { text: string; success: boolean; error?: string } {
     try {
+      if (this.buffer.byteLength > MAX_DOC_FILE_SIZE) {
+        return { text: '', success: false, error: getFileSizeLimitError() }
+      }
       logger.info('开始解析 DOC 文件')
 
       if (!this.ole.isOleFile()) {
@@ -214,6 +218,9 @@ export class DocParser {
    */
   parseWithFormat(onProgress?: ProgressCallback): { success: boolean; document?: any; text?: string; error?: string } {
     try {
+      if (this.buffer.byteLength > MAX_DOC_FILE_SIZE) {
+        return { success: false, error: getFileSizeLimitError() }
+      }
       logger.info('开始解析带格式的 DOC 文件')
       onProgress?.('verifying', 5)
 
@@ -3890,6 +3897,9 @@ export class DocParser {
  */
 export function parseDocFile(file: File, debug: boolean = false): Promise<{ text: string; success: boolean; error?: string }> {
   if (debug) logger.enabled = true
+  if (file.size > MAX_DOC_FILE_SIZE) {
+    return Promise.resolve({ text: '', success: false, error: getFileSizeLimitError() })
+  }
   return new Promise((resolve) => {
     const reader = new FileReader()
     reader.onload = (e) => {
@@ -3921,6 +3931,9 @@ export function parseDocFileFromBuffer(
   buffer: ArrayBuffer,
   fileName?: string
 ): { success: boolean; document?: any; text?: string; error?: string } {
+  if (buffer.byteLength > MAX_DOC_FILE_SIZE) {
+    return { success: false, error: getFileSizeLimitError() }
+  }
   try {
     const parser = new DocParser(buffer)
     return parser.parseWithFormat()
@@ -3949,6 +3962,9 @@ export function parseDocFileWithFormat(file: File, debug: boolean = false): Prom
   error?: string
 }> {
   if (debug) logger.enabled = true
+  if (file.size > MAX_DOC_FILE_SIZE) {
+    return Promise.resolve({ success: false, error: getFileSizeLimitError() })
+  }
   return new Promise((resolve) => {
     const reader = new FileReader()
     reader.onload = (e) => {
