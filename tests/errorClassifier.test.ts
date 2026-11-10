@@ -93,7 +93,7 @@ describe('errorClassifier', () => {
 
   describe('classifyError - 文件大小限制', () => {
     it('50 MiB input limit is actionable and not retryable', () => {
-      const result = classifyError('文件超过最大支持大小（50 MB）')
+      const result = classifyError('文件超过最大支持大小（50 MiB）')
       expect(result.category).toBe('size')
       expect(result.title).toBe('文件超过大小限制')
       expect(result.detail).toContain('50 MiB')
