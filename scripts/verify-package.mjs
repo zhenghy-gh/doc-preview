@@ -5,11 +5,12 @@ import { existsSync, readFileSync } from 'node:fs'
 const manifest = JSON.parse(readFileSync('package.json', 'utf8'))
 const packed = JSON.parse(execFileSync('npm', ['pack', '--dry-run', '--json'], { encoding: 'utf8' }))[0]
 const packedFiles = new Set(packed.files.map(({ path }) => path))
-const targets = Object.values(manifest.exports).flatMap((entry) =>
+const exportTargets = Object.values(manifest.exports).flatMap((entry) =>
   typeof entry === 'string' ? [entry] : Object.values(entry).filter((value) => typeof value === 'string'),
 )
+const entrypoints = [manifest.main, manifest.module, manifest.types, ...exportTargets].filter(Boolean)
 
-for (const target of targets) {
+for (const target of entrypoints) {
   const file = target.replace(/^\.\//, '')
   assert(existsSync(file), 'Missing package export target: ' + file)
   assert(packedFiles.has(file), 'Package export target is not packed: ' + file)
@@ -29,4 +30,4 @@ assert(
   'Bundled parser Worker is missing from the package',
 )
 
-console.log('Verified ' + packed.files.length + ' npm package files and ' + targets.length + ' export targets.')
+console.log('Verified ' + packed.files.length + ' npm package files and ' + entrypoints.length + ' module entrypoints.')
