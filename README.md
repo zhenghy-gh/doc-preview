@@ -332,13 +332,13 @@ this package compares:
 
 | 浏览器 | 最低版本 | Web Worker | 备注 |
 |--------|---------|-----------|------|
-| Chrome  | 80+     | ✅        | 推荐 |
-| Edge    | 80+     | ✅        | Chromium 内核 |
-| Firefox | 75+     | ✅        | 支持 Worker |
-| Safari  | 14+     | ✅        | macOS 11+/iOS 14+ |
+| Chrome  | 111+    | ✅        | 推荐 |
+| Edge    | 111+    | ✅        | Chromium 内核 |
+| Firefox | 114+    | ✅        | 支持 Worker |
+| Safari  | 16.4+   | ✅        | macOS 13+/iOS 16.4+ |
 | IE 11   | ❌      | ❌        | 不支持 |
 
-> 📌 较老的浏览器会自动降级到主线程解析。功能完整，但大文件可能阻塞 UI。
+> 生产包使用 Vite 8 默认的  baseline-widely-available  目标；最低版本随该目标更新，详见 [Vite build.target 文档](https://vite.dev/config/build-options.html#build-target)。不满足目标的浏览器可能无法解析生成的 JavaScript。
 
 ## 性能
 
