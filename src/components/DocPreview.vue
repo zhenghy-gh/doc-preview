@@ -13,6 +13,7 @@ import { highlightTextMatches, clearSearchHighlights } from '../utils/searchUtil
 import { escapeHtml, applyTabStops, formatTextWithInferredFormat } from '../utils/textRender'
 import { sanitizePreviewHtml } from '../utils/sanitizeHtml'
 import { MAX_DOC_FILE_SIZE, getFileSizeLimitError, readResponseWithLimit } from '../utils/docLimits'
+import { downloadBlob } from '../utils/downloadBlob'
 import { WORD_VERSION_LABELS, type WordVersion } from '../utils/fibParser'
 import { t } from '../utils/locale'
 // import DocStatsPanel from './DocStatsPanel.vue'
@@ -2741,12 +2742,7 @@ function downloadText() {
   if (!plainText.value) return
   const name = fileName.value.replace(/\.(doc|dot)$/i, '') || 'document'
   const blob = new Blob([plainText.value], { type: 'text/plain;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `${name}.txt`
-  a.click()
-  URL.revokeObjectURL(url)
+  downloadBlob(blob, `${name}.txt`)
 }
 
 function downloadHtml() {
@@ -2830,12 +2826,7 @@ function downloadHtml() {
 </html>`
   
   const blob = new Blob([htmlTemplate], { type: 'text/html;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `${name}.html`
-  a.click()
-  URL.revokeObjectURL(url)
+  downloadBlob(blob, `${name}.html`)
 }
 
 // ---- Download Markdown ----
@@ -2848,12 +2839,7 @@ function downloadMarkdown() {
   const name = fileName.value.replace(/\.(doc|dot)$/i, '') || 'document'
 
   const blob = new Blob([mdContent], { type: 'text/markdown;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `${name}.md`
-  a.click()
-  URL.revokeObjectURL(url)
+  downloadBlob(blob, `${name}.md`)
 }
 
 // ---- Keyboard shortcuts ----
