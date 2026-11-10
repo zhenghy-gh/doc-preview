@@ -40,8 +40,8 @@ list type) and supports search, zoom, print, and dark mode.
   headers, with real CHP/PAP format recovery and heuristic fallback when needed.
 - **DOCX** is not supported by this package — for `.docx` (Open XML) files,
   use a dedicated DOCX parser. This package is the **`.doc` specialist**.
-- **Web Worker parsing**: files >1 MB are parsed off the main thread so the
-  UI never freezes.
+- **Web Worker parsing**: files >1 MB are parsed off the main thread when Workers
+  are available, reducing main-thread parsing work. Rendering still uses the main thread.
 - **Built-in UX**: keyword search with highlighting, zoom (50%–200%), print
   (browser print to PDF), text copy, text download, document outline / TOC.
 - **Accessibility**: keyboard shortcuts, ARIA labels, skip-link, dark mode
@@ -345,10 +345,10 @@ this package compares:
 - **<1MB 文件**: 同步解析（主线程）
 - **≥1MB 文件**: Web Worker 解析（自动）
 - **默认扫描上限**: 10MB（可配置 `maxScanBytes`）
-- **典型解析速度**:
-  - 小型 (<100KB): <50ms
-  - 中型 (1MB): ~200ms
-  - 大型 (10MB): ~1.5s (Worker 中)
+- **解析耗时参考**（仅解析阶段，随设备和文档结构变化）:
+  - 小型 (<100KB): 通常 <50ms
+  - 约 1MB: 典型样本约 200ms
+  - >1MB: 支持 Worker 时在后台线程解析；页面渲染仍在主线程执行
 
 ## 功能清单
 
