@@ -9,6 +9,23 @@ describe('downloadBlob', () => {
     document.body.replaceChildren()
   })
 
+  it('schedules object URL cleanup when the browser rejects the click', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:rejected-download')
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {
+      throw new Error('download blocked')
+    })
+
+    expect(() => downloadBlob(new Blob(['data']), 'blocked.txt')).toThrow('download blocked')
+    expect(document.querySelector('a[download="blocked.txt"]')).toBeNull()
+    expect(revokeObjectURL).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(revokeObjectURL).toHaveBeenCalledOnce()
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:rejected-download')
+  })
+
   it('activates a connected download link before revoking its object URL', async () => {
     vi.useFakeTimers()
     const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:doc-preview-test')
