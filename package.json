@@ -75,6 +75,7 @@
     "@vitest/coverage-v8": "^4.1.11",
     "@vue/test-utils": "^2.4.11",
     "happy-dom": "^20.11.6",
+    "jsdom": "^26.1.0",
     "playwright": "^1.40.0",
     "typescript": "^6.0.3",
     "vite": "^8.2.2",
@@ -82,5 +83,8 @@
     "vitest": "^4.1.11",
     "vue": "^3.4.21",
     "vue-tsc": "^3.3.10"
+  },
+  "dependencies": {
+    "dompurify": "^3.4.17"
   }
 }

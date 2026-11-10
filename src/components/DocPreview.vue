@@ -11,6 +11,7 @@ import type { RevisionMode } from '../utils/revisionRender'
 import { htmlToMarkdown } from '../utils/markdownExport'
 import { highlightTextMatches, clearSearchHighlights } from '../utils/searchUtils'
 import { escapeHtml, applyTabStops, formatTextWithInferredFormat } from '../utils/textRender'
+import { sanitizePreviewHtml } from '../utils/sanitizeHtml'
 import { WORD_VERSION_LABELS, type WordVersion } from '../utils/fibParser'
 import { t } from '../utils/locale'
 // import DocStatsPanel from './DocStatsPanel.vue'
@@ -550,6 +551,11 @@ function getWebFontFamily(fontName?: string): string {
   return ''
 }
 
+function safeCssFontName(fontName?: string): string {
+  const safeName = (fontName || '宋体').replace(/[^A-Za-z0-9 _-\u0080-\uFFFF]/g, '').trim()
+  return safeName || '宋体'
+}
+
 function injectWebFontOverrides() {
   if (!props.useWebFont) return
 
@@ -718,7 +724,7 @@ function formatStoryText(text: string): string {
       .replace(new RegExp(CELL_MARK, 'g'), '<span style="display:inline-block;padding:0 4px;color:#999;font-size:0.85em">│</span>')
     htmlParts.push(`<p style="margin:0 0 6px 0">${escaped}</p>`)
   }
-  return htmlParts.join('')
+  return sanitizePreviewHtml(htmlParts.join(''))
 }
 
 // ---- Helpers ----
@@ -1078,7 +1084,7 @@ const renderResult = (result: ParserOutput) => {
     equations.value = []
     charts.value = []
     wordArts.value = []
-    const inferredHtml = formatTextWithInferredFormat(result.text, getWebFontFamily)
+    const inferredHtml = sanitizePreviewHtml(formatTextWithInferredFormat(result.text, getWebFontFamily))
     pages.value = [inferredHtml]
     htmlContent.value = inferredHtml
     pageHeights.value = {}
@@ -1770,6 +1776,7 @@ function renderChartHtml(chart: ChartInfo): string {
  */
 function applyFormattedPages(paragraphs: ParaWithList[], hyperlinks?: HyperlinkRange[], revisions?: RevisionMark[]) {
   const pageArr = formatFormattedTextToHtml(paragraphs, hyperlinks, revisions)
+    .map(pageHtml => sanitizePreviewHtml(pageHtml))
   pages.value = pageArr
   htmlContent.value = pageArr.join('\n')
   // 重置虚拟滚动状态
@@ -2187,7 +2194,8 @@ const formatTextWithCharacterStyles = (
     if (!segment) continue
 
     const css: string[] = []
-    css.push(`font-family: ${getWebFontFamily(style.style.fontName)}'${style.style.fontName || '宋体'}', serif`)
+    const fontName = safeCssFontName(style.style.fontName)
+    css.push(`font-family: ${getWebFontFamily(fontName)}'${fontName}', serif`)
     css.push(`font-size: ${fontSize}`)
     css.push(`font-weight: ${fontWeight}`)
     if (style.style.italic) css.push('font-style: italic')
@@ -2266,7 +2274,8 @@ const formatTextWithDefaultStyles = (
 ): string => {
   const { isCentered, isRightAligned } = options
   const css: string[] = []
-  css.push(`font-family: ${getWebFontFamily(charFormat.fontName)}'${charFormat.fontName || '宋体'}', 'SimSun', serif`)
+  const fontName = safeCssFontName(charFormat.fontName)
+  css.push(`font-family: ${getWebFontFamily(fontName)}'${fontName}', 'SimSun', serif`)
   css.push(`font-size: ${resolveFontSize(charFormat.fontSize, '1.0rem')}`)
   if (charFormat.bold) css.push('font-weight: bold')
   if (charFormat.italic) css.push('font-style: italic')
