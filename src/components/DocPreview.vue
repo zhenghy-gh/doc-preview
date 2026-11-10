@@ -174,6 +174,12 @@ const progressPercent = ref<number>(-1)
 // 上次加载的源（用于错误重试）
 const lastSource = ref<{ type: 'file'; file: File } | { type: 'url'; url: string } | null>(null)
 let loadGeneration = 0
+let urlLoadController: AbortController | null = null
+
+function cancelUrlLoad() {
+  urlLoadController?.abort()
+  urlLoadController = null
+}
 
 /** 将解析阶段映射为本地化的进度提示文字 */
 function getProgressStepText(stage: ParseProgressStage): string {
@@ -750,6 +756,7 @@ function stopLoadingTimer() {
 
 function clearDocument() {
   const wasLoading = loading.value
+  cancelUrlLoad()
   loadGeneration++
   stopLoadingTimer()
   lastSource.value = null
@@ -838,6 +845,7 @@ onErrorCaptured((err) => {
 // ---- Load document ----
 
 const loadFromFile = async (file: File) => {
+  cancelUrlLoad()
   const generation = ++loadGeneration
   fileName.value = file.name
   fileSize.value = formatFileSize(file.size)
@@ -895,6 +903,9 @@ const loadFromFile = async (file: File) => {
 }
 
 const loadFromUrl = async (url: string) => {
+  cancelUrlLoad()
+  const controller = new AbortController()
+  urlLoadController = controller
   const generation = ++loadGeneration
   fileName.value = url.split('/').pop() || url
   fileSize.value = ''
@@ -908,7 +919,7 @@ const loadFromUrl = async (url: string) => {
 
   try {
     progressStep.value = t('loading.progress.downloading')
-    const response = await fetch(url)
+    const response = await fetch(url, { signal: controller.signal })
     if (generation !== loadGeneration) return
     if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`)
 
@@ -948,6 +959,7 @@ const loadFromUrl = async (url: string) => {
       loading.value = false
       emit('loading', false)
       stopLoadingTimer()
+      if (urlLoadController === controller) urlLoadController = null
     }
   }
 }
@@ -2954,6 +2966,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   loadGeneration++
+  cancelUrlLoad()
   stopLoadingTimer()
   document.removeEventListener('keydown', handleKeydown)
   window.removeEventListener('scroll', handleVirtualScroll)

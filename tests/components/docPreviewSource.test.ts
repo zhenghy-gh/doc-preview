@@ -116,11 +116,15 @@ describe('DocPreview source lifecycle', () => {
     wrapper.unmount()
   })
 
-  it('does not parse a URL response after the source is cleared', async () => {
+  it('aborts a URL request when the source is cleared', async () => {
     let resolveFetch: ((response: { ok: boolean; arrayBuffer: () => Promise<ArrayBuffer> }) => void) | undefined
-    vi.stubGlobal('fetch', vi.fn(() => new Promise((resolve) => {
-      resolveFetch = resolve
-    })))
+    let requestSignal: AbortSignal | undefined
+    vi.stubGlobal('fetch', vi.fn((_url: string, options?: RequestInit) => {
+      requestSignal = options?.signal || undefined
+      return new Promise((resolve) => {
+        resolveFetch = resolve
+      })
+    }))
     const wrapper = mount(DocPreview, { props: { source: 'https://example.test/pending.doc' } })
     await flushPromises()
 
@@ -128,6 +132,7 @@ describe('DocPreview source lifecycle', () => {
     resolveFetch?.({ ok: true, arrayBuffer: async () => new ArrayBuffer(32) })
     await flushPromises()
 
+    expect(requestSignal?.aborted).toBe(true)
     expect(parseBuffer).not.toHaveBeenCalled()
     expect(wrapper.vm.getPlainText()).toBe('')
 
