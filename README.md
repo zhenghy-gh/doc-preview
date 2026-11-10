@@ -470,12 +470,12 @@ doc-preview/
 ├── public/
 │   ├── favicon.svg                  # 自定义图标
 │   └── 404.html                     # GitHub Pages SPA 路由
-├── tests/                           # Vitest 单元测试 (30+ tests)
-│   ├── logger.test.ts
-│   ├── fibParser.test.ts
-│   ├── oleParser.test.ts
-│   └── docParser.test.ts
-├── .github/workflows/deploy.yml     # CI: type-check + test + build + deploy
+├── tests/                           # Vitest parser, fixture, Worker and component regressions
+│   ├── docParser.test.ts             # Parser API and format regressions
+│   ├── realDocs.test.ts              # Real-world DOC fixtures
+│   ├── parseWithWorker.test.ts       # Worker protocol and failure paths
+│   └── components/                   # Component lifecycle and security tests
+├── .github/workflows/deploy.yml     # CI: audit + tests + app/library/package builds + deploy
 ├── LICENSE                          # MIT 许可证
 ├── package.json
 ├── vite.config.ts
