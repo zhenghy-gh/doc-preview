@@ -754,7 +754,7 @@ function stopLoadingTimer() {
   }
 }
 
-function clearDocument() {
+function clearDocument(emitLoadingEnd = true) {
   const wasLoading = loading.value
   cancelUrlLoad()
   loadGeneration++
@@ -830,7 +830,7 @@ function clearDocument() {
   showDocFlags.value = false
   wordVersion.value = null
 
-  if (wasLoading) emit('loading', false)
+  if (wasLoading && emitLoadingEnd) emit('loading', false)
 }
 
 // ---- Error boundary ----
@@ -845,7 +845,7 @@ onErrorCaptured((err) => {
 // ---- Load document ----
 
 const loadFromFile = async (file: File) => {
-  cancelUrlLoad()
+  clearDocument(false)
   const generation = ++loadGeneration
   fileName.value = file.name
   fileSize.value = formatFileSize(file.size)
@@ -903,7 +903,7 @@ const loadFromFile = async (file: File) => {
 }
 
 const loadFromUrl = async (url: string) => {
-  cancelUrlLoad()
+  clearDocument(false)
   const controller = new AbortController()
   urlLoadController = controller
   const generation = ++loadGeneration

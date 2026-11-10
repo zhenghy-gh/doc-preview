@@ -98,6 +98,23 @@ describe('DocPreview source lifecycle', () => {
     wrapper.unmount()
   })
 
+  it('clears previous text before loading a replacement that fails', async () => {
+    parseFile
+      .mockResolvedValueOnce(parsedDocument)
+      .mockResolvedValueOnce({ success: false, error: 'Unreadable DOC' })
+    const wrapper = mount(DocPreview, { props: { source: new File(['doc'], 'valid.doc') } })
+    await flushPromises()
+    expect(wrapper.vm.getPlainText()).toContain('Loaded document body')
+
+    await wrapper.setProps({ source: new File(['bad'], 'invalid.doc') })
+    expect(wrapper.vm.getPlainText()).toBe('')
+    await flushPromises()
+
+    expect(wrapper.vm.getPlainText()).toBe('')
+    expect(wrapper.find('.enhanced-error').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
   it('does not render a stale result after the source is cleared', async () => {
     let resolveParse: ((value: typeof parsedDocument) => void) | undefined
     parseFile.mockImplementation(() => new Promise((resolve) => {
