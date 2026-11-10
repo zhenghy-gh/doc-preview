@@ -40,6 +40,9 @@ jobs:
       - name: Build library
         run: npm run build:lib
 
+      - name: Verify npm package
+        run: npm run verify:package
+
       - name: Build site
         run: npm run build
         
