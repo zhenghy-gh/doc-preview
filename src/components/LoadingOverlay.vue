@@ -17,19 +17,23 @@ const props = defineProps<{
   progressPercent?: number
 }>()
 
-const isIndeterminate = computed(
-  () => props.progressPercent === undefined || props.progressPercent < 0,
+const isIndeterminate = computed(() => (
+  props.progressPercent === undefined ||
+  !Number.isFinite(props.progressPercent) ||
+  props.progressPercent < 0
+))
+const progressValue = computed(() =>
+  Math.max(0, Math.min(100, Math.round(props.progressPercent ?? 0))),
 )
 
 const barStyle = computed(() => {
   if (isIndeterminate.value) return {}
-  const pct = Math.max(0, Math.min(100, props.progressPercent as number))
-  return { width: `${pct}%` }
+  return { width: String(progressValue.value) + '%' }
 })
 
 const percentLabel = computed(() => {
   if (isIndeterminate.value) return ''
-  return `${Math.round(props.progressPercent as number)}%`
+  return String(progressValue.value) + '%'
 })
 </script>
 
@@ -38,7 +42,15 @@ const percentLabel = computed(() => {
     <div class="loading-spinner"></div>
     <p class="loading-step">{{ progressStep || t('loading.text') }}</p>
     <p class="loading-filename" v-if="fileName">{{ fileName }}</p>
-    <div class="progress-track">
+    <div
+      class="progress-track"
+      role="progressbar"
+      :aria-label="t('loading.progressbar')"
+      :aria-valuemin="0"
+      :aria-valuemax="100"
+      :aria-valuenow="isIndeterminate ? undefined : progressValue"
+      :aria-valuetext="isIndeterminate ? (progressStep || t('loading.text')) : percentLabel"
+    >
       <div
         class="progress-bar"
         :class="{ indeterminate: isIndeterminate }"

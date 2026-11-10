@@ -58,6 +58,7 @@ describe('ErrorDisplay', () => {
       props: { error: 'Failed to fetch the file' },
     })
     expect(wrapper.text().length).toBeGreaterThan(0)
+    expect(wrapper.find('[role="alert"]').exists()).toBe(true)
     const retryBtn = wrapper.find('.error-retry-btn')
     expect(retryBtn.exists()).toBe(true)
     await retryBtn.trigger('click')
@@ -76,22 +77,32 @@ describe('LoadingOverlay', () => {
   it('renders indeterminate mode by default', () => {
     const wrapper = mount(LoadingOverlay, { props: { fileName: 'a.doc' } })
     expect(wrapper.find('.progress-bar.indeterminate').exists()).toBe(true)
+    expect(wrapper.find('[role="progressbar"]').attributes('aria-label')).toBe('文档加载进度')
+    expect(wrapper.find('[role="progressbar"]').attributes('aria-valuenow')).toBeUndefined()
+    expect(wrapper.find('[role="progressbar"]').attributes('aria-valuetext')).toBe('正在解析文档...')
     expect(wrapper.find('.progress-percent').exists()).toBe(false)
     expect(wrapper.text()).toContain('a.doc')
   })
 
-  it('renders determinate progress with percentage', () => {
+  it('renders determinate progress with percentage', async () => {
     const wrapper = mount(LoadingOverlay, {
       props: { progressPercent: 45, progressStep: '解析中', fileSize: '1.2 MB' },
     })
     expect(wrapper.find('.progress-percent').text()).toBe('45%')
+    expect(wrapper.find('[role="progressbar"]').attributes('aria-valuenow')).toBe('45')
     expect(wrapper.find('.progress-bar').attributes('style')).toContain('width: 45%')
+    await wrapper.setProps({ progressPercent: -1 })
+    expect(wrapper.find('.progress-bar.indeterminate').exists()).toBe(true)
+    expect(wrapper.find('[role="progressbar"]').attributes('aria-valuenow')).toBeUndefined()
+    expect(wrapper.find('[role="progressbar"]').attributes('aria-valuetext')).toBe('解析中')
+    expect(wrapper.find('.progress-percent').exists()).toBe(false)
     expect(wrapper.text()).toContain('1.2 MB')
   })
 
   it('clamps progress beyond 100', () => {
     const wrapper = mount(LoadingOverlay, { props: { progressPercent: 150 } })
     expect(wrapper.find('.progress-bar').attributes('style')).toContain('width: 100%')
+    expect(wrapper.find('[role="progressbar"]').attributes('aria-valuenow')).toBe('100')
   })
 })
 

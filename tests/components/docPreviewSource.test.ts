@@ -76,6 +76,8 @@ describe('DocPreview source lifecycle', () => {
     await flushPromises()
 
     expect(wrapper.find('.loading-container').exists()).toBe(false)
+    expect(wrapper.find('[role="status"]').attributes('aria-live')).toBe('polite')
+    expect(wrapper.find('[role="status"]').text()).toBe('')
     expect(wrapper.vm.getPlainText()).toBe('')
 
     wrapper.unmount()
@@ -120,6 +122,7 @@ describe('DocPreview source lifecycle', () => {
     await flushPromises()
 
     expect(wrapper.vm.getPlainText()).toContain('Loaded document body')
+    expect(wrapper.find('[role="status"]').text()).toContain('sample.doc')
 
     await wrapper.setProps({ source: null })
     await flushPromises()
@@ -128,6 +131,7 @@ describe('DocPreview source lifecycle', () => {
     expect(wrapper.find('.doc-info .doc-name').text()).toBe('')
     expect(wrapper.find('.page-host').exists()).toBe(false)
     expect(wrapper.find('.enhanced-error').exists()).toBe(false)
+    expect(wrapper.find('[role="status"]').text()).toBe('')
 
     wrapper.unmount()
   })
@@ -146,7 +150,34 @@ describe('DocPreview source lifecycle', () => {
 
     expect(wrapper.vm.getPlainText()).toBe('')
     expect(wrapper.find('.enhanced-error').exists()).toBe(true)
+    expect(wrapper.find('[role="alert"]').exists()).toBe(true)
+    expect(wrapper.find('[role="status"]').text()).toBe('')
     wrapper.unmount()
+  })
+
+  it('does not announce success for empty parser output or render exceptions', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const throwingOutput = {
+      success: true,
+      get document() {
+        throw new Error('synthetic render failure')
+      },
+    }
+    parseFile
+      .mockResolvedValueOnce({ success: true })
+      .mockResolvedValueOnce(throwingOutput)
+
+    const emptyWrapper = mount(DocPreview, { props: { source: new File(['empty'], 'empty.doc') } })
+    await flushPromises()
+    expect(emptyWrapper.find('[role="alert"]').exists()).toBe(true)
+    expect(emptyWrapper.find('[role="status"]').text()).toBe('')
+    emptyWrapper.unmount()
+
+    const throwingWrapper = mount(DocPreview, { props: { source: new File(['bad'], 'broken.doc') } })
+    await flushPromises()
+    expect(throwingWrapper.find('[role="alert"]').exists()).toBe(true)
+    expect(throwingWrapper.find('[role="status"]').text()).toBe('')
+    throwingWrapper.unmount()
   })
 
   it('does not render a stale result after the source is cleared', async () => {
@@ -178,6 +209,7 @@ describe('DocPreview source lifecycle', () => {
     }))
     const wrapper = mount(DocPreview, { props: { source: 'https://example.test/pending.doc' } })
     await flushPromises()
+    expect(wrapper.find('[role="status"]').text()).toBe('')
 
     await wrapper.setProps({ source: null })
     resolveFetch?.({ ok: true, arrayBuffer: async () => new ArrayBuffer(32) })
@@ -188,6 +220,42 @@ describe('DocPreview source lifecycle', () => {
     expect(wrapper.vm.getPlainText()).toBe('')
 
     wrapper.unmount()
+  })
+
+  it('aborts a pending URL request on unmount without parsing or emitting late events', async () => {
+    let resolveFetch: ((response: Response) => void) | undefined
+    let requestSignal: AbortSignal | undefined
+    const loaded = vi.fn()
+    const errored = vi.fn()
+    const loadingEvent = vi.fn()
+    vi.stubGlobal('fetch', vi.fn((_url: string, options?: RequestInit) => {
+      requestSignal = options?.signal || undefined
+      return new Promise((resolve) => {
+        resolveFetch = resolve
+      })
+    }))
+    const wrapper = mount(DocPreview, {
+      props: {
+        source: 'https://example.test/pending.doc',
+        onLoaded: loaded,
+        onError: errored,
+        onLoading: loadingEvent,
+      },
+    })
+    await flushPromises()
+    expect(wrapper.find('[role="status"]').text()).toBe('')
+    expect(loadingEvent).toHaveBeenCalledTimes(1)
+    expect(loadingEvent).toHaveBeenLastCalledWith(true)
+
+    wrapper.unmount()
+    expect(requestSignal?.aborted).toBe(true)
+    resolveFetch?.({ ok: true } as Response)
+    await flushPromises()
+
+    expect(parseBuffer).not.toHaveBeenCalled()
+    expect(loaded).not.toHaveBeenCalled()
+    expect(errored).not.toHaveBeenCalled()
+    expect(loadingEvent).toHaveBeenCalledTimes(1)
   })
 
   it('aborts an in-flight URL request when a file source replaces it', async () => {
@@ -207,6 +275,39 @@ describe('DocPreview source lifecycle', () => {
     expect(wrapper.vm.getPlainText()).toContain('Loaded document body')
 
     wrapper.unmount()
+  })
+
+  it.each(['resolve', 'reject'] as const)('ignores pending file parser %s after unmount', async (settlement) => {
+    let resolveParse: ((value: typeof parsedDocument) => void) | undefined
+    let rejectParse: ((error: Error) => void) | undefined
+    const loaded = vi.fn()
+    const errored = vi.fn()
+    const loadingEvent = vi.fn()
+    parseFile.mockImplementationOnce(() => new Promise((resolve, reject) => {
+      resolveParse = resolve
+      rejectParse = reject
+    }))
+    const wrapper = mount(DocPreview, {
+      props: {
+        source: new File(['doc'], 'pending.doc'),
+        onLoaded: loaded,
+        onError: errored,
+        onLoading: loadingEvent,
+      },
+    })
+    await flushPromises()
+    expect(wrapper.find('[role="status"]').text()).toBe('')
+    expect(loadingEvent).toHaveBeenCalledTimes(1)
+    expect(loadingEvent).toHaveBeenLastCalledWith(true)
+
+    wrapper.unmount()
+    if (settlement === 'resolve') resolveParse?.(parsedDocument)
+    else rejectParse?.(new Error('late parser rejection'))
+    await flushPromises()
+
+    expect(loaded).not.toHaveBeenCalled()
+    expect(errored).not.toHaveBeenCalled()
+    expect(loadingEvent).toHaveBeenCalledTimes(1)
   })
 
   it('keeps the newer document when an earlier load resolves later', async () => {

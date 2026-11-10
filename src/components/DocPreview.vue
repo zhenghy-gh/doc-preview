@@ -165,12 +165,18 @@ const fileName = ref('')
 const htmlContent = ref('')
 const plainText = ref('')
 const loading = ref(false)
+const documentLoaded = ref(false)
 const error = ref('')
 const loadingTime = ref(0)
 const loadingTimer = ref<ReturnType<typeof setInterval> | null>(null)
 const fileSize = ref('')
 const progressStep = ref('')
 const progressPercent = ref<number>(-1)
+const statusAnnouncement = computed(() => {
+  if (loading.value || error.value || !documentLoaded.value) return ''
+  const message = t('doc.status.announcement')
+  return fileName.value ? message + ': ' + fileName.value : message
+})
 
 // 上次加载的源（用于错误重试）
 const lastSource = ref<{ type: 'file'; file: File } | { type: 'url'; url: string } | null>(null)
@@ -757,6 +763,7 @@ function stopLoadingTimer() {
 
 function clearDocument(emitLoadingEnd = true) {
   const wasLoading = loading.value
+  documentLoaded.value = false
   cancelUrlLoad()
   loadGeneration++
   stopLoadingTimer()
@@ -1037,6 +1044,7 @@ function buildOutline(paragraphs: FormattedParagraphOutput[]) {
 // ---- Render ----
 
 const renderResult = (result: ParserOutput) => {
+  documentLoaded.value = false
   if (result.document && result.document.paragraphs) {
     isRichFormat.value = true
     const rawText = result.document.paragraphs.map((p: any) => p.text).join('\n\n')
@@ -1084,6 +1092,7 @@ const renderResult = (result: ParserOutput) => {
     updatePageHeight()
     updateTotalPages()
     loadWebFonts()
+    documentLoaded.value = true
   } else if (result.text) {
     isRichFormat.value = false
     plainText.value = result.text
@@ -1114,6 +1123,7 @@ const renderResult = (result: ParserOutput) => {
     pictures.value = []
     // showImages.value = false
     loadWebFonts()
+    documentLoaded.value = true
   } else {
     error.value = '⚠️ 文档内容为空或无法提取文本\n\n可能原因：\n• 文件格式不受支持\n• 文件已损坏\n• 文档内容为空'
   }
@@ -3009,6 +3019,7 @@ defineExpose({ reload, getPlainText, focusContent })
     tabindex="-1"
   >
     <a class="skip-link" href="#" @click.prevent="focusContent">跳到文档内容</a>
+    <div class="sr-only" role="status" aria-live="polite" aria-atomic="true">{{ statusAnnouncement }}</div>
     <!-- Loading -->
     <LoadingOverlay
       v-if="loading"
@@ -3848,6 +3859,18 @@ defineExpose({ reload, getPlainText, focusContent })
   min-height: 500px;
   outline: none;
   padding-bottom: 32px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .skip-link {

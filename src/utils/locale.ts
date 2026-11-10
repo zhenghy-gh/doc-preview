@@ -43,6 +43,7 @@ const zh: Record<string, TransValue> = {
 
   // Loading / Error
   'loading.text': '正在解析文档...',
+  'loading.progressbar': '文档加载进度',
   'loading.size': ({ size }) => `大小: ${size}`,
   'loading.time': ({ sec }) => `已用: ${sec}秒`,
   'loading.worker': '⚡ 后台线程',
@@ -95,6 +96,7 @@ const zh: Record<string, TransValue> = {
 
   // Doc status
   'doc.status.ok': '✓ 解析成功',
+  'doc.status.announcement': '文档解析完成',
   'doc.status.empty': '文档内容为空',
 
   // Outline
@@ -404,6 +406,7 @@ const en: Record<string, TransValue> = {
 
   // Loading / Error
   'loading.text': 'Parsing document...',
+  'loading.progressbar': 'Document loading progress',
   'loading.size': ({ size }) => `Size: ${size}`,
   'loading.time': ({ sec }) => `Elapsed: ${sec}s`,
   'loading.worker': '⚡ Worker',
@@ -456,6 +459,7 @@ const en: Record<string, TransValue> = {
 
   // Doc status
   'doc.status.ok': '✓ Parse succeeded',
+  'doc.status.announcement': 'Document parsing complete',
   'doc.status.empty': 'Document content is empty',
 
   // Outline
