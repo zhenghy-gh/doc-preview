@@ -139,6 +139,25 @@ describe('DocPreview source lifecycle', () => {
     wrapper.unmount()
   })
 
+  it('aborts an in-flight URL request when a file source replaces it', async () => {
+    let requestSignal: AbortSignal | undefined
+    vi.stubGlobal('fetch', vi.fn((_url: string, options?: RequestInit) => {
+      requestSignal = options?.signal || undefined
+      return new Promise(() => {})
+    }))
+    parseFile.mockResolvedValue(parsedDocument)
+    const wrapper = mount(DocPreview, { props: { source: 'https://example.test/pending.doc' } })
+    await flushPromises()
+
+    await wrapper.setProps({ source: new File(['doc'], 'replacement.doc') })
+    await flushPromises()
+
+    expect(requestSignal?.aborted).toBe(true)
+    expect(wrapper.vm.getPlainText()).toContain('Loaded document body')
+
+    wrapper.unmount()
+  })
+
   it('keeps the newer document when an earlier load resolves later', async () => {
     let resolveOldParse: ((value: typeof parsedDocument) => void) | undefined
     parseFile
