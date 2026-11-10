@@ -37,7 +37,7 @@ contributors and maintainers.
 Vue 3 single-file component that:
 
 - Receives `source: File | string | null` prop
-- Calls the parser via `parseDocFileWithFormat` or `parseWithWorker` (for >1MB)
+- Calls the parser via `parseDocFileWithFormat` or `parseWithWorker` (for >1 MiB)
 - Renders the result as styled HTML with toolbar, search, zoom, print
 - Emits `error`, `loaded`, `loading` events
 - Exposes `reload()`, `getPlainText()`, `focusContent()` via `defineExpose`
@@ -51,7 +51,7 @@ search, zoom, outline).
 Top-level Vue component that:
 
 - Handles file upload (drag & drop, click, URL)
-- Validates file extension and size (max 50MB)
+- Validates file extension and size (max 50 MiB)
 - Passes the source to `DocPreview`
 - Hosts the dark mode toggle
 - Hosts the reader mode toggle (when preview is showing)
@@ -194,7 +194,7 @@ because:
 ### Why a Web Worker?
 
 Parsing a `.doc` file can take 50-200ms for small files and 500ms+ for large
-ones. The default `DocPreview` is synchronous — for files >1MB, the user
+ones. The default `DocPreview` is synchronous — for files >1 MiB, the user
 perceives UI freeze. The Web Worker offloads parsing to a background thread,
 keeping the UI responsive. Workers are not supported in all environments, so
 a graceful fallback to main-thread parsing is implemented.
@@ -214,4 +214,4 @@ functionality.
 - **Image extraction** — `.doc` files store images in separate streams
   (e.g. `Data`, `ObjectPool`) with their own binary format (Office Art)
 - **Table stream parsing** — separate `Table` stream with structured binary data
-- **Web Worker streaming** — for files larger than 100MB, parse in chunks
+- **Web Worker streaming** — for files larger than 100 MiB, parse in chunks

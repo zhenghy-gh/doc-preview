@@ -21,7 +21,7 @@ import LoadingOverlay from './LoadingOverlay.vue'
 import ErrorDisplay from './ErrorDisplay.vue'
 import CollapsiblePanel from './CollapsiblePanel.vue'
 
-const WORKER_THRESHOLD = 1024 * 1024 // 1MB — files larger than this use Web Worker
+const WORKER_THRESHOLD = 1024 * 1024 // 1 MiB — files larger than this use Web Worker
 const isWorkerSupported = typeof Worker !== 'undefined'
 const isUsingWorker = ref(false)
 

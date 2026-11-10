@@ -62,7 +62,7 @@ doc-preview/
 | [fibParser.ts](src/utils/fibParser.ts) | 430 行 | `parseFib` — FIB 文件信息块、csw 链式偏移、`detectWordVersion`、`isTextutilFib` |
 | [docParser.ts](src/utils/docParser.ts) | 3821 行 | **核心解析器** — `DocParser`、`parseDocFile(WithFormat)`、CLX/Piece Table、进度回调 |
 | [docParser.worker.ts](src/utils/docParser.worker.ts) | 48 行 | Web Worker 后台解析（progress/result 双消息协议） |
-| [parseWithWorker.ts](src/utils/parseWithWorker.ts) | 88 行 | `parseWithWorker` — Worker 封装，大文件 >1MB 异步解析 |
+| [parseWithWorker.ts](src/utils/parseWithWorker.ts) | 88 行 | `parseWithWorker` — Worker 封装，大文件 >1 MiB 异步解析 |
 | [docFormat.ts](src/utils/docFormat.ts) | 692 行 | **全部类型定义**：CharacterFormat / ParagraphFormat / ParsedDocument / ParseResult 等 |
 | [logger.ts](src/utils/logger.ts) | 49 行 | 调试日志（默认关闭，`enableDebugMode`） |
 

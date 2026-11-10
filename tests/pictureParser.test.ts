@@ -161,7 +161,7 @@ describe('pictureParser', () => {
     it('returns null for unreasonably large lcb', () => {
       const buf = new Uint8Array(100)
       const dv = new DataView(buf.buffer)
-      dv.setUint32(0, 100 * 1024 * 1024, true) // 100 MB, larger than buffer
+      dv.setUint32(0, 100 * 1024 * 1024, true) // 100 MiB, larger than buffer
       expect(parsePicfAt(buf, 0)).toBeNull()
     })
 
@@ -590,8 +590,8 @@ describe('pictureParser partial match', () => {
 })
 
 describe('pictureParser malformed image walks', () => {
-  it('returns null when lcb is between the stream bound and the 50MB cap', () => {
-    // lcb=51MB ≤ dataStream.length-fcPic(52MB)，但超过 50MB 上限
+  it('returns null when lcb is between the stream bound and the 50 MiB cap', () => {
+    // lcb=51 MiB ≤ dataStream.length-fcPic(52 MiB)，但超过 50 MiB 上限
     const stream = new Uint8Array(52 * 1024 * 1024)
     new DataView(stream.buffer).setUint32(0, 51 * 1024 * 1024, true)
     expect(parsePicfAt(stream, 0)).toBeNull()

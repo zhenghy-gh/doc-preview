@@ -35,7 +35,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 > into a polished release.
 
 ### Added
-- Web Worker parsing for large files (>1MB) — `parseWithWorker()` and auto-fallback in `DocPreview`
+- Web Worker parsing for large files (>1 MiB) — `parseWithWorker()` and auto-fallback in `DocPreview`
 - TypeScript declaration files via `vite-plugin-dts` (`.d.ts` outputs in lib build)
 - Document outline / TOC navigation in the preview toolbar
 - Reader mode (full-width reading view) toggle
@@ -57,7 +57,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `vitest --coverage` integration with `npm run test:coverage` script
 
 ### Changed
-- `maxScanBytes` is now a configurable `DocParser` property (default 10MB, was hardcoded 500KB)
+- `maxScanBytes` is now a configurable `DocParser` property (default 10 MiB, was hardcoded 500KB)
 - `Logger.debug` is no longer on by default; use `enableDebugMode()` to opt in
 - Removed duplicate type file `docFormatTypes.ts` (was identical to `docFormat.ts`)
 - Split monolithic `docParser.ts` into `oleParser.ts`, `fibParser.ts`, `logger.ts`, `docParser.worker.ts`, `parseWithWorker.ts`
@@ -77,7 +77,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 - DOCX (ZIP) files no longer produce a confusing "invalid OLE" error
 - `.docx` files explicitly rejected at upload time with a helpful message
-- File size validation (max 50MB) at upload time
+- File size validation (max 50 MiB) at upload time
 - Worker chunk properly emitted as separate file in library build
 - README updated to use correct prop name `source` (was `file` in some examples)
 - Library build no longer includes test fixtures in published bundle

@@ -40,7 +40,7 @@ list type) and supports search, zoom, print, and dark mode.
   headers, with real CHP/PAP format recovery and heuristic fallback when needed.
 - **DOCX** is not supported by this package — for `.docx` (Open XML) files,
   use a dedicated DOCX parser. This package is the **`.doc` specialist**.
-- **Web Worker parsing**: files >1 MB are parsed off the main thread when Workers
+- **Web Worker parsing**: files >1 MiB are parsed off the main thread when Workers
   are available, reducing main-thread parsing work. Rendering still uses the main thread.
 - **Built-in UX**: keyword search with highlighting, zoom (50%–200%), print
   (browser print to PDF), text copy, text download, document outline / TOC.
@@ -266,14 +266,14 @@ function onLoading(isLoading) { console.log('加载中:', isLoading) }
 import { DocParser } from '@zhenghy/doc-preview'
 
 const buffer = await file.arrayBuffer()
-// 自定义扫描上限为 5MB（默认 10MB）
+// 自定义扫描上限为 5 MiB（默认 10 MiB）
 const parser = new DocParser(buffer, 5 * 1024 * 1024)
 const result = parser.parseWithFormat()
 ```
 
 ### Web Worker 解析
 
-> 自动行为：DocPreview 组件内部会在 `source` 超过 1MB 时自动使用 Worker。
+> 自动行为：DocPreview 组件内部会在 `source` 超过 1 MiB 时自动使用 Worker。
 > 如果你在代码中直接使用 `parseWithWorker`，可以手动管理。
 
 ```ts
@@ -342,13 +342,13 @@ this package compares:
 
 ## 性能
 
-- **<1MB 文件**: 同步解析（主线程）
-- **≥1MB 文件**: Web Worker 解析（自动）
-- **默认扫描上限**: 10MB（可配置 `maxScanBytes`）
+- **<1 MiB 文件**: 同步解析（主线程）
+- **≥1 MiB 文件**: Web Worker 解析（自动）
+- **默认扫描上限**: 10 MiB（可配置 `maxScanBytes`）
 - **解析耗时参考**（仅解析阶段，随设备和文档结构变化）:
   - 小型 (<100KB): 通常 <50ms
-  - 约 1MB: 典型样本约 200ms
-  - >1MB: 支持 Worker 时在后台线程解析；页面渲染仍在主线程执行
+  - 约 1 MiB: 典型样本约 200ms
+  - >1 MiB: 支持 Worker 时在后台线程解析；页面渲染仍在主线程执行
 
 ## 功能清单
 

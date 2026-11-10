@@ -66,7 +66,7 @@ import type { HeaderFooterPartType, HeaderFooterPartContent } from './docFormat'
 
 // ---- DocParser ----
 
-/** Default max bytes to scan in a WordDocument stream (10MB). */
+/** Default max bytes to scan in a WordDocument stream (10 MiB). */
 const DEFAULT_MAX_SCAN_BYTES = 10 * 1024 * 1024
 
 /**
@@ -141,7 +141,7 @@ export class DocParser {
 
   /**
    * @param buffer - The .doc file as ArrayBuffer.
-   * @param maxScanBytes - Max bytes to scan. Default: 10MB. Pass a smaller value for memory-constrained environments.
+   * @param maxScanBytes - Max bytes to scan. Default: 10 MiB. Pass a smaller value for memory-constrained environments.
    */
   constructor(buffer: ArrayBuffer, maxScanBytes?: number) {
     this.buffer = buffer
@@ -706,7 +706,7 @@ export class DocParser {
 
     for (const piece of pieces) {
       totalChars += piece.charCount
-      // Requires a >10MB document; exercised indirectly by realDocs.
+      // Requires more than 10,485,760 characters; exercised indirectly by realDocs.
       /* v8 ignore start */
       if (totalChars > DocParser.MAX_TOTAL_CHARS) {
         logger.warn('总字符数超出限制，停止读取')

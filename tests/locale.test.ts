@@ -16,6 +16,7 @@ describe('locale', () => {
   it('translates strings, functions, params and falls back to the key', async () => {
     const { t, setLocale, currentLocale } = await import('../src/utils/locale')
     expect(t('app.title')).toBe('DOC文件在线预览')
+    expect(t('app.upload.area.hint')).toContain('50 MiB')
     // String value + params exercises the placeholder replacement loop
     expect(t('app.title', { foo: 'bar' })).toBe('DOC文件在线预览')
     // Function value with params
@@ -29,6 +30,7 @@ describe('locale', () => {
     setLocale('en')
     expect(currentLocale.value).toBe('en')
     expect(t('app.title')).toBe('DOC File Online Preview')
+    expect(t('app.upload.area.hint')).toContain('50 MiB')
     expect(t('textbox.anchor.tooltip', { type: 'rect', x: 1, y: 2, w: 3, h: 4, cp: 5, spid: 6 })).toContain('SPID: 6')
   })
 
