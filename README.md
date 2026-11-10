@@ -58,7 +58,7 @@ list type) and supports search, zoom, print, and dark mode.
 ## 功能特性
 
 - 🚀 **纯前端实现** - 不依赖任何后端服务，完全在浏览器中解析和渲染
-- 📦 **零依赖** - 不依赖 mammoth.js 等第三方 DOC 解析库，自主实现 OLE/CFB 格式解析
+- 📦 **自研解析器** - OLE/CFB 与 DOC 解析由本项目实现，不依赖第三方 DOC 解析引擎；预览 HTML 使用 DOMPurify 安全净化
 - 🎯 **Vue 3 组件** - 提供开箱即用的 Vue 3 组件
 - 📄 **格式保留** - 尽可能保留文档的原始格式（字体、对齐、段落等）
 - 🔒 **隐私安全** - 文件仅在本地处理，不上传至任何服务器
@@ -338,7 +338,7 @@ this package compares:
 | Safari  | 16.4+   | ✅        | macOS 13+/iOS 16.4+ |
 | IE 11   | ❌      | ❌        | 不支持 |
 
-> 生产包使用 Vite 8 默认的  baseline-widely-available  目标；最低版本随该目标更新，详见 [Vite build.target 文档](https://vite.dev/config/build-options.html#build-target)。不满足目标的浏览器可能无法解析生成的 JavaScript。
+> 生产包使用 Vite 8 默认的 `baseline-widely-available` 目标；最低版本随该目标更新，详见 [Vite build.target 文档](https://vite.dev/config/build-options.html#build-target)。不满足目标的浏览器可能无法解析生成的 JavaScript。
 
 ## 性能
 
