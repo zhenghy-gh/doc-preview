@@ -124,6 +124,7 @@ class MockWorker {
 describe('parseWithWorker', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
+    vi.useRealTimers()
     MockWorker.instances = []
     MockWorker.behavior = 'success'
   })
@@ -191,6 +192,33 @@ describe('parseWithWorker', () => {
     expect(buffer.byteLength).toBe(0)
     expect(result.success).toBe(false)
     expect(result.error).toContain('synthetic worker failure')
+  })
+
+  it('should terminate the worker and clear its timer when postMessage throws', async () => {
+    class ThrowingPostMessageWorker {
+      static instance: ThrowingPostMessageWorker | undefined
+      onmessage: ((e: { data: any }) => void) | null = null
+      onerror: ((event: ErrorEvent) => void) | null = null
+      terminated = false
+      constructor() {
+        ThrowingPostMessageWorker.instance = this
+      }
+      postMessage() {
+        throw new Error('synthetic postMessage failure')
+      }
+      terminate() {
+        this.terminated = true
+      }
+    }
+    vi.stubGlobal('Worker', ThrowingPostMessageWorker)
+    vi.useFakeTimers()
+
+    const result = await parseWithWorker(buildValidOleBuffer())
+
+    expect(result.success).toBe(true)
+    expect(result.text).toContain('Hello World')
+    expect(ThrowingPostMessageWorker.instance?.terminated).toBe(true)
+    expect(vi.getTimerCount()).toBe(0)
   })
 
   it('should fall back to main-thread parsing when Worker constructor throws', async () => {

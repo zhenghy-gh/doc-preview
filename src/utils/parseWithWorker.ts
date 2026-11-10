@@ -33,21 +33,25 @@ export function parseWithWorker(
 ): Promise<WorkerParseResult> {
   return new Promise((resolve) => {
     let bufferTransferred = false
+    let worker: Worker | undefined
+    let timeout: ReturnType<typeof setTimeout> | undefined
 
     // Attempt Web Worker path
     try {
-      const worker = new Worker(new URL(workerAssetUrl, workerBaseUrl), { type: 'module' })
+      const activeWorker = new Worker(new URL(workerAssetUrl, workerBaseUrl), { type: 'module' })
+      worker = activeWorker
 
-      const timeout = setTimeout(() => {
-        worker.terminate()
+      const workerTimeout = setTimeout(() => {
+        activeWorker.terminate()
         if (bufferTransferred) {
           resolve({ success: false, error: 'Web Worker 解析超时（30 秒）' })
         } else {
           fallbackParse(buffer, maxScanBytes, resolve, onProgress)
         }
       }, 30_000)
+      timeout = workerTimeout
 
-      worker.onmessage = (e: MessageEvent<WorkerParseResponse>) => {
+      activeWorker.onmessage = (e: MessageEvent<WorkerParseResponse>) => {
         const msg = e.data
         // 分流：进度消息 vs 结果消息
         if (msg.type === 'progress') {
@@ -55,8 +59,10 @@ export function parseWithWorker(
           return
         }
         // msg.type === 'result'
-        clearTimeout(timeout)
-        worker.terminate()
+        clearTimeout(workerTimeout)
+        activeWorker.terminate()
+        worker = undefined
+        timeout = undefined
         resolve({
           success: msg.success,
           document: msg.document,
@@ -65,9 +71,11 @@ export function parseWithWorker(
         })
       }
 
-      worker.onerror = (event) => {
-        clearTimeout(timeout)
-        worker.terminate()
+      activeWorker.onerror = (event) => {
+        clearTimeout(workerTimeout)
+        activeWorker.terminate()
+        worker = undefined
+        timeout = undefined
         if (bufferTransferred) {
           resolve({ success: false, error: event.message || 'Web Worker 运行失败' })
         } else {
@@ -76,10 +84,14 @@ export function parseWithWorker(
       }
 
       // Transfer buffer for zero-copy
-      worker.postMessage({ buffer, maxScanBytes }, [buffer])
+      activeWorker.postMessage({ buffer, maxScanBytes }, [buffer])
       bufferTransferred = true
     } catch {
-      // Workers unsupported (e.g. some older browsers) → main thread
+      if (timeout !== undefined) clearTimeout(timeout)
+      worker?.terminate()
+      worker = undefined
+      timeout = undefined
+      // Workers unsupported or message transfer failed before ownership changed.
       fallbackParse(buffer, maxScanBytes, resolve, onProgress)
     }
   })
