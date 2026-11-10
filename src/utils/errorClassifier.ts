@@ -8,6 +8,7 @@ export type ErrorCategory =
   | 'format'
   | 'parse'
   | 'corrupted'
+  | 'size'
   | 'memory'
   | 'unknown'
 
@@ -135,7 +136,21 @@ export function classifyError(
     }
   }
 
-  // 4. 内存不足
+  // 4. File exceeds the configured input size limit
+  if (containsAny(lower, ['文件超过最大支持大小', 'maximum supported size', 'file size limit'])) {
+    return {
+      category: 'size',
+      title: isEN ? 'File exceeds size limit' : '文件超过大小限制',
+      detail: isEN
+        ? 'This viewer accepts DOC files up to 50 MiB. Select a smaller file.'
+        : '此预览器最多支持 50 MiB 的 DOC 文件，请选择较小文件。',
+      suggestions: isEN ? ['Select a DOC file smaller than 50 MiB'] : ['请选择小于 50 MiB 的 DOC 文件'],
+      retryable: false,
+      raw: rawText,
+    }
+  }
+
+  // 5. 内存不足
   if (
     containsAny(lower, ['out of memory', 'maximum call stack', 'rangeerror']) ||
     containsAny(lower, ['allocation failed'])
@@ -162,7 +177,7 @@ export function classifyError(
     }
   }
 
-  // 5. 解析错误（通用）
+  // 6. 解析错误（通用）
   if (containsAny(lower, ['parse', '解析', 'fib', 'clx', 'sprm'])) {
     return {
       category: 'parse',
@@ -186,7 +201,7 @@ export function classifyError(
     }
   }
 
-  // 6. 未知错误
+  // 7. 未知错误
   return {
     category: 'unknown',
     title: isEN ? 'Unknown error' : '未知错误',
@@ -210,5 +225,6 @@ export const ERROR_CATEGORY_ICON: Record<ErrorCategory, string> = {
   parse: '⚙️',
   corrupted: '🔧',
   memory: '💾',
+  size: '📦',
   unknown: '❌',
 }

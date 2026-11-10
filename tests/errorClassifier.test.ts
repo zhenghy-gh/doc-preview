@@ -91,6 +91,25 @@ describe('errorClassifier', () => {
     })
   })
 
+  describe('classifyError - 文件大小限制', () => {
+    it('50 MiB input limit is actionable and not retryable', () => {
+      const result = classifyError('文件超过最大支持大小（50 MB）')
+      expect(result.category).toBe('size')
+      expect(result.title).toBe('文件超过大小限制')
+      expect(result.detail).toContain('50 MiB')
+      expect(result.retryable).toBe(false)
+      expect(result.suggestions[0]).toContain('小于 50 MiB')
+    })
+
+    it('English locale explains a fixed maximum size without retry advice', () => {
+      const result = classifyError('Exceeds maximum supported size', 'en')
+      expect(result.category).toBe('size')
+      expect(result.title).toBe('File exceeds size limit')
+      expect(result.detail).toContain('50 MiB')
+      expect(result.retryable).toBe(false)
+    })
+  })
+
   describe('classifyError - 内存不足', () => {
     it('out of memory 应分类为 memory', () => {
       const result = classifyError('Out of memory')
@@ -175,6 +194,7 @@ describe('errorClassifier', () => {
       expect(ERROR_CATEGORY_ICON.format).toBeTruthy()
       expect(ERROR_CATEGORY_ICON.parse).toBeTruthy()
       expect(ERROR_CATEGORY_ICON.corrupted).toBeTruthy()
+      expect(ERROR_CATEGORY_ICON.size).toBeTruthy()
       expect(ERROR_CATEGORY_ICON.memory).toBeTruthy()
       expect(ERROR_CATEGORY_ICON.unknown).toBeTruthy()
     })
