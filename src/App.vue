@@ -149,6 +149,7 @@ watch(darkMode, (val) => {
     </header>
 
     <main class="main-content">
+      <div class="sr-only" role="status" aria-live="polite" aria-atomic="true">{{ errorMessage }}</div>
       <template v-if="!previewSource">
         <div
           class="upload-area"
@@ -218,6 +219,18 @@ watch(darkMode, (val) => {
 </template>
 
 <style scoped>
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .app-container {
   width: 100%;
   min-height: 100vh;
