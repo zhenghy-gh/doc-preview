@@ -3,10 +3,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import DocPreview from '../../src/components/DocPreview.vue'
 import { MAX_DOC_FILE_SIZE } from '../../src/utils/docLimits'
+import { currentLocale, setLocale } from '../../src/utils/locale'
 
-const { parseFile, parseBuffer } = vi.hoisted(() => ({
+const { parseFile, parseBuffer, throwFromShortcutPanel } = vi.hoisted(() => ({
   parseFile: vi.fn(),
   parseBuffer: vi.fn(),
+  throwFromShortcutPanel: { enabled: false, cause: undefined as unknown },
 }))
 
 vi.mock('../../src/utils/docParser', () => ({
@@ -16,6 +18,17 @@ vi.mock('../../src/utils/docParser', () => ({
 
 vi.mock('../../src/utils/parseWithWorker', () => ({
   parseWithWorker: vi.fn(),
+}))
+
+vi.mock('../../src/components/ShortcutsPanel.vue', () => ({
+  default: {
+    setup() {
+      return () => {
+        if (throwFromShortcutPanel.enabled) throw throwFromShortcutPanel.cause
+        return null
+      }
+    },
+  },
 }))
 
 const parsedDocument = {
@@ -36,6 +49,8 @@ describe('DocPreview source lifecycle', () => {
     vi.restoreAllMocks()
     parseFile.mockReset()
     parseBuffer.mockReset()
+    throwFromShortcutPanel.enabled = false
+    throwFromShortcutPanel.cause = undefined
   })
 
   it('scopes optional web font styles to opted-in previews and loads them once', async () => {
@@ -114,6 +129,79 @@ describe('DocPreview source lifecycle', () => {
     expect(parseBuffer).not.toHaveBeenCalled()
     expect(wrapper.find('.enhanced-error').text()).toContain('50 MiB')
     wrapper.unmount()
+  })
+
+  it('localizes oversized local files and URL responses', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const originalLocale = currentLocale.value
+    const cancel = vi.fn().mockResolvedValue(undefined)
+    const oversizedFile = {
+      name: 'oversized.doc',
+      size: MAX_DOC_FILE_SIZE + 1,
+      arrayBuffer: vi.fn(),
+    } as unknown as File
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      headers: { get: () => String(MAX_DOC_FILE_SIZE + 1) },
+      body: { cancel },
+    }))
+    const cases = [
+      { locale: 'zh-CN', expected: '文件超过最大支持大小（50 MiB）' },
+      { locale: 'en', expected: 'File exceeds the 50 MiB size limit' },
+    ] as const
+
+    try {
+      for (const { locale, expected } of cases) {
+        setLocale(locale)
+        for (const source of [oversizedFile, 'https://example.test/oversized.doc'] as const) {
+          const wrapper = mount(DocPreview, { props: { source } })
+          try {
+            await flushPromises()
+            expect(wrapper.find('.enhanced-error').text()).toContain(expected)
+          } finally {
+            wrapper.unmount()
+          }
+        }
+      }
+      expect(cancel).toHaveBeenCalledTimes(2)
+    } finally {
+      setLocale(originalLocale)
+    }
+  })
+
+  it('localizes render-boundary messages and unknown fallbacks', async () => {
+    const originalLocale = currentLocale.value
+    const cases = [
+      { locale: 'en', cause: new Error('synthetic render failure'), expected: 'Error rendering document' },
+      { locale: 'zh-CN', cause: new Error('synthetic render failure'), expected: '渲染文档时发生错误' },
+      { locale: 'en', cause: 'synthetic non-error render failure', expected: 'Unknown error' },
+    ] as const
+    parseFile.mockResolvedValue(parsedDocument)
+
+    try {
+      for (const testCase of cases) {
+        setLocale(testCase.locale)
+        throwFromShortcutPanel.enabled = true
+        throwFromShortcutPanel.cause = testCase.cause
+        const wrapper = mount(DocPreview, { props: { source: new File(['doc'], 'sample.doc') } })
+        try {
+          await flushPromises()
+          const message = wrapper.find('.enhanced-error').text()
+          expect(message).toContain(testCase.expected)
+          if (testCase.cause instanceof Error) {
+            expect(message).toContain(testCase.cause.message)
+          } else {
+            expect(message).not.toContain(testCase.cause)
+          }
+        } finally {
+          wrapper.unmount()
+          throwFromShortcutPanel.enabled = false
+          throwFromShortcutPanel.cause = undefined
+        }
+      }
+    } finally {
+      setLocale(originalLocale)
+    }
   })
 
   it('clears the rendered document when source becomes null', async () => {

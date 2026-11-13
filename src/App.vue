@@ -2,7 +2,7 @@
 import { ref, watch } from 'vue'
 import DocPreview from './components/DocPreview.vue'
 import { currentLocale, setLocale, t } from './utils/locale'
-import { getFileSizeLimitError, isDocFileTooLarge } from './utils/docLimits'
+import { isDocFileTooLarge } from './utils/docLimits'
 
 const selectedFile = ref<File | null>(null)
 const urlInput = ref('')
@@ -22,9 +22,9 @@ const getFileExt = (file: File): string => {
 const formatErrorMessage = (file: File): string => {
   const ext = getFileExt(file)
   if (ext === 'docx') {
-    return '.docx 格式暂不支持。\n此工具为旧版 .doc (OLE2) 格式设计，\n.docx 文件需使用 Microsoft Word 或其他兼容工具打开。'
+    return t('app.upload.error.docx')
   }
-  return `不支持的文件格式 ".${ext}"，请选择 .doc 或 .dot 文件`
+  return t('app.upload.error.format', { ext })
 }
 
 const isValidFileSize = (file: File): boolean => {
@@ -46,7 +46,7 @@ const handleFileChange = (event: Event) => {
   }
 
   if (!isValidFileSize(file)) {
-    errorMessage.value = getFileSizeLimitError()
+    errorMessage.value = t('app.upload.error.sizeLimit')
     return
   }
 
@@ -69,7 +69,7 @@ const handleDrop = (event: DragEvent) => {
   }
 
   if (!isValidFileSize(file)) {
-    errorMessage.value = getFileSizeLimitError()
+    errorMessage.value = t('app.upload.error.sizeLimit')
     return
   }
 

@@ -62,6 +62,93 @@ describe('App upload accessibility', () => {
     wrapper.unmount()
   })
 
+  it('localizes drag-and-drop format and size errors', async () => {
+    const originalLocale = currentLocale.value
+    const cases = [
+      { locale: 'zh-CN', name: 'notes.pdf', expected: '不支持的文件格式 ".pdf"' },
+      { locale: 'en', name: 'large.doc', expected: 'File exceeds the 50 MiB size limit' },
+    ] as const
+
+    try {
+      for (const { locale, name, expected } of cases) {
+        setLocale(locale)
+        const wrapper = mount(App)
+        const file = new File(['doc'], name)
+        if (name === 'large.doc') {
+          Object.defineProperty(file, 'size', { configurable: true, value: MAX_DOC_FILE_SIZE + 1 })
+        }
+        const dropEvent = new Event('drop', { bubbles: true, cancelable: true })
+        Object.defineProperty(dropEvent, 'dataTransfer', { value: { files: [file] } })
+
+        try {
+          wrapper.get('.upload-area').element.dispatchEvent(dropEvent)
+          await flushPromises()
+          expect(wrapper.find('.error-banner').text()).toContain(expected)
+          expect(wrapper.find('[role="status"]').text()).toContain(expected)
+        } finally {
+          wrapper.unmount()
+        }
+      }
+    } finally {
+      setLocale(originalLocale)
+    }
+  })
+
+  it('localizes file format and size validation messages', async () => {
+    const originalLocale = currentLocale.value
+    const messages = [
+      {
+        locale: 'zh-CN',
+        cases: [
+          ['notes.pdf', '不支持的文件格式 ".pdf"'],
+          ['notes.docx', '.docx 格式暂不支持'],
+          ['large.doc', '文件超过最大支持大小（50 MiB）'],
+        ],
+      },
+      {
+        locale: 'en',
+        cases: [
+          ['notes.pdf', 'Unsupported format ".pdf"'],
+          ['notes.docx', '.docx format is not yet supported.'],
+          ['large.doc', 'File exceeds the 50 MiB size limit'],
+        ],
+      },
+    ] as const
+
+    try {
+      for (const testCase of messages) {
+        setLocale(testCase.locale)
+        const wrapper = mount(App)
+        const fileInput = wrapper.get('input[type="file"]')
+        const status = wrapper.get('[role="status"]')
+        let inputValue = ''
+        Object.defineProperty(fileInput.element, 'value', {
+          configurable: true,
+          get: () => inputValue,
+          set: (value: string) => { inputValue = value },
+        })
+        try {
+          for (const [name, expectedMessage] of testCase.cases) {
+            const file = new File(['doc'], name)
+            if (name === 'large.doc') {
+              Object.defineProperty(file, 'size', { configurable: true, value: MAX_DOC_FILE_SIZE + 1 })
+            }
+            inputValue = 'selected-file:' + name
+            Object.defineProperty(fileInput.element, 'files', { configurable: true, value: [file] })
+            await fileInput.trigger('change')
+            await flushPromises()
+            expect(wrapper.find('.error-banner').text()).toContain(expectedMessage)
+            expect(status.text()).toContain(expectedMessage)
+          }
+        } finally {
+          wrapper.unmount()
+        }
+      }
+    } finally {
+      setLocale(originalLocale)
+    }
+  })
+
   it('announces an oversized DOC with the same visible size limit', async () => {
     const wrapper = mount(App)
     const fileInput = wrapper.get('input[type="file"]')

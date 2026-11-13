@@ -26,6 +26,10 @@ const WORKER_THRESHOLD = 1024 * 1024 // 1 MiB — files larger than this use Web
 const isWorkerSupported = typeof Worker !== 'undefined'
 const isUsingWorker = ref(false)
 
+function localizeFileSizeLimitMessage(message: string): string {
+  return message === getFileSizeLimitError() ? t('app.upload.error.sizeLimit') : message
+}
+
 // ---- Types ----
 
 interface PictureInfo {
@@ -845,8 +849,8 @@ function clearDocument(emitLoadingEnd = true) {
 // ---- Error boundary ----
 
 onErrorCaptured((err) => {
-  const msg = err instanceof Error ? err.message : '未知渲染错误'
-  error.value = `❌ 渲染文档时发生错误\n\n${msg}`
+  const msg = err instanceof Error ? err.message : t('error.parse.unknown')
+  error.value = t('error.render', { msg })
   emit('error', msg)
   return false
 })
@@ -869,7 +873,7 @@ const loadFromFile = async (file: File) => {
 
   try {
     if (file.size > MAX_DOC_FILE_SIZE) {
-      error.value = getFileSizeLimitError()
+      error.value = t('app.upload.error.sizeLimit')
       emit('error', error.value)
       return
     }
@@ -895,7 +899,7 @@ const loadFromFile = async (file: File) => {
 
     if (generation !== loadGeneration) return
     if (!result.success) {
-      error.value = result.error || '解析失败'
+      error.value = localizeFileSizeLimitMessage(result.error || t('error.parse.fail'))
       return
     }
     progressStep.value = t('loading.progress.rendering')
@@ -905,7 +909,7 @@ const loadFromFile = async (file: File) => {
   } catch (err) {
     if (generation === loadGeneration) {
       console.error('Error parsing DOC file:', err)
-      error.value = err instanceof Error ? err.message : '未知错误'
+      error.value = localizeFileSizeLimitMessage(err instanceof Error ? err.message : t('error.parse.unknown'))
     }
   } finally {
     if (generation === loadGeneration) {
@@ -958,7 +962,7 @@ const loadFromUrl = async (url: string) => {
 
     if (generation !== loadGeneration) return
     if (!result.success) {
-      error.value = result.error || '解析失败'
+      error.value = localizeFileSizeLimitMessage(result.error || t('error.parse.fail'))
       return
     }
     renderResult(result)
@@ -966,7 +970,7 @@ const loadFromUrl = async (url: string) => {
   } catch (err) {
     if (generation === loadGeneration) {
       console.error('Error loading from URL:', err)
-      error.value = err instanceof Error ? err.message : '未知错误'
+      error.value = localizeFileSizeLimitMessage(err instanceof Error ? err.message : t('error.parse.unknown'))
     }
   } finally {
     if (generation === loadGeneration) {
