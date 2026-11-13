@@ -153,14 +153,12 @@ try {
   assert.ok(remoteText.includes(contentMarker), 'URL stream should render the source DOC content')
 
   await page.locator('.back-btn').click()
-  await focusFileInput()
-  const templateChooser = page.waitForEvent('filechooser')
-  await page.keyboard.press('Enter')
-  await (await templateChooser).setFiles({
+  const templateFile = {
     name: 'template.dot',
     mimeType: 'application/msword',
     buffer: sourceDoc,
-  })
+  }
+  await fileInput.setInputFiles(templateFile)
   await page.locator('.doc-preview .document-content').waitFor({ state: 'attached', timeout: 15_000 })
   await page.waitForFunction(() => (
     document.querySelector('.doc-preview [role="status"]')?.textContent?.includes('template.dot')
