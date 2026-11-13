@@ -562,6 +562,10 @@ watch(darkMode, (val) => {
   }
 
   .upload-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-block-size: 44px;
     padding: 12px 32px;
     font-size: 1rem;
   }
@@ -573,6 +577,7 @@ watch(darkMode, (val) => {
 
   .url-btn {
     width: 100%;
+    min-block-size: 44px;
     padding: 12px;
   }
 
