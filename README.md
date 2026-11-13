@@ -403,9 +403,10 @@ npm run test:watch
 npm run build
 npx playwright install chromium
 npm run test:browser
+npm run test:browser:fallback
 ```
 
-该检查会在 Chromium 中用键盘选择样例 DOC，并将有效 DOC 补零至 1 MiB+1 后经 URL 加载，以验证 Worker 路径；同时检查 TXT、HTML、Markdown 下载事件、文件名和内容。
+两种模式都会在 Chromium 中用键盘选择样例 DOC，并将有效 DOC 补零至 1 MiB+1 后经 URL 加载，以验证 Worker 路径；同时检查 TXT、HTML、Markdown 下载事件、文件名和内容。fallback 模式会在页面启动前禁用 `ArrayBuffer.resize`，覆盖不支持 Resizable ArrayBuffer 的浏览器路径。
 
 ### UMD Worker smoke test
 

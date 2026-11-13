@@ -49,8 +49,18 @@ try {
   await waitForPreview()
   browser = await chromium.launch({ headless: true })
   const page = await browser.newPage({ acceptDownloads: true })
-  await page.addInitScript(() => localStorage.setItem('locale', 'en'))
+  const forceChunkFallback = process.argv.includes('--force-chunk-fallback')
+  await page.addInitScript((disableResizableBuffers) => {
+    localStorage.setItem('locale', 'en')
+    if (disableResizableBuffers) {
+      Object.defineProperty(ArrayBuffer.prototype, 'resize', { configurable: true, value: undefined })
+    }
+  }, forceChunkFallback)
   await page.goto(previewBaseUrl, { waitUntil: 'networkidle' })
+  const resizableBuffersAvailable = await page.evaluate(() => (
+    typeof ArrayBuffer.prototype.resize === 'function'
+  ))
+  assert.equal(resizableBuffersAvailable, !forceChunkFallback, 'Browser mode should match the requested buffer path')
   await page.keyboard.press('Tab')
   await page.keyboard.press('Tab')
   await page.keyboard.press('Tab')
@@ -109,7 +119,8 @@ try {
   const remoteText = await page.locator('.doc-preview .document-content').innerText()
   assert.ok(remoteText.includes(contentMarker), 'URL stream should render the source DOC content')
 
-  console.log('Verified keyboard upload, >1 MiB URL/Worker parsing, and TXT, HTML, and Markdown downloads.')
+  const bufferMode = forceChunkFallback ? 'chunk fallback' : 'resizable buffer'
+  console.log('Verified keyboard upload, >1 MiB URL/Worker parsing (' + bufferMode + '), and TXT, HTML, and Markdown downloads.')
 } finally {
   try {
     await browser?.close()

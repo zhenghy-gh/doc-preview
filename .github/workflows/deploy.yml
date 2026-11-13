@@ -58,8 +58,11 @@ jobs:
       - name: Build site
         run: npm run build
 
-      - name: Test browser downloads
+      - name: Test browser downloads with resizable buffers
         run: npm run test:browser
+
+      - name: Test browser downloads with chunk fallback
+        run: npm run test:browser:fallback
 
       - name: Setup Pages
         uses: actions/configure-pages@v6
