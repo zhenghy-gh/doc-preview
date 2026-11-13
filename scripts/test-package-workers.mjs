@@ -6,12 +6,13 @@ import { extname, resolve, sep } from 'node:path'
 import { chromium } from 'playwright'
 
 const root = resolve('dist')
+const packageBaseUrl = '/packages/doc-preview/'
 const vueGlobalBundle = await readFile('node_modules/vue/dist/vue.global.prod.js', 'utf8')
 const vueEsmBundle = await readFile('node_modules/vue/dist/vue.esm-browser.prod.js', 'utf8')
 const sampleDoc = (await readFile('docs/doc-101.doc')).toString('base64')
 const umdHtml = [
   '<!doctype html><html><head><meta charset="utf-8"></head><body>',
-  '<script src="/vue.global.js"></script><script src="/doc-preview.umd.cjs"></script>',
+  '<script src="' + packageBaseUrl + 'vue.global.js"></script><script src="' + packageBaseUrl + 'doc-preview.umd.cjs"></script>',
   '<script>const bytes=Uint8Array.from(atob("' + sampleDoc + '"),c=>c.charCodeAt(0));',
   'window.parseResult=window.DocPreview.parseWithWorker(bytes.buffer).then(',
   '(result)=>{window.result=result;document.body.dataset.done="true"},',
@@ -20,9 +21,9 @@ const umdHtml = [
 ].join('')
 const esmHtml = [
   '<!doctype html><html><head><meta charset="utf-8">',
-  '<script type="importmap">{"imports":{"vue":"/vue.esm-browser.js"}}</script>',
+  '<script type="importmap">{"imports":{"vue":"' + packageBaseUrl + 'vue.esm-browser.js"}}</script>',
   '</head><body><script type="module">',
-  'import { parseWithWorker } from "/doc-preview.js";',
+  'import { parseWithWorker } from "' + packageBaseUrl + 'doc-preview.js";',
   'const bytes=Uint8Array.from(atob("' + sampleDoc + '"),c=>c.charCodeAt(0));',
   'window.parseResult=parseWithWorker(bytes.buffer).then(',
   '(result)=>{window.result=result;document.body.dataset.done="true"},',
@@ -30,24 +31,28 @@ const esmHtml = [
   '</script></body></html>',
 ].join('')
 const requests = []
-const workerAssetPattern = /^\/assets\/docParser\.worker-.*\.js$/
+const workerAssetPattern = /^\/packages\/doc-preview\/assets\/docParser\.worker-.*\.js$/
 const workerAssetStatuses = new Map()
 const server = createServer(async (request, response) => {
   const pathname = new URL(request.url, 'http://127.0.0.1').pathname
   requests.push(pathname)
-  const pages = { '/umd': umdHtml, '/esm': esmHtml }
+  const pages = { [packageBaseUrl + 'umd']: umdHtml, [packageBaseUrl + 'esm']: esmHtml }
   if (pages[pathname]) {
     response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
     response.end(pages[pathname])
     return
   }
-  if (pathname === '/vue.global.js' || pathname === '/vue.esm-browser.js') {
-    const bundle = pathname === '/vue.global.js' ? vueGlobalBundle : vueEsmBundle
+  if (pathname === packageBaseUrl + 'vue.global.js' || pathname === packageBaseUrl + 'vue.esm-browser.js') {
+    const bundle = pathname === packageBaseUrl + 'vue.global.js' ? vueGlobalBundle : vueEsmBundle
     response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8' })
     response.end(bundle)
     return
   }
-  const filePath = resolve(root, '.' + pathname)
+  if (!pathname.startsWith(packageBaseUrl)) {
+    response.writeHead(403).end()
+    return
+  }
+  const filePath = resolve(root, pathname.slice(packageBaseUrl.length))
   if (!filePath.startsWith(root + sep)) {
     response.writeHead(403).end()
     return
@@ -90,8 +95,8 @@ try {
       await page.close()
     }
   }
-  await verifyEntry('/umd', 'UMD')
-  await verifyEntry('/esm', 'ESM')
+  await verifyEntry(packageBaseUrl + 'umd', 'UMD')
+  await verifyEntry(packageBaseUrl + 'esm', 'ESM')
 } finally {
   try {
     await browser?.close()

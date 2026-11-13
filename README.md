@@ -427,7 +427,7 @@ npx playwright install --with-deps chromium
 npm run test:package-workers
 ```
 
-该检查会在 Chromium 中分别作为 UMD 与 ESM 消费者加载打包入口和 Worker chunk，并通过公开 `parseWithWorker` API 解析样例文档。
+该检查会在 Chromium 中从嵌套的 `/packages/doc-preview/` 路径分别作为 UMD 与 ESM 消费者加载打包入口和 Worker chunk，验证子路径资源解析，并通过公开 `parseWithWorker` API 解析样例文档。
 
 ### 类型检查
 
