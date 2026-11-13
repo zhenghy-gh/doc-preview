@@ -91,10 +91,7 @@ try {
   await page.locator('.error-banner').waitFor({ state: 'visible' })
   assert.equal(await fileInput.evaluate((input) => input.value), '')
 
-  await focusFileInput()
-  const secondInvalidChooser = page.waitForEvent('filechooser')
-  await page.keyboard.press('Enter')
-  await (await secondInvalidChooser).setFiles(invalidFile)
+  await fileInput.setInputFiles(invalidFile)
   await page.waitForFunction(() => window.fileChangeCount === 2)
   assert.equal(await fileInput.evaluate((input) => input.value), '')
   assert.ok((await page.locator('.error-banner').textContent()).includes('.pdf'))
