@@ -14,19 +14,23 @@ describe('App upload accessibility', () => {
   it('synchronizes the browser title when the UI locale changes', async () => {
     const originalLocale = currentLocale.value
     const originalTitle = document.title
+    const originalLanguage = document.documentElement.lang
     const wrapper = mount(App)
     try {
       setLocale('zh-CN')
       await flushPromises()
       expect(document.title).toBe('DOC文件在线预览')
+      expect(document.documentElement.lang).toBe('zh-CN')
 
       setLocale('en')
       await flushPromises()
       expect(document.title).toBe('DOC File Online Preview')
+      expect(document.documentElement.lang).toBe('en')
     } finally {
       wrapper.unmount()
       setLocale(originalLocale)
       document.title = originalTitle
+      document.documentElement.lang = originalLanguage
     }
   })
 

@@ -10,8 +10,9 @@ const previewSource = ref<File | string | null>(null)
 const errorMessage = ref('')
 const isDragOver = ref(false)
 
-watch(currentLocale, () => {
+watch(currentLocale, (locale) => {
   document.title = t('app.title')
+  document.documentElement.lang = locale
 }, { immediate: true })
 
 const isValidFile = (file: File): boolean => {
