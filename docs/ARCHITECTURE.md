@@ -17,8 +17,8 @@ contributors and maintainers.
 │  ┌───────────────────────────────────────────────────────┐  │
 │  │  docParser.ts (public API: DocParser class + helpers)  │  │
 │  │  ┌────────────┐ ┌─────────────┐ ┌──────────────────┐  │  │
-│  │  │ oleParser  │ │ fibParser   │ │  FormatDetector  │  │  │
-│  │  │  (OLE2)    │ │  (FIB)      │ │  (heuristics)    │  │  │
+│  │  │ oleParser  │ │ fibParser   │ │ Format Parsers │  │  │
+│  │  │  (OLE2)    │ │  (FIB)      │ │ (CHPX/PAPX)    │  │  │
 │  │  └────────────┘ └─────────────┘ └──────────────────┘  │  │
 │  │  ┌──────────────────────────────────────────────────┐  │  │
 │  │  │   docParser.worker.ts (Web Worker entry)        │  │  │
@@ -42,9 +42,9 @@ Vue 3 single-file component that:
 - Emits `error`, `loaded`, `loading` events
 - Exposes `reload()`, `getPlainText()`, `focusContent()` via `defineExpose`
 
-The component is **stateless regarding documents** — the parent passes a `source`
-and the component re-parses whenever it changes. State is local (loading, error,
-search, zoom, outline).
+The parent owns the source and passes it as a prop; the component reloads when it changes.
+Parsed content and transient UI state (loading, errors, search, zoom, and outline) are
+held locally by the component.
 
 ### `src/App.vue`
 
@@ -68,11 +68,12 @@ Exports:
 
 Internally orchestrates:
 
-1. `OleParser` — read OLE2/CFB structure
-2. `parseFib` — read FIB offsets
-3. Text extraction (UTF-16LE / 8-bit) + encoding detection
-4. Format inference (heuristic, not binary format tables)
-5. Paragraph cleaning (binary prefix removal, field code cleanup)
+1. `OleParser` — read the OLE2/CFB container, streams, and directory
+2. `parseFib` — read text, CLX, and formatting table offsets
+3. CLX/Pcdt parsing — map pieces to byte ranges and split document stories
+4. Text decoding — use piece compression flags, with encoding detection as a fallback
+5. Format recovery — parse CHPX/PAPX FKP runs and stylesheet data from the table stream
+6. Enrichment and cleanup — extract properties, fields, pictures, and other objects; apply heuristic fallbacks when structures are unavailable
 
 ### `src/utils/oleParser.ts`
 
@@ -155,49 +156,51 @@ Public TypeScript types for library users:
 [OleParser.readStream] ── follow FAT chains ──→ Uint8Array
   │
   ▼
-[FibParser.parseFib] ── offsets for text/clx ──→ { fcMin, fcMac, fcClx, lcbClx, fComplex }
+[FibParser.parseFib] ── stream/table offsets and story counts ──→ FIB metadata
   │
   ▼
-[Encoding detection] ── 0x0D/0x00 ratio OR null-byte distribution
+[CLX/Pcdt parsing] ── piece CP ranges, file offsets, compression flags, stories
+  │  - Missing/invalid CLX uses bounded text-scan and encoding-detection fallbacks
   │
   ▼
-[Text extraction] ── scan until 0x0D / 0x0D 0x00 paragraph breaks
-  │  - ASCII pass-through for 8-bit
-  │  - UTF-16LE char decoding for Unicode
+[Table stream parsing] ── BTE/FKP CHPX/PAPX runs + stylesheet data
   │
   ▼
-[Format inference] ── heuristic for bold / font size / alignment
+[Text and format extraction] ── decode pieces and apply character/paragraph properties
+  │  - 8-bit compressed bytes or UTF-16LE, bounded by scan/character limits
   │
   ▼
-[Paragraph cleaning] ── strip binary prefix, field codes
+[Document enrichment] ── properties, fields, images/pictures, and embedded objects
   │
   ▼
-[Filtered paragraphs] ── return to DocPreview as FormattedParagraph[]
+[Paragraph cleanup] ── remove binary prefixes and field instructions; retain fallbacks
   │
   ▼
-[DocPreview renders as HTML] ── v-html + CSS
+[Formatted paragraphs and metadata] ── return parser result to DocPreview
+  │
+  ▼
+[DocPreview renders as HTML] ── sanitized content + component CSS
 ```
 
 ## Design Decisions
 
-### Why heuristic format detection?
+### Structured format recovery and heuristic fallback
 
-Reading Word 97-2003 CHP/PAP format tables requires implementing the full
-binary spec — there is no XML representation. The library is heuristic-based
-because:
+The parser reads CHPX/PAPX properties from BTE/FKP structures and applies
+stylesheet data where available. These structures are the primary source for
+character and paragraph formatting.
 
-1. The tables are large and complex (hundreds of fields)
-2. The most common patterns (Chinese document with title + paragraphs, mixed
-   text) can be reliably detected by simple rules
-3. The fallback for unparseable files is graceful — we just show the text
+Older or malformed documents can omit or misreport table offsets. In those
+cases the parser falls back to inferred formatting or plain-text rendering so
+that useful content remains available instead of failing the entire preview.
 
 ### Why a Web Worker?
 
 Parsing a `.doc` file can take 50-200ms for small files and 500ms+ for large
-ones. The default `DocPreview` is synchronous — for files >1 MiB, the user
-perceives UI freeze. The Web Worker offloads parsing to a background thread,
-keeping the UI responsive. Workers are not supported in all environments, so
-a graceful fallback to main-thread parsing is implemented.
+ones. `DocPreview` parses files up to 1 MiB on the main thread and automatically
+uses a Web Worker for larger files when available. This avoids blocking the UI
+for larger inputs. If Worker support is unavailable or initialization fails,
+the parser falls back to the main thread.
 
 ### Why no streams in lib UMD build?
 
@@ -209,9 +212,6 @@ functionality.
 
 ## Future Work
 
-- **Binary CHP/PAP table reading** — would enable exact font/alignment/header
-  detection, but requires implementing the full Word 97 spec
-- **Image extraction** — `.doc` files store images in separate streams
-  (e.g. `Data`, `ObjectPool`) with their own binary format (Office Art)
-- **Table stream parsing** — separate `Table` stream with structured binary data
-- **Web Worker streaming** — for files larger than 100 MiB, parse in chunks
+- Expand the real-document regression corpus across Word, WPS, and other DOC producers
+- Improve visual fidelity for complex floating shapes and embedded OLE objects
+- Evaluate additional memory and responsiveness improvements within the 50 MiB input limit
