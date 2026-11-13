@@ -152,8 +152,24 @@ try {
   const remoteText = await page.locator('.doc-preview .document-content').innerText()
   assert.ok(remoteText.includes(contentMarker), 'URL stream should render the source DOC content')
 
+  await page.locator('.back-btn').click()
+  await focusFileInput()
+  const templateChooser = page.waitForEvent('filechooser')
+  await page.keyboard.press('Enter')
+  await (await templateChooser).setFiles({
+    name: 'template.dot',
+    mimeType: 'application/msword',
+    buffer: sourceDoc,
+  })
+  await page.locator('.doc-preview .document-content').waitFor({ state: 'attached', timeout: 15_000 })
+  await page.waitForFunction(() => (
+    document.querySelector('.doc-preview [role="status"]')?.textContent?.includes('template.dot')
+  ))
+  const templateText = await page.locator('.doc-preview .document-content').innerText()
+  assert.ok(templateText.includes(contentMarker), 'DOT template should render DOC-compatible content')
+
   const bufferMode = forceChunkFallback ? 'chunk fallback' : 'resizable buffer'
-  console.log('Verified ' + browserName + ' keyboard upload, >1 MiB URL/Worker parsing (' + bufferMode + '), and TXT, HTML, and Markdown downloads.')
+  console.log('Verified ' + browserName + ' DOC/DOT upload, same-file retry, >1 MiB URL/Worker parsing (' + bufferMode + '), and TXT, HTML, and Markdown downloads.')
 } finally {
   try {
     await browser?.close()

@@ -413,7 +413,7 @@ npm run test:browser:webkit
 npm run test:browser:webkit:fallback
 ```
 
-smoke 会在 Chromium、Firefox 和 WebKit 中用键盘选择样例 DOC，并将有效 DOC 补零至 1 MiB+1 后经 URL 加载，以验证 Worker 路径；同时检查 TXT、HTML、Markdown 下载事件、文件名和内容。fallback 模式会在页面启动前禁用 `ArrayBuffer.resize`，覆盖不支持 Resizable ArrayBuffer 的浏览器路径。macOS WebKit smoke 使用 Safari 的 Option-Tab 完整键盘导航；其他引擎/平台使用 Tab。
+smoke 会在 Chromium、Firefox 和 WebKit 中用键盘选择 DOC、重试同一个无效文件，并加载 `.dot` 模板；它还将有效 DOC 补零至 1 MiB+1 后经 URL 加载，以验证 Worker 路径，并检查 TXT、HTML、Markdown 下载的文件名和内容。fallback 模式会在页面启动前禁用 `ArrayBuffer.resize`，覆盖不支持 Resizable ArrayBuffer 的浏览器路径。macOS WebKit smoke 使用 Safari 的 Option-Tab 完整键盘导航；其他引擎/平台使用 Tab。
 
 ### Package Worker smoke test
 
