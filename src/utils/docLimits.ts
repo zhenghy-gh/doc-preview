@@ -45,27 +45,36 @@ export async function readResponseWithLimit(
   const reader = response.body?.getReader()
   if (!reader) throw new Error('无法读取响应内容')
 
-  const hasSmallLengthHint = Number.isFinite(contentLength) &&
-    contentLength >= 0 && contentLength <= MAX_EAGER_RESPONSE_BUFFER_BYTES
-  const initialCapacity = hasSmallLengthHint
-    ? Math.min(maxBytes, contentLength)
-    : Math.min(maxBytes, DEFAULT_RESPONSE_BUFFER_BYTES)
-  // Resize one buffer when supported; older browsers use the chunk fallback below.
-  const resizableBuffer = createResizableBuffer(initialCapacity, maxBytes)
-  let buffer = resizableBuffer
-    ? new Uint8Array(resizableBuffer)
-    : hasSmallLengthHint
-      ? new Uint8Array(initialCapacity)
-      : null
+  let resizableBuffer: ResizableArrayBuffer | null = null
+  let buffer: Uint8Array | null = null
   const chunks: Uint8Array[] = []
   let totalBytes = 0
+  let responseCancelled = false
+  const cancelReader = async () => {
+    if (responseCancelled) return
+    responseCancelled = true
+    await reader.cancel().catch(() => {})
+  }
+
   try {
+    const hasSmallLengthHint = Number.isFinite(contentLength) &&
+      contentLength >= 0 && contentLength <= MAX_EAGER_RESPONSE_BUFFER_BYTES
+    const initialCapacity = hasSmallLengthHint
+      ? Math.min(maxBytes, contentLength)
+      : Math.min(maxBytes, DEFAULT_RESPONSE_BUFFER_BYTES)
+    // Resize one buffer when supported; older browsers use the chunk fallback below.
+    resizableBuffer = createResizableBuffer(initialCapacity, maxBytes)
+    buffer = resizableBuffer
+      ? new Uint8Array(resizableBuffer)
+      : hasSmallLengthHint
+        ? new Uint8Array(initialCapacity)
+        : null
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
       const nextTotal = totalBytes + value.byteLength
       if (nextTotal > maxBytes) {
-        await reader.cancel().catch(() => {})
+        await cancelReader()
         throw new RangeError(getFileSizeLimitError())
       }
       if (buffer && nextTotal <= buffer.byteLength) {
@@ -84,6 +93,9 @@ export async function readResponseWithLimit(
       }
       totalBytes = nextTotal
     }
+  } catch (error) {
+    await cancelReader()
+    throw error
   } finally {
     reader.releaseLock()
   }
@@ -93,7 +105,9 @@ export async function readResponseWithLimit(
     return resizableBuffer
   }
   if (buffer) {
-    return totalBytes === buffer.byteLength ? buffer.buffer : buffer.slice(0, totalBytes).buffer
+    return totalBytes === buffer.byteLength
+      ? buffer.buffer as ArrayBuffer
+      : buffer.slice(0, totalBytes).buffer as ArrayBuffer
   }
 
   const result = new Uint8Array(totalBytes)
@@ -102,5 +116,5 @@ export async function readResponseWithLimit(
     result.set(chunk, offset)
     offset += chunk.byteLength
   }
-  return result.buffer
+  return result.buffer as ArrayBuffer
 }

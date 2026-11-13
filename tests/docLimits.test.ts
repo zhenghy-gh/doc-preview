@@ -152,6 +152,38 @@ describe('readResponseWithLimit', () => {
     }
   })
 
+  it.skipIf(typeof (ArrayBuffer.prototype as ArrayBuffer & { resize?: unknown }).resize !== 'function')(
+    'cancels the response if resizable buffer growth fails',
+    async () => {
+      const prototype = ArrayBuffer.prototype as ArrayBuffer & { resize: (byteLength: number) => void }
+      const resize = vi.spyOn(prototype, 'resize').mockImplementation(() => {
+        throw new Error('synthetic allocation failure')
+      })
+      let cancelled = false
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1, 2, 3]))
+          controller.enqueue(new Uint8Array([4, 5]))
+        },
+        cancel() {
+          cancelled = true
+        },
+      })
+      const response = makeResponse(body, new Headers({ 'content-length': '3' }))
+      const responseBody = response.body
+
+      try {
+        await expect(readResponseWithLimit(response, 10)).rejects.toThrow('synthetic allocation failure')
+        expect(cancelled).toBe(true)
+        const reacquiredReader = responseBody?.getReader()
+        expect(reacquiredReader).toBeDefined()
+        reacquiredReader?.releaseLock()
+      } finally {
+        resize.mockRestore()
+      }
+    },
+  )
+
   it('preserves buffered bytes when Content-Length understates a valid body', async () => {
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
