@@ -87,7 +87,7 @@ class MockWorker {
   terminated = false
   posted: Array<{ buffer: ArrayBuffer; maxScanBytes?: number }> = []
 
-  constructor(_url: URL, _opts?: any) {
+  constructor(_url: string | URL, _opts?: any) {
     MockWorker.instances.push(this)
     // Simulate async worker response
     setTimeout(() => {

@@ -4,11 +4,6 @@ import workerAssetUrl from './docParser.worker?worker&url'
 import type { WorkerParseResponse } from './docParser.worker'
 import { MAX_DOC_FILE_SIZE, getFileSizeLimitError } from './docLimits'
 
-const currentScriptUrl = typeof document !== 'undefined' && document.currentScript?.tagName === 'SCRIPT'
-  ? (document.currentScript as HTMLScriptElement).src
-  : undefined
-const workerBaseUrl = currentScriptUrl || import.meta.url
-
 export interface WorkerParseResult {
   success: boolean
   document?: any
@@ -42,7 +37,7 @@ export function parseWithWorker(
 
     // Attempt Web Worker path
     try {
-      const activeWorker = new Worker(new URL(workerAssetUrl, workerBaseUrl), { type: 'module' })
+      const activeWorker = new Worker(workerAssetUrl, { type: 'module' })
       worker = activeWorker
 
       const workerTimeout = setTimeout(() => {
