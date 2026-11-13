@@ -87,7 +87,29 @@ try {
     if (item.extension === 'html') assert.match(content, /<!DOCTYPE html>/i)
   }
 
-  console.log('Verified TXT, HTML, and Markdown browser downloads.')
+  await page.locator('.back-btn').click()
+  const remoteUrl = new URL('doc-101.doc?browser-smoke=1', previewBaseUrl).toString()
+  const sourceDoc = await readFile('docs/doc-101.doc')
+  const workerThresholdBytes = 1024 * 1024 + 1
+  const sampleDoc = Buffer.concat([sourceDoc, Buffer.alloc(workerThresholdBytes - sourceDoc.byteLength)])
+  await page.route((url) => url.href === remoteUrl, (route) => route.fulfill({
+    status: 200,
+    headers: {
+      'content-type': 'application/msword',
+      'content-length': String(sampleDoc.byteLength),
+    },
+    body: sampleDoc,
+  }))
+  await page.locator('.url-input').fill(remoteUrl)
+  await page.locator('.url-btn').click()
+  await page.locator('.doc-preview .document-content').waitFor({ state: 'attached', timeout: 30_000 })
+  await page.waitForFunction(() => (
+    document.querySelector('.doc-preview [role="status"]')?.textContent?.includes('doc-101.doc?browser-smoke=1')
+  ), { timeout: 30_000 })
+  const remoteText = await page.locator('.doc-preview .document-content').innerText()
+  assert.ok(remoteText.includes(contentMarker), 'URL stream should render the source DOC content')
+
+  console.log('Verified keyboard upload, >1 MiB URL/Worker parsing, and TXT, HTML, and Markdown downloads.')
 } finally {
   try {
     await browser?.close()
