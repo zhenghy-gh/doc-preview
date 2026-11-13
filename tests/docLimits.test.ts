@@ -64,7 +64,32 @@ describe('readResponseWithLimit', () => {
     expect(cancelled).toBe(true)
   })
 
-  it('returns bytes when the stream stays within the limit', async () => {
+  it('returns bytes for a valid response without Content-Length', async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([4, 5]))
+        controller.close()
+      },
+    })
+
+    const buffer = await readResponseWithLimit(makeResponse(body), 10)
+    expect(Array.from(new Uint8Array(buffer))).toEqual([4, 5])
+  })
+
+  it('returns only received bytes when Content-Length overstates a valid body', async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([4, 5]))
+        controller.close()
+      },
+    })
+    const response = makeResponse(body, new Headers({ 'content-length': '9' }))
+
+    const buffer = await readResponseWithLimit(response, 10)
+    expect(Array.from(new Uint8Array(buffer))).toEqual([4, 5])
+  })
+
+  it('returns bytes using a matching Content-Length hint', async () => {
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(new Uint8Array([1, 2]))
@@ -73,7 +98,23 @@ describe('readResponseWithLimit', () => {
       },
     })
 
-    const buffer = await readResponseWithLimit(makeResponse(body), 3)
+    const response = makeResponse(body, new Headers({ 'content-length': '3' }))
+    const buffer = await readResponseWithLimit(response, 3)
     expect(Array.from(new Uint8Array(buffer))).toEqual([1, 2, 3])
+  })
+
+  it('preserves buffered bytes when Content-Length understates a valid body', async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3]))
+        controller.enqueue(new Uint8Array([4, 5, 6]))
+        controller.enqueue(new Uint8Array([7, 8]))
+        controller.close()
+      },
+    })
+    const response = makeResponse(body, new Headers({ 'content-length': '4' }))
+
+    const buffer = await readResponseWithLimit(response, 10)
+    expect(Array.from(new Uint8Array(buffer))).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
   })
 })
