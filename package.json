@@ -26,7 +26,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "test:browser": "node scripts/test-downloads-browser.mjs"
+    "test:browser": "node scripts/test-downloads-browser.mjs",
+    "test:umd-worker": "node scripts/test-umd-worker.mjs"
   },
   "keywords": [
     "doc",

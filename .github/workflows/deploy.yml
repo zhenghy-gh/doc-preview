@@ -43,17 +43,20 @@ jobs:
       - name: Verify npm package
         run: npm run verify:package
 
-      - name: Build site
-        run: npm run build
-
       - name: Cache Playwright browsers
         uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
 
-      - name: Install Chromium for download smoke test
+      - name: Install Chromium for package smoke tests
         run: npx playwright install --with-deps chromium
+
+      - name: Test packaged UMD Worker
+        run: npm run test:umd-worker
+
+      - name: Build site
+        run: npm run build
 
       - name: Test browser downloads
         run: npm run test:browser

@@ -407,6 +407,17 @@ npm run test:browser
 
 该检查会在 Chromium 中用键盘选择样例 DOC，并将有效 DOC 补零至 1 MiB+1 后经 URL 加载，以验证 Worker 路径；同时检查 TXT、HTML、Markdown 下载事件、文件名和内容。
 
+### UMD Worker smoke test
+
+在 `npm run build:lib` 和 `npm run verify:package` 后运行：
+
+```bash
+npx playwright install chromium
+npm run test:umd-worker
+```
+
+该检查会在 Chromium 中加载打包后的 UMD 文件和 Worker chunk，并通过公开 `parseWithWorker` API 解析样例文档。
+
 ### 类型检查
 
 ```bash
