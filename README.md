@@ -392,6 +392,18 @@ npm test
 npm run test:watch
 ```
 
+### 浏览器下载 smoke test
+
+需要先构建预览站点并安装 Playwright Chromium：
+
+```bash
+npm run build
+npx playwright install chromium
+npm run test:browser
+```
+
+该检查会在 Chromium 中上传样例 DOC，并验证 TXT、HTML、Markdown 下载事件、文件名和内容。
+
 ### 类型检查
 
 ```bash
