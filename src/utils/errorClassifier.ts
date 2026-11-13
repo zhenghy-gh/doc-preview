@@ -9,6 +9,7 @@ export type ErrorCategory =
   | 'parse'
   | 'corrupted'
   | 'size'
+  | 'render'
   | 'memory'
   | 'unknown'
 
@@ -49,6 +50,22 @@ export function classifyError(
 
   const lower = rawText.toLowerCase()
   const isEN = locale === 'en'
+
+  // A parsed document can still fail while Vue renders the preview.
+  if (containsAny(lower, ['error rendering document', '渲染文档时发生错误', '未知渲染错误'])) {
+    return {
+      category: 'render',
+      title: isEN ? 'Document could not be displayed' : '文档无法显示',
+      detail: isEN
+        ? 'The document was parsed, but the preview could not render its contents.'
+        : '文档已解析，但预览内容无法渲染。',
+      suggestions: isEN
+        ? ['Try reloading the document', 'If the problem persists, inspect the technical details below']
+        : ['尝试重新加载文档', '如果问题仍然存在，请查看下方技术细节'],
+      retryable: true,
+      raw: rawText,
+    }
+  }
 
   // 1. 网络错误
   if (
@@ -224,6 +241,7 @@ export const ERROR_CATEGORY_ICON: Record<ErrorCategory, string> = {
   format: '📄',
   parse: '⚙️',
   corrupted: '🔧',
+  render: '🖼️',
   memory: '💾',
   size: '📦',
   unknown: '❌',

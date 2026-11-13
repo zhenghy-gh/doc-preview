@@ -110,6 +110,26 @@ describe('errorClassifier', () => {
     })
   })
 
+  describe('classifyError - 渲染错误', () => {
+    it('classifies the English render boundary and retains the cause', () => {
+      const result = classifyError('❌ Error rendering document\n\nCanvas failed', 'en')
+      expect(result.category).toBe('render')
+      expect(result.title).toBe('Document could not be displayed')
+      expect(result.detail).toContain('preview could not render')
+      expect(result.suggestions[0]).toContain('reload')
+      expect(result.raw).toContain('Canvas failed')
+      expect(result.retryable).toBe(true)
+    })
+
+    it('classifies the Chinese render boundary', () => {
+      const result = classifyError('❌ 渲染文档时发生错误\n\n画布失败', 'zh-CN')
+      expect(result.category).toBe('render')
+      expect(result.title).toBe('文档无法显示')
+      expect(result.detail).toContain('预览内容无法渲染')
+      expect(result.raw).toContain('画布失败')
+    })
+  })
+
   describe('classifyError - 内存不足', () => {
     it('out of memory 应分类为 memory', () => {
       const result = classifyError('Out of memory')
@@ -194,6 +214,7 @@ describe('errorClassifier', () => {
       expect(ERROR_CATEGORY_ICON.format).toBeTruthy()
       expect(ERROR_CATEGORY_ICON.parse).toBeTruthy()
       expect(ERROR_CATEGORY_ICON.corrupted).toBeTruthy()
+      expect(ERROR_CATEGORY_ICON.render).toBeTruthy()
       expect(ERROR_CATEGORY_ICON.size).toBeTruthy()
       expect(ERROR_CATEGORY_ICON.memory).toBeTruthy()
       expect(ERROR_CATEGORY_ICON.unknown).toBeTruthy()

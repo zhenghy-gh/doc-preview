@@ -169,12 +169,30 @@ describe('DocPreview source lifecycle', () => {
     }
   })
 
-  it('localizes render-boundary messages and unknown fallbacks', async () => {
+  it('localizes render-boundary summaries and retains raw error details', async () => {
     const originalLocale = currentLocale.value
     const cases = [
-      { locale: 'en', cause: new Error('synthetic render failure'), expected: 'Error rendering document' },
-      { locale: 'zh-CN', cause: new Error('synthetic render failure'), expected: '渲染文档时发生错误' },
-      { locale: 'en', cause: 'synthetic non-error render failure', expected: 'Unknown error' },
+      {
+        locale: 'en',
+        cause: new Error('synthetic render failure'),
+        title: 'Document could not be displayed',
+        detail: 'preview could not render',
+        raw: 'synthetic render failure',
+      },
+      {
+        locale: 'zh-CN',
+        cause: new Error('synthetic render failure'),
+        title: '文档无法显示',
+        detail: '预览内容无法渲染',
+        raw: 'synthetic render failure',
+      },
+      {
+        locale: 'en',
+        cause: 'synthetic non-error render failure',
+        title: 'Document could not be displayed',
+        detail: 'preview could not render',
+        raw: 'Unknown error',
+      },
     ] as const
     parseFile.mockResolvedValue(parsedDocument)
 
@@ -186,13 +204,9 @@ describe('DocPreview source lifecycle', () => {
         const wrapper = mount(DocPreview, { props: { source: new File(['doc'], 'sample.doc') } })
         try {
           await flushPromises()
-          const message = wrapper.find('.enhanced-error').text()
-          expect(message).toContain(testCase.expected)
-          if (testCase.cause instanceof Error) {
-            expect(message).toContain(testCase.cause.message)
-          } else {
-            expect(message).not.toContain(testCase.cause)
-          }
+          expect(wrapper.get('.error-title').text()).toBe(testCase.title)
+          expect(wrapper.get('.error-detail').text()).toContain(testCase.detail)
+          expect(wrapper.get('.error-raw pre').text()).toContain(testCase.raw)
         } finally {
           wrapper.unmount()
           throwFromShortcutPanel.enabled = false
