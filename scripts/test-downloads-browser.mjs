@@ -71,12 +71,35 @@ try {
   assert.equal(resizableBuffersAvailable, !forceChunkFallback, 'Browser mode should match the requested buffer path')
   const fileInput = page.locator('.file-input')
   const tabShortcut = process.platform === 'darwin' && browserName === 'webkit' ? 'Alt+Tab' : 'Tab'
-  for (let tabCount = 0; tabCount < 12; tabCount++) {
-    if (await fileInput.evaluate((input) => input === document.activeElement)) break
-    await page.keyboard.press(tabShortcut)
+  async function focusFileInput() {
+    for (let tabCount = 0; tabCount < 12; tabCount++) {
+      if (await fileInput.evaluate((input) => input === document.activeElement)) return
+      await page.keyboard.press(tabShortcut)
+    }
+    assert.equal(await fileInput.evaluate((input) => input === document.activeElement), true)
   }
-  assert.equal(await fileInput.evaluate((input) => input === document.activeElement), true)
+  await focusFileInput()
   assert.notEqual(await page.locator('.upload-btn').evaluate((label) => getComputedStyle(label).outlineStyle), 'none')
+  await fileInput.evaluate((input) => {
+    window.fileChangeCount = 0
+    input.addEventListener('change', () => { window.fileChangeCount++ })
+  })
+  const invalidFile = { name: 'notes.pdf', mimeType: 'application/pdf', buffer: Buffer.from('invalid') }
+  const firstInvalidChooser = page.waitForEvent('filechooser')
+  await page.keyboard.press('Enter')
+  await (await firstInvalidChooser).setFiles(invalidFile)
+  await page.locator('.error-banner').waitFor({ state: 'visible' })
+  assert.equal(await fileInput.evaluate((input) => input.value), '')
+
+  await focusFileInput()
+  const secondInvalidChooser = page.waitForEvent('filechooser')
+  await page.keyboard.press('Enter')
+  await (await secondInvalidChooser).setFiles(invalidFile)
+  await page.waitForFunction(() => window.fileChangeCount === 2)
+  assert.equal(await fileInput.evaluate((input) => input.value), '')
+  assert.ok((await page.locator('.error-banner').textContent()).includes('.pdf'))
+
+  await focusFileInput()
   const fileChooserStarted = page.waitForEvent('filechooser')
   await page.keyboard.press('Enter')
   await (await fileChooserStarted).setFiles('docs/doc-101.doc')

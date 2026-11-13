@@ -37,6 +37,7 @@ const handleFileChange = (event: Event) => {
   if (!files || files.length === 0) return
 
   const file = files[0]
+  target.value = ''
   errorMessage.value = ''
 
   if (!isValidFile(file)) {

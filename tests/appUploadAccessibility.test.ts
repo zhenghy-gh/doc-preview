@@ -43,11 +43,18 @@ describe('App upload accessibility', () => {
     expect(status.text()).toBe('')
 
     const fileInput = wrapper.get('input[type="file"]')
+    let inputValue = 'C:\fakepath\notes.pdf'
+    Object.defineProperty(fileInput.element, 'value', {
+      configurable: true,
+      get: () => inputValue,
+      set: (value: string) => { inputValue = value },
+    })
     Object.defineProperty(fileInput.element, 'files', {
       configurable: true,
       value: [new File(['not a doc'], 'notes.pdf')],
     })
     await fileInput.trigger('change')
+    expect(inputValue).toBe('')
     await flushPromises()
 
     expect(wrapper.find('.error-banner').text()).toContain('.pdf')
