@@ -221,6 +221,28 @@ describe('DocPreview source lifecycle', () => {
     }
   })
 
+  it('shows copy feedback in English after the copy control is localized', async () => {
+    const originalLocale = currentLocale.value
+    parseFile.mockResolvedValue(parsedDocument)
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+    setLocale('en')
+    const wrapper = mount(DocPreview, { props: { source: new File(['doc'], 'copy.doc') } })
+
+    try {
+      await flushPromises()
+      const copyButton = wrapper.get('.copy-btn')
+      expect(copyButton.attributes('aria-label')).toBe('Copy text to clipboard')
+      await copyButton.trigger('click')
+      await flushPromises()
+      expect(writeText).toHaveBeenCalledWith('Loaded document body')
+      expect(copyButton.text()).toBe('✓')
+    } finally {
+      wrapper.unmount()
+      setLocale(originalLocale)
+    }
+  })
+
   it('localizes printed page metadata and blocked-popup guidance', async () => {
     const originalLocale = currentLocale.value
     const writes: string[] = []

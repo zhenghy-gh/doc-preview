@@ -2736,7 +2736,7 @@ async function copyText() {
   }
   
   const showCopySuccess = () => {
-    const btn = document.querySelector('.toolbar-btn[title*="复制"]')
+    const btn = previewRef.value?.querySelector('.copy-btn')
     if (btn) {
       const originalText = btn.innerHTML
       btn.innerHTML = '✓'
@@ -3088,7 +3088,7 @@ defineExpose({ reload, getPlainText, focusContent })
           <button class="toolbar-btn" @click="downloadMarkdown" :title="t('toolbar.download.md')" :aria-label="t('toolbar.download.md')">📝</button>
 
           <!-- Copy text -->
-          <button class="toolbar-btn" @click="copyText" :title="t('toolbar.copy')" :aria-label="t('toolbar.copy')">📋</button>
+          <button class="toolbar-btn copy-btn" @click="copyText" :title="t('toolbar.copy')" :aria-label="t('toolbar.copy')">📋</button>
 
           <span class="toolbar-sep" role="separator"></span>
 
