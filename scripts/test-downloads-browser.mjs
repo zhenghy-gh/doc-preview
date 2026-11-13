@@ -1,11 +1,16 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { readFile } from 'node:fs/promises'
+import { access, readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
 
 const previewBaseUrl = 'http://127.0.0.1:4173/doc-preview/'
+try {
+  await access(new URL('../dist/index.html', import.meta.url))
+} catch {
+  throw new Error('Built site not found. Run npm run build before npm run test:browser.')
+}
 const viteCli = fileURLToPath(new URL('../node_modules/vite/bin/vite.js', import.meta.url))
 const previewServer = spawn(process.execPath, [viteCli, 'preview', '--host', '127.0.0.1', '--port', '4173', '--strictPort'], {
   stdio: 'inherit',
@@ -23,12 +28,18 @@ async function waitForPreview() {
     if (previewServer.exitCode !== null || previewServer.signalCode !== null) {
       throw new Error('Vite preview exited before becoming ready')
     }
+    let response
     try {
-      const response = await fetch(previewBaseUrl)
-      if (response.ok) return
+      response = await fetch(previewBaseUrl)
     } catch {
       // The preview server is still starting.
+      await new Promise((resolve) => setTimeout(resolve, 250))
+      continue
     }
+    if (response.status === 404) {
+      throw new Error('Vite preview returned 404 for the configured base path: ' + previewBaseUrl)
+    }
+    if (response.ok) return
     await new Promise((resolve) => setTimeout(resolve, 250))
   }
   throw new Error('Vite preview did not become ready within 30 seconds')
