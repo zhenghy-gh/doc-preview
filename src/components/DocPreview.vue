@@ -276,7 +276,7 @@ const MAX_ZOOM = 200
 const ZOOM_STEP = 10
 
 // --- Dark mode ---
-const darkMode = ref(document.documentElement.classList.contains('dark'))
+const darkMode = ref(typeof document !== 'undefined' && document.documentElement.classList.contains('dark'))
 
 function toggleDarkMode() {
   darkMode.value = !darkMode.value

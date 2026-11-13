@@ -4,7 +4,12 @@ export type Locale = 'zh-CN' | 'en'
 
 const _locale = shallowRef<Locale>('zh-CN')
 
-const saved = localStorage.getItem('locale') as Locale | null
+let saved: string | null = null
+try {
+  saved = localStorage.getItem('locale')
+} catch {
+  // Storage may be unavailable during SSR or in restricted browser contexts.
+}
 if (saved === 'zh-CN' || saved === 'en') {
   _locale.value = saved
 }
@@ -13,7 +18,11 @@ export { _locale as currentLocale }
 
 export function setLocale(locale: Locale) {
   _locale.value = locale
-  localStorage.setItem('locale', locale)
+  try {
+    localStorage.setItem('locale', locale)
+  } catch {
+    // Keep the active locale even when persistence is unavailable.
+  }
 }
 
 type TransValue = string | Record<string, string> | ((params: Record<string, any>) => string)

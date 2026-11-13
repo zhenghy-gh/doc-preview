@@ -123,6 +123,9 @@ const handleFileChange = (event) => {
 </script>
 ```
 
+The component can be imported and its idle shell server-rendered. Document parsing
+and DOM interactions start after client mount.
+
 ### 独立 HTML 页面使用
 
 先运行 `npm run build:lib` 生成 `dist`。将下面示例保存为项目根目录中的 HTML 文件，并通过本地 HTTP 静态服务器打开；不要直接使用 `file://`，因为浏览器会限制原生 ES module 导入。
