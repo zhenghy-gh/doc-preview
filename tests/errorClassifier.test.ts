@@ -101,8 +101,8 @@ describe('errorClassifier', () => {
       expect(result.suggestions[0]).toContain('小于 50 MiB')
     })
 
-    it('English locale explains a fixed maximum size without retry advice', () => {
-      const result = classifyError('Exceeds maximum supported size', 'en')
+    it('classifies the exact English UI size-limit message', () => {
+      const result = classifyError('File exceeds the 50 MiB size limit', 'en')
       expect(result.category).toBe('size')
       expect(result.title).toBe('File exceeds size limit')
       expect(result.detail).toContain('50 MiB')

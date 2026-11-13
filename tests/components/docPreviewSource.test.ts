@@ -158,6 +158,9 @@ describe('DocPreview source lifecycle', () => {
           try {
             await flushPromises()
             expect(wrapper.find('.enhanced-error').text()).toContain(expected)
+            expect(wrapper.find('.error-title').text()).toBe(
+              locale === 'en' ? 'File exceeds size limit' : '文件超过大小限制',
+            )
           } finally {
             wrapper.unmount()
           }

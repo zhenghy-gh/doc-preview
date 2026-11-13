@@ -154,7 +154,7 @@ export function classifyError(
   }
 
   // 4. File exceeds the configured input size limit
-  if (containsAny(lower, ['文件超过最大支持大小', 'maximum supported size', 'file size limit'])) {
+  if (containsAny(lower, ['文件超过最大支持大小', 'maximum supported size', 'file size limit', 'file exceeds the 50 mib size limit'])) {
     return {
       category: 'size',
       title: isEN ? 'File exceeds size limit' : '文件超过大小限制',
