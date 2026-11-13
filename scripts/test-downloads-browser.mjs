@@ -149,10 +149,16 @@ try {
   await page.locator('.url-btn').click()
   await page.locator('.doc-preview .document-content').waitFor({ state: 'attached', timeout: 30_000 })
   await page.waitForFunction(() => (
-    document.querySelector('.doc-preview [role="status"]')?.textContent?.includes('doc-101.doc?browser-smoke=1')
+    document.querySelector('.doc-preview [role="status"]')?.textContent?.includes('doc-101.doc')
   ), { timeout: 30_000 })
+  assert.equal(await page.locator('.doc-preview [role="status"]').textContent(), 'Document parsing complete: doc-101.doc')
   const remoteText = await page.locator('.doc-preview .document-content').innerText()
   assert.ok(remoteText.includes(contentMarker), 'URL stream should render the source DOC content')
+  assert.equal(await page.locator('.doc-info .doc-name').textContent(), 'doc-101.doc')
+  const remoteDownloadStarted = page.waitForEvent('download')
+  await page.getByRole('button', { name: 'Download as text file' }).click()
+  const remoteDownload = await remoteDownloadStarted
+  assert.equal(remoteDownload.suggestedFilename(), 'doc-101.txt')
 
   await page.locator('.back-btn').click()
   const templateFile = {

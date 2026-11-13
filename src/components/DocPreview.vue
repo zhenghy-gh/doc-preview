@@ -920,12 +920,36 @@ const loadFromFile = async (file: File) => {
   }
 }
 
+function sanitizeUrlFileName(candidate: string): string {
+  let fileName = candidate
+  try {
+    const decoded = decodeURIComponent(candidate)
+    if (!/[\/\\\u0000-\u001f\u007f]/.test(decoded)) fileName = decoded
+  } catch {
+    // Keep malformed percent escapes as literal text, then remove unsafe characters below.
+  }
+  return fileName.replace(/[\/\\\u0000-\u001f\u007f]/g, '').trim() || 'document.doc'
+}
+
+function getFileNameFromUrl(url: string): string {
+  const fallbackPath = url.split(/[?#]/, 1)[0]
+  const fallbackSegment = fallbackPath.split('/').pop() || ''
+  try {
+    const baseUrl = typeof document !== 'undefined' ? document.baseURI : 'http://localhost/'
+    const pathname = new URL(url, baseUrl).pathname
+    const segment = pathname.slice(pathname.lastIndexOf('/') + 1)
+    return sanitizeUrlFileName(segment || fallbackSegment)
+  } catch {
+    return sanitizeUrlFileName(fallbackSegment)
+  }
+}
+
 const loadFromUrl = async (url: string) => {
   clearDocument(false)
   const controller = new AbortController()
   urlLoadController = controller
   const generation = ++loadGeneration
-  fileName.value = url.split('/').pop() || url
+  fileName.value = getFileNameFromUrl(url)
   fileSize.value = ''
   loading.value = true
   emit('loading', true)

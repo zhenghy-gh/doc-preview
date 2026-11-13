@@ -221,6 +221,70 @@ describe('DocPreview source lifecycle', () => {
     }
   })
 
+  it('uses only the URL pathname for the displayed source filename', async () => {
+    parseBuffer.mockReturnValue(parsedDocument)
+    const responseBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3]))
+        controller.close()
+      },
+    })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      headers: { get: () => '3' },
+      body: responseBody,
+    }))
+    const wrapper = mount(DocPreview, {
+      props: { source: 'https://example.test/docs/sample.doc?token=secret#section' },
+    })
+
+    try {
+      await flushPromises()
+      expect(wrapper.find('.doc-info .doc-name').text()).toBe('sample.doc')
+      expect(wrapper.find('[role="status"]').text()).toContain('sample.doc')
+      expect(wrapper.find('.doc-info .doc-name').text()).not.toContain('token')
+      expect(wrapper.find('.doc-info .doc-name').text()).not.toContain('#')
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('sanitizes fallback filenames for root and malformed URLs', async () => {
+    const pendingFetches: Array<(response: Response) => void> = []
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((resolve) => pendingFetches.push(resolve))))
+    const control = String.fromCharCode(1)
+    const cases = [
+      { url: 'https://example.test/?token=secret#section', fileName: 'document.doc' },
+      { url: 'http://[::1/a' + control + 'evil.doc?token=secret', fileName: 'aevil.doc' },
+      { url: 'https://example.test/files/safe%2Funsafe.doc?token=secret', fileName: 'safe%2Funsafe.doc' },
+      { url: 'https://example.test/files/safe%5Cunsafe.doc?token=secret', fileName: 'safe%5Cunsafe.doc' },
+      { url: 'https://example.test/files/bad%ZZ.doc?token=secret', fileName: 'bad%ZZ.doc' },
+      { url: '/docs/relative.doc?token=secret#section', fileName: 'relative.doc' },
+    ]
+
+    for (const testCase of cases) {
+      const wrapper = mount(DocPreview, { props: { source: testCase.url } })
+      try {
+        await flushPromises()
+        const loadingFileName = wrapper.get('.loading-filename').text()
+        expect(loadingFileName).toBe(testCase.fileName)
+        expect([...loadingFileName].some((character) => {
+          const code = character.charCodeAt(0)
+          return code < 0x20 || code === 0x7f || character === '/' || character === '\\'
+        })).toBe(false)
+        expect(loadingFileName).not.toContain('token')
+        expect(loadingFileName).not.toContain('#')
+
+        await wrapper.setProps({ source: null })
+        await flushPromises()
+        pendingFetches.shift()?.(new Response(null, { status: 404 }))
+        await flushPromises()
+      } finally {
+        wrapper.unmount()
+      }
+    }
+  })
+
   it('clears the rendered document when source becomes null', async () => {
     parseFile.mockResolvedValue(parsedDocument)
     const wrapper = mount(DocPreview, { props: { source: new File(['doc'], 'sample.doc') } })
