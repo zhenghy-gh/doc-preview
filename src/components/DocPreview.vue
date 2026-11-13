@@ -2527,7 +2527,7 @@ function prevMatch() {
 }
 
 const searchStatusLabel = computed(() => {
-  if (searchResults.value.length === 0) return '无匹配'
+  if (searchResults.value.length === 0) return t('search.no.results')
   return `${currentSearchIndex.value + 1} / ${searchResults.value.length}`
 })
 

@@ -221,6 +221,28 @@ describe('DocPreview source lifecycle', () => {
     }
   })
 
+  it('localizes the no-results search status when the interface locale changes', async () => {
+    const originalLocale = currentLocale.value
+    parseFile.mockResolvedValue(parsedDocument)
+    setLocale('en')
+    const wrapper = mount(DocPreview, { props: { source: new File(['doc'], 'search.doc') } })
+
+    try {
+      await flushPromises()
+      await wrapper.get('.toolbar button[aria-label="Search document"]').trigger('click')
+      await wrapper.get('.search-input').setValue('not-a-match')
+      await flushPromises()
+      expect(wrapper.get('.search-status').text()).toBe('No matches found')
+
+      setLocale('zh-CN')
+      await flushPromises()
+      expect(wrapper.get('.search-status').text()).toBe('无匹配结果')
+    } finally {
+      wrapper.unmount()
+      setLocale(originalLocale)
+    }
+  })
+
   it('localizes textbox anchor markers when the interface locale changes', async () => {
     const originalLocale = currentLocale.value
     const parsedWithTextbox = {
