@@ -15,7 +15,7 @@ import { sanitizePreviewHtml } from '../utils/sanitizeHtml'
 import { MAX_DOC_FILE_SIZE, getFileSizeLimitError, readResponseWithLimit } from '../utils/docLimits'
 import { downloadBlob } from '../utils/downloadBlob'
 import { WORD_VERSION_LABELS, type WordVersion } from '../utils/fibParser'
-import { t } from '../utils/locale'
+import { t, tMap } from '../utils/locale'
 // import DocStatsPanel from './DocStatsPanel.vue'
 import ShortcutsPanel from './ShortcutsPanel.vue'
 import LoadingOverlay from './LoadingOverlay.vue'
@@ -3054,21 +3054,21 @@ defineExpose({ reload, getPlainText, focusContent })
       <div class="toolbar">
         <div class="toolbar-left">
           <!-- Zoom -->
-          <button class="toolbar-btn" @click="zoomOut" :disabled="zoomLevel <= MIN_ZOOM" title="缩小" aria-label="缩小">−</button>
-          <button class="toolbar-btn zoom-label" @click="zoomReset" title="重置缩放" aria-label="重置缩放为 100%">{{ zoomLabel }}</button>
-          <button class="toolbar-btn" @click="zoomIn" :disabled="zoomLevel >= MAX_ZOOM" title="放大" aria-label="放大">+</button>
+          <button class="toolbar-btn" @click="zoomOut" :disabled="zoomLevel <= MIN_ZOOM" :title="t('toolbar.zoom.out')" :aria-label="t('toolbar.zoom.out')">−</button>
+          <button class="toolbar-btn zoom-label" @click="zoomReset" :title="t('toolbar.zoom.reset')" :aria-label="t('toolbar.zoom.reset.aria')">{{ zoomLabel }}</button>
+          <button class="toolbar-btn" @click="zoomIn" :disabled="zoomLevel >= MAX_ZOOM" :title="t('toolbar.zoom.in')" :aria-label="t('toolbar.zoom.in')">+</button>
 
           <span class="toolbar-sep" role="separator"></span>
 
           <!-- Search -->
-          <button class="toolbar-btn" @click="toggleSearch" :class="{ active: showSearch }" title="搜索文档" aria-label="搜索文档">
+          <button class="toolbar-btn" @click="toggleSearch" :class="{ active: showSearch }" :title="t('toolbar.search')" :aria-label="t('toolbar.search')">
             🔍
           </button>
 
           <span class="toolbar-sep" role="separator"></span>
 
           <!-- Print -->
-          <button class="toolbar-btn" @click="printDocument" title="打印 / 导出 PDF" aria-label="打印">🖨️</button>
+          <button class="toolbar-btn" @click="printDocument" :title="t('toolbar.print')" :aria-label="t('toolbar.print')">🖨️</button>
 
           <!-- Download text -->
           <button class="toolbar-btn" @click="downloadText" :title="t('toolbar.download.txt')" :aria-label="t('toolbar.download.txt')">📥</button>
@@ -3176,9 +3176,9 @@ defineExpose({ reload, getPlainText, focusContent })
           <span>W</span>
         </label>
         <span class="search-status">{{ searchStatusLabel }}</span>
-        <button class="toolbar-btn" @click="prevMatch" :disabled="searchResults.length === 0" :title="t('search.placeholder') + ' ▲'" aria-label="前一个匹配">▲</button>
-        <button class="toolbar-btn" @click="nextMatch" :disabled="searchResults.length === 0" :title="t('search.placeholder') + ' ▼'" aria-label="后一个匹配">▼</button>
-        <button class="toolbar-btn" @click="toggleSearch" :title="t('toolbar.search')" aria-label="关闭搜索">✕</button>
+        <button class="toolbar-btn" @click="prevMatch" :disabled="searchResults.length === 0" :title="tMap('shortcuts.items', 'prevMatch') + ' ▲'" :aria-label="tMap('shortcuts.items', 'prevMatch')">▲</button>
+        <button class="toolbar-btn" @click="nextMatch" :disabled="searchResults.length === 0" :title="tMap('shortcuts.items', 'nextMatch') + ' ▼'" :aria-label="tMap('shortcuts.items', 'nextMatch')">▼</button>
+        <button class="toolbar-btn" @click="toggleSearch" :title="tMap('shortcuts.items', 'closeSearch')" :aria-label="tMap('shortcuts.items', 'closeSearch')">✕</button>
       </div>
 
       <!-- Document info -->

@@ -136,10 +136,21 @@ try {
     document.querySelector('.doc-preview [role="status"]')?.textContent?.includes('doc-101.doc')
   ))
 
+  for (const name of ['Zoom out', 'Reset zoom to 100%', 'Zoom in', 'Search document', 'Print / Export PDF']) {
+    assert.equal(await page.getByRole('button', { name }).count(), 1, 'English accessible name: ' + name)
+  }
+  await page.locator('.lang-switch').click()
+  await page.waitForFunction(() => document.documentElement.lang === 'zh-CN')
+  for (const name of ['缩小', '重置缩放为 100%', '放大', '搜索文档', '打印 / 导出 PDF']) {
+    assert.equal(await page.getByRole('button', { name }).count(), 1, 'Chinese accessible name: ' + name)
+  }
+  await page.locator('.lang-switch').click()
+  await page.waitForFunction(() => document.documentElement.lang === 'en')
+
   if (forceNoHas) {
     const copiedRuleCount = await forceNoHasFallback(page)
     assert.ok(copiedRuleCount > 0, 'Built CSS should contain the unsupported-:has fallback')
-    await page.locator('.doc-preview button[aria-label="搜索文档"]').click()
+    await page.locator('.doc-preview button[aria-label="Search document"]').click()
     const option = page.locator('.search-option').first()
     const checkbox = option.locator('input[type="checkbox"]')
     assert.notEqual(await checkbox.evaluate((input) => getComputedStyle(input).display), 'none')
@@ -148,7 +159,7 @@ try {
     assert.equal(checkedStyle.outlineStyle, 'solid')
     assert.ok(parseFloat(checkedStyle.outlineWidth) >= 2)
     await checkbox.uncheck()
-    await page.locator('.search-bar button[aria-label="关闭搜索"]').click()
+    await page.locator('.search-bar button[aria-label="Close search"]').click()
 
     const mobileContext = await browser.newContext({
       hasTouch: true,
@@ -163,7 +174,7 @@ try {
       await mobilePage.locator('.file-input').setInputFiles('docs/doc-101.doc')
       await mobilePage.locator('.doc-preview .document-content').waitFor({ state: 'attached', timeout: 15_000 })
       assert.ok(await forceNoHasFallback(mobilePage) > 0)
-      await mobilePage.locator('.doc-preview button[aria-label="搜索文档"]').click()
+      await mobilePage.locator('.doc-preview button[aria-label="Search document"]').click()
       const mobileOption = mobilePage.locator('.search-option').first()
       const mobileBounds = await mobileOption.boundingBox()
       assert.ok(mobileBounds && mobileBounds.height >= 44, 'Legacy search option should meet 44px coarse-pointer target')
@@ -172,8 +183,11 @@ try {
     }
   }
 
-  await page.locator('.doc-preview button[aria-label="搜索文档"]').click()
+  await page.locator('.doc-preview button[aria-label="Search document"]').click()
   await page.waitForFunction(() => document.activeElement?.classList.contains('search-input'))
+  for (const name of ['Previous match', 'Next match', 'Close search']) {
+    assert.equal(await page.getByRole('button', { name }).count(), 1, 'English search accessible name: ' + name)
+  }
   const caseOption = page.locator('.search-option').nth(0)
   const caseCheckbox = caseOption.locator('input[type="checkbox"]')
   await page.keyboard.press(tabShortcut)
@@ -190,7 +204,7 @@ try {
   assert.equal(await wordOption.evaluate((label) => getComputedStyle(label).outlineStyle), 'solid')
   await page.keyboard.press('Space')
   assert.equal(await wordCheckbox.isChecked(), true, 'Space should toggle the whole-word search option')
-  await page.locator('.search-bar button[aria-label="关闭搜索"]').click()
+  await page.locator('.search-bar button[aria-label="Close search"]').click()
 
   const visibleText = await page.locator('.doc-preview .document-content').innerText()
   const contentMarker = visibleText.split(/\s+/).find((word) => word.length >= 4)
