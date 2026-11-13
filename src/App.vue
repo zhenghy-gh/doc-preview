@@ -368,8 +368,22 @@ watch(darkMode, (val) => {
   box-shadow: 0 6px 20px rgba(102, 126, 234, 0.5);
 }
 
+.upload-btn:focus-within {
+  outline: 3px solid #111;
+  outline-offset: 3px;
+}
+
 .file-input {
-  display: none;
+  position: absolute;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  overflow: hidden;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  white-space: nowrap;
 }
 
 .url-section {
