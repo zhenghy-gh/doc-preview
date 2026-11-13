@@ -10,6 +10,10 @@ const previewSource = ref<File | string | null>(null)
 const errorMessage = ref('')
 const isDragOver = ref(false)
 
+watch(currentLocale, () => {
+  document.title = t('app.title')
+}, { immediate: true })
+
 const isValidFile = (file: File): boolean => {
   const ext = file.name.toLowerCase()
   return ext.endsWith('.doc') || ext.endsWith('.dot')

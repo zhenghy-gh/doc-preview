@@ -65,6 +65,11 @@ try {
     }
   }, forceChunkFallback)
   await page.goto(previewBaseUrl, { waitUntil: 'networkidle' })
+  assert.equal(await page.title(), 'DOC File Online Preview')
+  await page.locator('.lang-switch').click()
+  await page.waitForFunction(() => document.title === 'DOC文件在线预览')
+  await page.locator('.lang-switch').click()
+  await page.waitForFunction(() => document.title === 'DOC File Online Preview')
   assert.equal(await page.locator('meta[name="text-scale"]').getAttribute('content'), 'scale')
   const resizableBuffersAvailable = await page.evaluate(() => (
     typeof ArrayBuffer.prototype.resize === 'function'

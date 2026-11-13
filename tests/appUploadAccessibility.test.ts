@@ -11,6 +11,25 @@ describe('App upload accessibility', () => {
     vi.restoreAllMocks()
   })
 
+  it('synchronizes the browser title when the UI locale changes', async () => {
+    const originalLocale = currentLocale.value
+    const originalTitle = document.title
+    const wrapper = mount(App)
+    try {
+      setLocale('zh-CN')
+      await flushPromises()
+      expect(document.title).toBe('DOC文件在线预览')
+
+      setLocale('en')
+      await flushPromises()
+      expect(document.title).toBe('DOC File Online Preview')
+    } finally {
+      wrapper.unmount()
+      setLocale(originalLocale)
+      document.title = originalTitle
+    }
+  })
+
   it('labels the URL input in the active locale and keeps its example hint concise', () => {
     const originalLocale = currentLocale.value
     try {
