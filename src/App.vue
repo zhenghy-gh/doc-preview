@@ -183,6 +183,8 @@ watch(darkMode, (val) => {
               <input
                 id="source-url"
                 type="text"
+                inputmode="url"
+                enterkeyhint="go"
                 v-model="urlInput"
                 :placeholder="t('app.upload.url.placeholder')"
                 class="url-input"
