@@ -415,16 +415,19 @@ npm run test:browser:webkit:fallback
 
 smoke 会在 Chromium、Firefox 和 WebKit 中用键盘选择样例 DOC，并将有效 DOC 补零至 1 MiB+1 后经 URL 加载，以验证 Worker 路径；同时检查 TXT、HTML、Markdown 下载事件、文件名和内容。fallback 模式会在页面启动前禁用 `ArrayBuffer.resize`，覆盖不支持 Resizable ArrayBuffer 的浏览器路径。macOS WebKit smoke 使用 Safari 的 Option-Tab 完整键盘导航；其他引擎/平台使用 Tab。
 
-### UMD Worker smoke test
+### Package Worker smoke test
 
-在 `npm run build:lib` 和 `npm run verify:package` 后运行：
+在 `npm run build:lib` 和 `npm run verify:package` 后安装 Chromium 并运行：
 
 ```bash
+# macOS / Windows
 npx playwright install chromium
-npm run test:umd-worker
+# Ubuntu / Debian Linux
+npx playwright install --with-deps chromium
+npm run test:package-workers
 ```
 
-该检查会在 Chromium 中加载打包后的 UMD 文件和 Worker chunk，并通过公开 `parseWithWorker` API 解析样例文档。
+该检查会在 Chromium 中分别作为 UMD 与 ESM 消费者加载打包入口和 Worker chunk，并通过公开 `parseWithWorker` API 解析样例文档。
 
 ### 类型检查
 
