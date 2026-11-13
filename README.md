@@ -417,17 +417,19 @@ smoke 会在 Chromium、Firefox 和 WebKit 中用键盘选择样例 DOC，并将
 
 ### Package Worker smoke test
 
-在 `npm run build:lib` 和 `npm run verify:package` 后安装 Chromium 并运行：
+在 `npm run build:lib` 和 `npm run verify:package` 后安装所需浏览器并运行：
 
 ```bash
 # macOS / Windows
-npx playwright install chromium
+npx playwright install chromium firefox webkit
 # Ubuntu / Debian Linux
-npx playwright install --with-deps chromium
+npx playwright install --with-deps chromium firefox webkit
 npm run test:package-workers
+npm run test:package-workers:firefox
+npm run test:package-workers:webkit
 ```
 
-该检查会在 Chromium 中从嵌套的 `/packages/doc-preview/` 路径分别作为 UMD 与 ESM 消费者加载打包入口和 Worker chunk，验证子路径资源解析，并通过公开 `parseWithWorker` API 解析样例文档。
+这些检查会在 Chromium、Firefox 和 WebKit 中分别作为 UMD 与 ESM 消费者，从嵌套的 `/packages/doc-preview/` 路径加载打包入口和 Worker chunk，验证子路径资源解析，并通过公开 `parseWithWorker` API 解析样例文档。
 
 ### 类型检查
 

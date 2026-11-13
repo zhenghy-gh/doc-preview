@@ -52,8 +52,14 @@ jobs:
       - name: Install browsers for cross-engine smoke tests
         run: npx playwright install --with-deps chromium firefox webkit
 
-      - name: Test packaged ESM and UMD Workers
+      - name: Test packaged ESM and UMD Workers in Chromium
         run: npm run test:package-workers
+
+      - name: Test packaged ESM and UMD Workers in Firefox
+        run: npm run test:package-workers:firefox
+
+      - name: Test packaged ESM and UMD Workers in WebKit
+        run: npm run test:package-workers:webkit
 
       - name: Build site
         run: npm run build

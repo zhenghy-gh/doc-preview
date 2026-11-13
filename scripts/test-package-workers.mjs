@@ -3,9 +3,13 @@ import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { readFile } from 'node:fs/promises'
 import { extname, resolve, sep } from 'node:path'
-import { chromium } from 'playwright'
+import { chromium, firefox, webkit } from 'playwright'
 
 const root = resolve('dist')
+const browserName = process.argv.find((argument) => argument.startsWith('--browser='))?.slice('--browser='.length) ?? 'chromium'
+const browserTypes = { chromium, firefox, webkit }
+const browserType = browserTypes[browserName]
+if (!browserType) throw new Error('Unsupported browser: ' + browserName)
 const packageBaseUrl = '/packages/doc-preview/'
 const vueGlobalBundle = await readFile('node_modules/vue/dist/vue.global.prod.js', 'utf8')
 const vueEsmBundle = await readFile('node_modules/vue/dist/vue.esm-browser.prod.js', 'utf8')
@@ -71,7 +75,7 @@ const server = createServer(async (request, response) => {
 await new Promise((resolveListen) => server.listen(0, '127.0.0.1', resolveListen))
 let browser
 try {
-  browser = await chromium.launch({ headless: true })
+  browser = await browserType.launch({ headless: true })
   const origin = 'http://127.0.0.1:' + server.address().port
   async function verifyEntry(pathname, label) {
     const page = await browser.newPage()
@@ -90,7 +94,7 @@ try {
       const workerRequest = requests.slice(requestStart).find((url) => workerAssetPattern.test(url))
       assert.ok(workerRequest, label + ' should request the emitted Worker chunk')
       assert.equal(workerAssetStatuses.get(workerRequest), 200, label + ' Worker chunk should be served successfully')
-      console.log('Verified ' + label + ' Worker chunk: ' + workerRequest)
+      console.log('Verified ' + browserName + ' ' + label + ' Worker chunk: ' + workerRequest)
     } finally {
       await page.close()
     }

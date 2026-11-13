@@ -32,7 +32,9 @@
     "test:browser:firefox:fallback": "node scripts/test-downloads-browser.mjs --browser=firefox --force-chunk-fallback",
     "test:browser:webkit": "node scripts/test-downloads-browser.mjs --browser=webkit",
     "test:browser:webkit:fallback": "node scripts/test-downloads-browser.mjs --browser=webkit --force-chunk-fallback",
-    "test:package-workers": "node scripts/test-package-workers.mjs"
+    "test:package-workers": "node scripts/test-package-workers.mjs",
+    "test:package-workers:firefox": "node scripts/test-package-workers.mjs --browser=firefox",
+    "test:package-workers:webkit": "node scripts/test-package-workers.mjs --browser=webkit"
   },
   "keywords": [
     "doc",
