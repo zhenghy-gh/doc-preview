@@ -65,6 +65,7 @@ try {
     }
   }, forceChunkFallback)
   await page.goto(previewBaseUrl, { waitUntil: 'networkidle' })
+  assert.equal(await page.locator('meta[name="text-scale"]').getAttribute('content'), 'scale')
   const resizableBuffersAvailable = await page.evaluate(() => (
     typeof ArrayBuffer.prototype.resize === 'function'
   ))
@@ -85,9 +86,7 @@ try {
     input.addEventListener('change', () => { window.fileChangeCount++ })
   })
   const invalidFile = { name: 'notes.pdf', mimeType: 'application/pdf', buffer: Buffer.from('invalid') }
-  const firstInvalidChooser = page.waitForEvent('filechooser')
-  await page.keyboard.press('Enter')
-  await (await firstInvalidChooser).setFiles(invalidFile)
+  await fileInput.setInputFiles(invalidFile)
   await page.locator('.error-banner').waitFor({ state: 'visible' })
   assert.equal(await fileInput.evaluate((input) => input.value), '')
 
