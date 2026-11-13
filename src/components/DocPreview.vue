@@ -4363,7 +4363,27 @@ defineExpose({ reload, getPlainText, focusContent })
 }
 
 .search-option input {
-  display: none;
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.search-option:has(input:focus-visible) {
+  outline: 2px solid #2196f3;
+  outline-offset: 2px;
+}
+
+@media (pointer: coarse) {
+  .search-option {
+    min-block-size: 44px;
+  }
 }
 
 .search-option:has(input:checked) {
@@ -4376,6 +4396,28 @@ defineExpose({ reload, getPlainText, focusContent })
   background: #1e3a5f;
   border-color: #64b5f6;
   color: #90caf9;
+}
+
+@supports not selector(:has(*)) {
+  .search-option input {
+    position: static;
+    display: inline-block;
+    inline-size: 16px;
+    block-size: 16px;
+    margin: 0 4px 0 0;
+    padding: initial;
+    overflow: visible;
+    clip: auto;
+    clip-path: none;
+    white-space: normal;
+    border: initial;
+    accent-color: #2196f3;
+  }
+
+  .search-option input:checked {
+    outline: 2px solid #2196f3;
+    outline-offset: 2px;
+  }
 }
 
 /* ==================== Document info ==================== */

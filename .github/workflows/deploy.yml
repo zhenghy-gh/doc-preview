@@ -70,6 +70,9 @@ jobs:
       - name: Test browser downloads with chunk fallback
         run: npm run test:browser:fallback
 
+      - name: Test legacy :has fallback
+        run: npm run test:browser:no-has
+
       - name: Test Firefox downloads with resizable buffers
         run: npm run test:browser:firefox
 

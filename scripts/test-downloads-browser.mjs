@@ -53,11 +53,39 @@ async function waitForPreview() {
   throw new Error('Vite preview did not become ready within 30 seconds')
 }
 
+async function forceNoHasFallback(page) {
+  return page.evaluate(() => {
+    const fallbackRules = []
+    const collectFallbackRules = (rules) => {
+      for (const rule of rules) {
+        if (rule instanceof CSSSupportsRule && rule.conditionText.includes('not selector(:has(*))')) {
+          fallbackRules.push(...Array.from(rule.cssRules, (nestedRule) => nestedRule.cssText))
+        } else if (rule.cssRules) {
+          collectFallbackRules(rule.cssRules)
+        }
+      }
+    }
+    for (const sheet of document.styleSheets) {
+      try {
+        collectFallbackRules(sheet.cssRules)
+      } catch {
+        // Ignore stylesheets the browser does not expose to this page.
+      }
+    }
+    if (fallbackRules.length === 0) return 0
+    const style = document.createElement('style')
+    style.textContent = fallbackRules.join('\n')
+    document.head.append(style)
+    return fallbackRules.length
+  })
+}
+
 try {
   await waitForPreview()
   browser = await browserType.launch({ headless: true })
   const page = await browser.newPage({ acceptDownloads: true })
   const forceChunkFallback = process.argv.includes('--force-chunk-fallback')
+  const forceNoHas = process.argv.includes('--force-no-has')
   await page.addInitScript((disableResizableBuffers) => {
     localStorage.setItem('locale', 'en')
     if (disableResizableBuffers) {
@@ -109,6 +137,62 @@ try {
   await page.waitForFunction(() => (
     document.querySelector('.doc-preview [role="status"]')?.textContent?.includes('doc-101.doc')
   ))
+
+  if (forceNoHas) {
+    const copiedRuleCount = await forceNoHasFallback(page)
+    assert.ok(copiedRuleCount > 0, 'Built CSS should contain the unsupported-:has fallback')
+    await page.locator('.doc-preview button[aria-label="搜索文档"]').click()
+    const option = page.locator('.search-option').first()
+    const checkbox = option.locator('input[type="checkbox"]')
+    assert.notEqual(await checkbox.evaluate((input) => getComputedStyle(input).display), 'none')
+    await checkbox.check()
+    const checkedStyle = await checkbox.evaluate((input) => getComputedStyle(input))
+    assert.equal(checkedStyle.outlineStyle, 'solid')
+    assert.ok(parseFloat(checkedStyle.outlineWidth) >= 2)
+    await checkbox.uncheck()
+    await page.locator('.search-bar button[aria-label="关闭搜索"]').click()
+
+    const mobileContext = await browser.newContext({
+      hasTouch: true,
+      isMobile: true,
+      viewport: { width: 390, height: 844 },
+    })
+    try {
+      const mobilePage = await mobileContext.newPage()
+      await mobilePage.addInitScript(() => localStorage.setItem('locale', 'en'))
+      await mobilePage.goto(previewBaseUrl, { waitUntil: 'networkidle' })
+      assert.equal(await mobilePage.evaluate(() => matchMedia('(pointer: coarse)').matches), true)
+      await mobilePage.locator('.file-input').setInputFiles('docs/doc-101.doc')
+      await mobilePage.locator('.doc-preview .document-content').waitFor({ state: 'attached', timeout: 15_000 })
+      assert.ok(await forceNoHasFallback(mobilePage) > 0)
+      await mobilePage.locator('.doc-preview button[aria-label="搜索文档"]').click()
+      const mobileOption = mobilePage.locator('.search-option').first()
+      const mobileBounds = await mobileOption.boundingBox()
+      assert.ok(mobileBounds && mobileBounds.height >= 44, 'Legacy search option should meet 44px coarse-pointer target')
+    } finally {
+      await mobileContext.close()
+    }
+  }
+
+  await page.locator('.doc-preview button[aria-label="搜索文档"]').click()
+  await page.waitForFunction(() => document.activeElement?.classList.contains('search-input'))
+  const caseOption = page.locator('.search-option').nth(0)
+  const caseCheckbox = caseOption.locator('input[type="checkbox"]')
+  await page.keyboard.press(tabShortcut)
+  assert.equal(await caseCheckbox.evaluate((input) => input === document.activeElement), true)
+  assert.notEqual(await caseCheckbox.evaluate((input) => getComputedStyle(input).display), 'none')
+  assert.equal(await caseOption.evaluate((label) => getComputedStyle(label).outlineStyle), 'solid')
+  await page.keyboard.press('Space')
+  assert.equal(await caseCheckbox.isChecked(), true, 'Space should toggle the case-sensitive search option')
+
+  const wordOption = page.locator('.search-option').nth(1)
+  const wordCheckbox = wordOption.locator('input[type="checkbox"]')
+  await page.keyboard.press(tabShortcut)
+  assert.equal(await wordCheckbox.evaluate((input) => input === document.activeElement), true)
+  assert.equal(await wordOption.evaluate((label) => getComputedStyle(label).outlineStyle), 'solid')
+  await page.keyboard.press('Space')
+  assert.equal(await wordCheckbox.isChecked(), true, 'Space should toggle the whole-word search option')
+  await page.locator('.search-bar button[aria-label="关闭搜索"]').click()
 
   const visibleText = await page.locator('.doc-preview .document-content').innerText()
   const contentMarker = visibleText.split(/\s+/).find((word) => word.length >= 4)
