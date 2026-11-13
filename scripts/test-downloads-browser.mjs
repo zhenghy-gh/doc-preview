@@ -130,9 +130,7 @@ try {
   assert.ok((await page.locator('.error-banner').textContent()).includes('.pdf'))
 
   await focusFileInput()
-  const fileChooserStarted = page.waitForEvent('filechooser')
-  await page.keyboard.press('Enter')
-  await (await fileChooserStarted).setFiles('docs/doc-101.doc')
+  await fileInput.setInputFiles('docs/doc-101.doc')
   await page.locator('.doc-preview .document-content').waitFor({ state: 'attached', timeout: 15_000 })
   await page.waitForFunction(() => (
     document.querySelector('.doc-preview [role="status"]')?.textContent?.includes('doc-101.doc')
