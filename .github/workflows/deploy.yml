@@ -47,10 +47,10 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-chromium-firefox-webkit
 
-      - name: Install Chromium for package smoke tests
-        run: npx playwright install --with-deps chromium
+      - name: Install browsers for cross-engine smoke tests
+        run: npx playwright install --with-deps chromium firefox webkit
 
       - name: Test packaged UMD Worker
         run: npm run test:umd-worker
@@ -63,6 +63,18 @@ jobs:
 
       - name: Test browser downloads with chunk fallback
         run: npm run test:browser:fallback
+
+      - name: Test Firefox downloads with resizable buffers
+        run: npm run test:browser:firefox
+
+      - name: Test Firefox downloads with chunk fallback
+        run: npm run test:browser:firefox:fallback
+
+      - name: Test WebKit downloads with resizable buffers
+        run: npm run test:browser:webkit
+
+      - name: Test WebKit downloads with chunk fallback
+        run: npm run test:browser:webkit:fallback
 
       - name: Setup Pages
         uses: actions/configure-pages@v6

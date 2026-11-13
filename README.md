@@ -397,16 +397,23 @@ npm run test:watch
 
 ### 浏览器下载 smoke test
 
-需要先构建预览站点并安装 Playwright Chromium：
+需要先构建预览站点并安装 Playwright Chromium、Firefox 和 WebKit：
 
 ```bash
 npm run build
-npx playwright install chromium
+# macOS / Windows
+npx playwright install chromium firefox webkit
+# Ubuntu / Debian Linux（同时安装系统依赖）
+npx playwright install --with-deps chromium firefox webkit
 npm run test:browser
 npm run test:browser:fallback
+npm run test:browser:firefox
+npm run test:browser:firefox:fallback
+npm run test:browser:webkit
+npm run test:browser:webkit:fallback
 ```
 
-两种模式都会在 Chromium 中用键盘选择样例 DOC，并将有效 DOC 补零至 1 MiB+1 后经 URL 加载，以验证 Worker 路径；同时检查 TXT、HTML、Markdown 下载事件、文件名和内容。fallback 模式会在页面启动前禁用 `ArrayBuffer.resize`，覆盖不支持 Resizable ArrayBuffer 的浏览器路径。
+smoke 会在 Chromium、Firefox 和 WebKit 中用键盘选择样例 DOC，并将有效 DOC 补零至 1 MiB+1 后经 URL 加载，以验证 Worker 路径；同时检查 TXT、HTML、Markdown 下载事件、文件名和内容。fallback 模式会在页面启动前禁用 `ArrayBuffer.resize`，覆盖不支持 Resizable ArrayBuffer 的浏览器路径。macOS WebKit smoke 使用 Safari 的 Option-Tab 完整键盘导航；其他引擎/平台使用 Tab。
 
 ### UMD Worker smoke test
 

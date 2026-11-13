@@ -3,9 +3,13 @@ import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { access, readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
-import { chromium } from 'playwright'
+import { chromium, firefox, webkit } from 'playwright'
 
 const previewBaseUrl = 'http://127.0.0.1:4173/doc-preview/'
+const browserName = process.argv.find((argument) => argument.startsWith('--browser='))?.slice('--browser='.length) ?? 'chromium'
+const browserTypes = { chromium, firefox, webkit }
+const browserType = browserTypes[browserName]
+if (!browserType) throw new Error('Unsupported browser: ' + browserName)
 try {
   await access(new URL('../dist/index.html', import.meta.url))
 } catch {
@@ -16,8 +20,12 @@ const previewServer = spawn(process.execPath, [viteCli, 'preview', '--host', '12
   stdio: 'inherit',
 })
 let previewServerError
+let previewServerClosed = false
 previewServer.on('error', (error) => {
   previewServerError = error
+})
+previewServer.on('close', () => {
+  previewServerClosed = true
 })
 let browser
 
@@ -47,7 +55,7 @@ async function waitForPreview() {
 
 try {
   await waitForPreview()
-  browser = await chromium.launch({ headless: true })
+  browser = await browserType.launch({ headless: true })
   const page = await browser.newPage({ acceptDownloads: true })
   const forceChunkFallback = process.argv.includes('--force-chunk-fallback')
   await page.addInitScript((disableResizableBuffers) => {
@@ -61,10 +69,12 @@ try {
     typeof ArrayBuffer.prototype.resize === 'function'
   ))
   assert.equal(resizableBuffersAvailable, !forceChunkFallback, 'Browser mode should match the requested buffer path')
-  await page.keyboard.press('Tab')
-  await page.keyboard.press('Tab')
-  await page.keyboard.press('Tab')
   const fileInput = page.locator('.file-input')
+  const tabShortcut = process.platform === 'darwin' && browserName === 'webkit' ? 'Alt+Tab' : 'Tab'
+  for (let tabCount = 0; tabCount < 12; tabCount++) {
+    if (await fileInput.evaluate((input) => input === document.activeElement)) break
+    await page.keyboard.press(tabShortcut)
+  }
   assert.equal(await fileInput.evaluate((input) => input === document.activeElement), true)
   assert.notEqual(await page.locator('.upload-btn').evaluate((label) => getComputedStyle(label).outlineStyle), 'none')
   const fileChooserStarted = page.waitForEvent('filechooser')
@@ -120,15 +130,15 @@ try {
   assert.ok(remoteText.includes(contentMarker), 'URL stream should render the source DOC content')
 
   const bufferMode = forceChunkFallback ? 'chunk fallback' : 'resizable buffer'
-  console.log('Verified keyboard upload, >1 MiB URL/Worker parsing (' + bufferMode + '), and TXT, HTML, and Markdown downloads.')
+  console.log('Verified ' + browserName + ' keyboard upload, >1 MiB URL/Worker parsing (' + bufferMode + '), and TXT, HTML, and Markdown downloads.')
 } finally {
   try {
     await browser?.close()
   } finally {
-    if (previewServer.exitCode === null && previewServer.signalCode === null) {
-      const serverExited = once(previewServer, 'exit')
+    if (!previewServerClosed) {
+      const serverClosed = once(previewServer, 'close')
       previewServer.kill('SIGTERM')
-      await serverExited
+      await serverClosed
     }
   }
 }

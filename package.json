@@ -28,6 +28,10 @@
     "test:coverage": "vitest run --coverage",
     "test:browser": "node scripts/test-downloads-browser.mjs",
     "test:browser:fallback": "node scripts/test-downloads-browser.mjs --force-chunk-fallback",
+    "test:browser:firefox": "node scripts/test-downloads-browser.mjs --browser=firefox",
+    "test:browser:firefox:fallback": "node scripts/test-downloads-browser.mjs --browser=firefox --force-chunk-fallback",
+    "test:browser:webkit": "node scripts/test-downloads-browser.mjs --browser=webkit",
+    "test:browser:webkit:fallback": "node scripts/test-downloads-browser.mjs --browser=webkit --force-chunk-fallback",
     "test:umd-worker": "node scripts/test-umd-worker.mjs"
   },
   "keywords": [
