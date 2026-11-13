@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { isDocFileTooLarge, MAX_DOC_FILE_SIZE, readResponseWithLimit } from '../src/utils/docLimits'
 
 function makeResponse(body: ReadableStream<Uint8Array>, headers = new Headers()): Response {
@@ -101,6 +101,55 @@ describe('readResponseWithLimit', () => {
     const response = makeResponse(body, new Headers({ 'content-length': '3' }))
     const buffer = await readResponseWithLimit(response, 3)
     expect(Array.from(new Uint8Array(buffer))).toEqual([1, 2, 3])
+  })
+
+  it.skipIf(typeof (ArrayBuffer.prototype as ArrayBuffer & { resize?: unknown }).resize !== 'function')(
+    'grows a resizable response buffer in place',
+    async () => {
+      const prototype = ArrayBuffer.prototype as ArrayBuffer & { resize: (byteLength: number) => void }
+      const resize = vi.spyOn(prototype, 'resize')
+      try {
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new Uint8Array([1, 2, 3]))
+            controller.enqueue(new Uint8Array([4, 5, 6, 7, 8]))
+            controller.close()
+          },
+        })
+        const response = makeResponse(body, new Headers({ 'content-length': '3' }))
+
+        const buffer = await readResponseWithLimit(response, 10)
+        expect(Array.from(new Uint8Array(buffer))).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
+        expect(resize).toHaveBeenCalled()
+      } finally {
+        resize.mockRestore()
+      }
+    },
+  )
+
+  it('uses the chunk fallback when resizable buffers are unavailable', async () => {
+    const resizeDescriptor = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, 'resize')
+    Object.defineProperty(ArrayBuffer.prototype, 'resize', {
+      configurable: true,
+      value: undefined,
+    })
+    try {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1, 2]))
+          controller.enqueue(new Uint8Array([3, 4]))
+          controller.enqueue(new Uint8Array([5]))
+          controller.close()
+        },
+      })
+      const response = makeResponse(body, new Headers({ 'content-length': '3' }))
+
+      const buffer = await readResponseWithLimit(response, 10)
+      expect(Array.from(new Uint8Array(buffer))).toEqual([1, 2, 3, 4, 5])
+    } finally {
+      if (resizeDescriptor) Object.defineProperty(ArrayBuffer.prototype, 'resize', resizeDescriptor)
+      else Reflect.deleteProperty(ArrayBuffer.prototype, 'resize')
+    }
   })
 
   it('preserves buffered bytes when Content-Length understates a valid body', async () => {
