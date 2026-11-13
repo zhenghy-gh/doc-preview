@@ -78,10 +78,10 @@ try {
   const fileInput = page.locator('.file-input')
   const tabShortcut = process.platform === 'darwin' && browserName === 'webkit' ? 'Alt+Tab' : 'Tab'
   async function focusFileInput() {
-    for (let tabCount = 0; tabCount < 12; tabCount++) {
-      if (await fileInput.evaluate((input) => input === document.activeElement)) return
-      await page.keyboard.press(tabShortcut)
-    }
+    const languageButton = page.locator('.lang-switch')
+    await languageButton.focus()
+    assert.equal(await languageButton.evaluate((button) => button === document.activeElement), true)
+    await page.keyboard.press(tabShortcut)
     assert.equal(await fileInput.evaluate((input) => input === document.activeElement), true)
   }
   await focusFileInput()
