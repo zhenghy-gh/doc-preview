@@ -65,6 +65,7 @@ const zh: Record<string, TransValue> = {
   'error.render': ({ msg }) => `❌ 渲染文档时发生错误\n\n${msg}`,
   'error.parse.fail': '解析失败',
   'error.parse.unknown': '未知错误',
+  'error.parse.empty': '⚠️ 文档内容为空或无法提取文本\n\n可能原因：\n• 文件格式不受支持\n• 文件已损坏\n• 文档内容为空',
   'error.load.url': ({ msg }) => `❌ 无法从地址加载文件\n\n${msg}\n\n可能原因：\n• 地址不可达或已失效\n• 跨域限制（CORS）\n• 服务器返回了错误状态码`,
   'error.load.fail': ({ msg }) => `❌ 加载失败\n\n${msg}`,
   'error.retry': '重试',
@@ -110,6 +111,7 @@ const zh: Record<string, TransValue> = {
   'doc.status.ok': '✓ 解析成功',
   'doc.status.announcement': '文档解析完成',
   'doc.status.empty': '文档内容为空',
+  'doc.pageBreak': '分页',
 
   // Outline
   'outline.header': '文档大纲',
@@ -441,6 +443,7 @@ const en: Record<string, TransValue> = {
   'error.render': ({ msg }) => `❌ Error rendering document\n\n${msg}`,
   'error.parse.fail': 'Parse failed',
   'error.parse.unknown': 'Unknown error',
+  'error.parse.empty': '⚠️ Document is empty or no text could be extracted\n\nPossible causes:\n• Unsupported file format\n• The file is corrupted\n• The document contains no content',
   'error.load.url': ({ msg }) => `❌ Cannot load from URL\n\n${msg}\n\nPossible causes:\n• URL unreachable or expired\n• CORS restriction\n• Server returned error status`,
   'error.load.fail': ({ msg }) => `❌ Load failed\n\n${msg}`,
   'error.retry': 'Retry',
@@ -486,6 +489,7 @@ const en: Record<string, TransValue> = {
   'doc.status.ok': '✓ Parse succeeded',
   'doc.status.announcement': 'Document parsing complete',
   'doc.status.empty': 'Document content is empty',
+  'doc.pageBreak': 'Page break',
 
   // Outline
   'outline.header': 'Document Outline',

@@ -738,7 +738,7 @@ function formatStoryText(text: string): string {
     const CELL_MARK = '\u0007'
     const escaped = escapeHtml(line)
       .replace(new RegExp(SOFT_BR, 'g'), '<br>')
-      .replace(new RegExp(PAGE_BR, 'g'), '<span style="display:inline-block;padding:0 4px;color:#999;font-size:0.85em">[分页]</span>')
+      .replace(new RegExp(PAGE_BR, 'g'), '<span class="page-break-label" style="display:inline-block;padding:0 4px;color:#999;font-size:0.85em">' + escapeHtml(t('doc.pageBreak')) + '</span>')
       .replace(new RegExp(CELL_MARK, 'g'), '<span style="display:inline-block;padding:0 4px;color:#999;font-size:0.85em">│</span>')
     htmlParts.push(`<p style="margin:0 0 6px 0">${escaped}</p>`)
   }
@@ -1154,7 +1154,7 @@ const renderResult = (result: ParserOutput) => {
     loadWebFonts()
     documentLoaded.value = true
   } else {
-    error.value = '⚠️ 文档内容为空或无法提取文本\n\n可能原因：\n• 文件格式不受支持\n• 文件已损坏\n• 文档内容为空'
+    error.value = t('error.parse.empty')
   }
 }
 
@@ -1926,8 +1926,12 @@ function handleVirtualScroll() {
 let globalChartIdx = 0
 let globalPicIdx = 0
 
+function renderPageBreakHtml(): string {
+  return '<div style="page-break-before: always; break-before: page; border-top: 2px dashed var(--border); margin: 24px 0 16px 0; position: relative;"><span class="page-break-label" style="position: absolute; top: -12px; left: 50%; transform: translateX(-50%); background: var(--bg); padding: 0 8px; font-size: 12px; color: var(--muted);">' + escapeHtml(t('doc.pageBreak')) + '</span></div>'
+}
+
 const formatFormattedTextToHtml = (paragraphs: ParaWithList[], hyperlinks?: HyperlinkRange[], revisions?: RevisionMark[]): string[] => {
-  if (!paragraphs || paragraphs.length === 0) return ['<p>文档内容为空</p>']
+  if (!paragraphs || paragraphs.length === 0) return [`<p>${escapeHtml(t('doc.status.empty'))}</p>`]
   // Reset global counters for this document rendering pass
   globalChartIdx = 0
   globalPicIdx = 0
@@ -2309,7 +2313,7 @@ const formatTextWithCharacterStyles = (
 
   const hasPageBreak = paraFormat.pageBreakBefore
   const pageBreakHtml = hasPageBreak
-    ? '<div style="page-break-before: always; break-before: page; border-top: 2px dashed var(--border); margin: 24px 0 16px 0; position: relative;"><span style="position: absolute; top: -12px; left: 50%; transform: translateX(-50%); background: var(--bg); padding: 0 8px; font-size: 12px; color: var(--muted);">— 分页 —</span></div>'
+    ? renderPageBreakHtml()
     : ''
 
   if (headingLevel && headingLevel >= 1 && headingLevel <= 6) {
@@ -2381,7 +2385,7 @@ const formatTextWithDefaultStyles = (
     : (hasHtml ? text : escapeHtml(text))
 
   const pageBreakHtml = hasPageBreak
-    ? '<div style="page-break-before: always; break-before: page; border-top: 2px dashed var(--border); margin: 24px 0 16px 0; position: relative;"><span style="position: absolute; top: -12px; left: 50%; transform: translateX(-50%); background: var(--bg); padding: 0 8px; font-size: 12px; color: var(--muted);">— 分页 —</span></div>'
+    ? renderPageBreakHtml()
     : ''
 
   if (headingLevel && headingLevel >= 1 && headingLevel <= 6) {
@@ -2970,7 +2974,12 @@ function handleKeydown(e: KeyboardEvent) {
 watch(currentLocale, () => {
   const cached = lastParseResult.value
   if (!documentLoaded.value || !cached) return
-  if (!shapes.value.some(shape => shape.type === 'textbox' && shape.anchorCp !== undefined && shape.anchorCp > 0)) return
+  const hasAnchoredTextbox = shapes.value.some(
+    shape => shape.type === 'textbox' && shape.anchorCp !== undefined && shape.anchorCp > 0,
+  )
+  const hasPageBreakMarker = cached.paragraphs.some(paragraph => paragraph.paraFormat?.pageBreakBefore)
+  const hasEmptyDocumentPlaceholder = cached.paragraphs.length === 0
+  if (!hasAnchoredTextbox && !hasPageBreakMarker && !hasEmptyDocumentPlaceholder) return
 
   applyFormattedPages(cached.paragraphs, cached.hyperlinks, cached.revisions)
   if (showSearch.value) {

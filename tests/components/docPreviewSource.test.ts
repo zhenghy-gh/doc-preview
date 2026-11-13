@@ -304,12 +304,88 @@ describe('DocPreview source lifecycle', () => {
     }
   })
 
+  it('localizes empty document placeholders and no-text parse errors', async () => {
+    const originalLocale = currentLocale.value
+    parseFile.mockResolvedValue({ success: true, document: { paragraphs: [] } })
+    setLocale('en')
+    const emptyDocument = mount(DocPreview, { props: { source: new File(['empty'], 'empty.doc') } })
+
+    try {
+      await flushPromises()
+      expect(emptyDocument.get('.document-content').text()).toBe('Document content is empty')
+      setLocale('zh-CN')
+      await flushPromises()
+      expect(emptyDocument.get('.document-content').text()).toBe('文档内容为空')
+    } finally {
+      emptyDocument.unmount()
+      setLocale(originalLocale)
+    }
+
+    try {
+      for (const testCase of [
+        { locale: 'en', expected: 'Document is empty or no text could be extracted' },
+        { locale: 'zh-CN', expected: '文档内容为空或无法提取文本' },
+      ] as const) {
+        setLocale(testCase.locale)
+        parseFile.mockResolvedValueOnce({ success: true })
+        const wrapper = mount(DocPreview, { props: { source: new File(['empty'], 'empty.doc') } })
+        try {
+          await flushPromises()
+          expect(wrapper.get('.error-detail').text()).toContain(testCase.expected)
+        } finally {
+          wrapper.unmount()
+        }
+      }
+    } finally {
+      setLocale(originalLocale)
+    }
+  })
+
+  it('localizes formatted page-break markers when the interface locale changes', async () => {
+    const originalLocale = currentLocale.value
+    const parsedWithPageBreak = {
+      ...parsedDocument,
+      document: {
+        ...parsedDocument.document,
+        stories: { footnotes: 'First footnote line\fcontinued footnote line' },
+        paragraphs: [
+          parsedDocument.document.paragraphs[0],
+          {
+            text: 'Second page content',
+            charFormat: { fontSize: 12 },
+            paraFormat: { alignment: 'left', pageBreakBefore: true },
+            _cpStart: 20,
+          },
+        ],
+      },
+    }
+    parseFile.mockResolvedValue(parsedWithPageBreak)
+    setLocale('en')
+    const wrapper = mount(DocPreview, { props: { source: new File(['doc'], 'break.doc') } })
+
+    try {
+      await flushPromises()
+      expect(wrapper.find('.page-break-label').text()).toBe('Page break')
+      await wrapper.get('.stories-toggle').trigger('click')
+      expect(wrapper.get('.story-section-text .page-break-label').text()).toBe('Page break')
+
+      setLocale('zh-CN')
+      await flushPromises()
+      expect(wrapper.find('.page-break-label').text()).toBe('分页')
+      expect(wrapper.get('.story-section-text .page-break-label').text()).toBe('分页')
+    } finally {
+      wrapper.unmount()
+      setLocale(originalLocale)
+    }
+  })
+
   it('localizes textbox anchor markers when the interface locale changes', async () => {
     const originalLocale = currentLocale.value
     const parsedWithTextbox = {
       ...parsedDocument,
       document: {
         ...parsedDocument.document,
+        stories: { footnotes: 'Footnote text\fcontinued' },
         shapes: [{
           spid: 12,
           type: 'textbox',
