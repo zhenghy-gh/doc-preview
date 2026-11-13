@@ -2535,15 +2535,18 @@ const searchStatusLabel = computed(() => {
 
 function printDocument() {
   if (!htmlContent.value) return
-  
+
   const printWindow = window.open('', '_blank')
   if (!printWindow) {
-    alert('请允许弹出窗口以进行打印')
+    alert(t('print.popup.blocked'))
     return
   }
   
+  const pageCounterContent = currentLocale.value === 'en'
+    ? '"Page " counter(page) " of " counter(pages)'
+    : '"第 " counter(page) " 页 / 共 " counter(pages) " 页"'
   const printContent = `<!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="${currentLocale.value}">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -2558,7 +2561,7 @@ function printDocument() {
         color: #666;
       }
       @bottom-center {
-        content: "第 " counter(page) " 页 / 共 " counter(pages) " 页";
+        content: ${pageCounterContent};
         font-size: 10pt;
         color: #666;
       }

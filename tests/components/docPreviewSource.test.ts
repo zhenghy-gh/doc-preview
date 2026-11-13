@@ -221,6 +221,45 @@ describe('DocPreview source lifecycle', () => {
     }
   })
 
+  it('localizes printed page metadata and blocked-popup guidance', async () => {
+    const originalLocale = currentLocale.value
+    const writes: string[] = []
+    const printWindow = {
+      document: {
+        write: vi.fn((content: string) => writes.push(content)),
+        close: vi.fn(),
+      },
+      addEventListener: vi.fn(),
+    }
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue(printWindow as unknown as Window)
+    const alertSpy = vi.fn()
+    vi.stubGlobal('alert', alertSpy)
+    parseFile.mockResolvedValue(parsedDocument)
+    setLocale('en')
+    const wrapper = mount(DocPreview, { props: { source: new File(['doc'], 'print.doc') } })
+
+    try {
+      await flushPromises()
+      await wrapper.get('.toolbar button[aria-label="Print / Export PDF"]').trigger('click')
+      expect(writes[0]).toContain('<html lang="en">')
+      expect(writes[0]).toContain('content: "Page " counter(page) " of " counter(pages);')
+      expect(writes[0]).not.toContain('第 ')
+
+      setLocale('zh-CN')
+      await flushPromises()
+      await wrapper.get('.toolbar button[aria-label="打印 / 导出 PDF"]').trigger('click')
+      expect(writes[1]).toContain('<html lang="zh-CN">')
+      expect(writes[1]).toContain('content: "第 " counter(page) " 页 / 共 " counter(pages) " 页";')
+
+      openSpy.mockReturnValueOnce(null)
+      await wrapper.get('.toolbar button[aria-label="打印 / 导出 PDF"]').trigger('click')
+      expect(alertSpy).toHaveBeenCalledWith('请允许弹出窗口以进行打印')
+    } finally {
+      wrapper.unmount()
+      setLocale(originalLocale)
+    }
+  })
+
   it('localizes the no-results search status when the interface locale changes', async () => {
     const originalLocale = currentLocale.value
     parseFile.mockResolvedValue(parsedDocument)
