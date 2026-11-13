@@ -15,7 +15,7 @@ import { sanitizePreviewHtml } from '../utils/sanitizeHtml'
 import { MAX_DOC_FILE_SIZE, getFileSizeLimitError, readResponseWithLimit } from '../utils/docLimits'
 import { downloadBlob } from '../utils/downloadBlob'
 import { WORD_VERSION_LABELS, type WordVersion } from '../utils/fibParser'
-import { t, tMap } from '../utils/locale'
+import { currentLocale, t, tMap } from '../utils/locale'
 // import DocStatsPanel from './DocStatsPanel.vue'
 import ShortcutsPanel from './ShortcutsPanel.vue'
 import LoadingOverlay from './LoadingOverlay.vue'
@@ -1560,38 +1560,31 @@ function renderParagraphHtml(
  */
 function renderTextboxAnchorHtml(shape: ShapeInfo): string {
   const twipsToPx = (twips: number): number => Math.round(twips / 15)
+  const anchorLabel = t('shapes.anchor.' + shape.anchorType) || shape.anchorType
   const parts: string[] = []
   if (shape.x !== undefined && shape.y !== undefined) {
-    parts.push(`位置: ${twipsToPx(shape.x)}×${twipsToPx(shape.y)}px`)
+    parts.push(`${t('textbox.anchor.position')}: ${twipsToPx(shape.x)}×${twipsToPx(shape.y)}px`)
   }
   if (shape.width !== undefined && shape.height !== undefined) {
-    parts.push(`尺寸: ${twipsToPx(shape.width)}×${twipsToPx(shape.height)}px`)
+    parts.push(`${t('textbox.anchor.size')}: ${twipsToPx(shape.width)}×${twipsToPx(shape.height)}px`)
   }
   if (shape.anchorType) {
-    const anchorLabel = t('shapes.anchor.' + shape.anchorType) || shape.anchorType
-    parts.push(`锚点: ${anchorLabel}`)
+    parts.push(`${t('textbox.anchor.type')}: ${anchorLabel}`)
   }
   const info = parts.length > 0 ? parts.join(' · ') : ''
-  const titleParts: string[] = []
-  if (shape.x !== undefined && shape.y !== undefined) {
-    titleParts.push(`位置: (${shape.x}, ${shape.y}) twips`)
-  }
-  if (shape.width !== undefined && shape.height !== undefined) {
-    titleParts.push(`尺寸: ${shape.width} × ${shape.height} twips`)
-  }
-  if (shape.anchorCp !== undefined) {
-    titleParts.push(`锚点 CP: ${shape.anchorCp}`)
-  }
-  if (shape.spid) {
-    titleParts.push(`SPID: ${shape.spid}`)
-  }
-  if (shape.floating) {
-    titleParts.push('浮动')
-  }
-  const title = titleParts.join(' · ')
+  const title = t('textbox.anchor.tooltip', {
+    type: anchorLabel,
+    x: shape.x,
+    y: shape.y,
+    w: shape.width,
+    h: shape.height,
+    cp: shape.anchorCp,
+    spid: shape.spid,
+    floating: shape.floating,
+  })
   return `<div class="textbox-anchor-marker" title="${escapeHtml(title)}" data-spid="${shape.spid}">
   <span class="textbox-anchor-icon">⬚</span>
-  <span class="textbox-anchor-label">文本框</span>
+  <span class="textbox-anchor-label">${escapeHtml(t('textbox.anchor'))}</span>
   ${info ? `<span class="textbox-anchor-info">${escapeHtml(info)}</span>` : ''}
 </div>`
 }
@@ -2970,6 +2963,18 @@ function handleKeydown(e: KeyboardEvent) {
 }
 
 // ---- Watchers ----
+
+watch(currentLocale, () => {
+  const cached = lastParseResult.value
+  if (!documentLoaded.value || !cached) return
+  if (!shapes.value.some(shape => shape.type === 'textbox' && shape.anchorCp !== undefined && shape.anchorCp > 0)) return
+
+  applyFormattedPages(cached.paragraphs, cached.hyperlinks, cached.revisions)
+  if (showSearch.value) {
+    originalHtml.value = htmlContent.value
+    if (searchQuery.value.trim()) nextTick(() => performSearch())
+  }
+})
 
 watch(() => props.useWebFont, (enabled) => {
   if (enabled) loadWebFonts()

@@ -382,8 +382,18 @@ const zh: Record<string, TransValue> = {
 
   // Textbox anchor
   'textbox.anchor': '文本框',
-  'textbox.anchor.tooltip': ({ type, x, y, w, h, cp, spid }) =>
-    `锚点: ${type}\n位置: (${x}, ${y}) twips\n尺寸: ${w} × ${h} twips\nCP: ${cp}\nSPID: ${spid}`,
+  'textbox.anchor.position': '位置',
+  'textbox.anchor.size': '尺寸',
+  'textbox.anchor.type': '锚点',
+  'textbox.anchor.tooltip': ({ type, x, y, w, h, cp, spid, floating }) => {
+    const parts = [`锚点: ${type}`]
+    if (x !== undefined && y !== undefined) parts.push(`位置: (${x}, ${y}) twips`)
+    if (w !== undefined && h !== undefined) parts.push(`尺寸: ${w} × ${h} twips`)
+    if (cp !== undefined) parts.push(`锚点 CP: ${cp}`)
+    if (spid !== undefined) parts.push(`SPID: ${spid}`)
+    if (floating) parts.push('浮动')
+    return parts.join('\n')
+  },
 
   // Revision time format
   'revision.author.prefix': ({ i }) => `作者#${i}`,
@@ -747,8 +757,18 @@ const en: Record<string, TransValue> = {
 
   // Textbox anchor
   'textbox.anchor': 'Textbox',
-  'textbox.anchor.tooltip': ({ type, x, y, w, h, cp, spid }) =>
-    `Anchor: ${type}\nPosition: (${x}, ${y}) twips\nSize: ${w} × ${h} twips\nCP: ${cp}\nSPID: ${spid}`,
+  'textbox.anchor.position': 'Position',
+  'textbox.anchor.size': 'Size',
+  'textbox.anchor.type': 'Anchor',
+  'textbox.anchor.tooltip': ({ type, x, y, w, h, cp, spid, floating }) => {
+    const parts = [`Anchor: ${type}`]
+    if (x !== undefined && y !== undefined) parts.push(`Position: (${x}, ${y}) twips`)
+    if (w !== undefined && h !== undefined) parts.push(`Size: ${w} × ${h} twips`)
+    if (cp !== undefined) parts.push(`Anchor CP: ${cp}`)
+    if (spid !== undefined) parts.push(`SPID: ${spid}`)
+    if (floating) parts.push('Floating')
+    return parts.join('\n')
+  },
 
   // Revision time format
   'revision.author.prefix': ({ i }) => `Author #${i}`,

@@ -221,6 +221,62 @@ describe('DocPreview source lifecycle', () => {
     }
   })
 
+  it('localizes textbox anchor markers when the interface locale changes', async () => {
+    const originalLocale = currentLocale.value
+    const parsedWithTextbox = {
+      ...parsedDocument,
+      document: {
+        ...parsedDocument.document,
+        shapes: [{
+          spid: 12,
+          type: 'textbox',
+          anchorType: 'paragraph',
+          anchorCp: 5,
+          x: 15,
+          y: 30,
+          width: 150,
+          height: 75,
+          floating: true,
+        }],
+      },
+    }
+    parseFile.mockResolvedValue(parsedWithTextbox)
+    setLocale('zh-CN')
+    const wrapper = mount(DocPreview, { props: { source: new File(['doc'], 'textbox.doc') } })
+
+    try {
+      await flushPromises()
+      expect(wrapper.get('.textbox-anchor-label').text()).toBe('文本框')
+      expect(wrapper.get('.textbox-anchor-info').text()).toContain('位置:')
+      expect(wrapper.get('.textbox-anchor-info').text()).toContain('锚点: 段落')
+      expect(wrapper.get('.textbox-anchor-marker').attributes('title')).toContain('浮动')
+
+      await wrapper.get('.toolbar button[aria-label="搜索文档"]').trigger('click')
+      await wrapper.get('.search-input').setValue('Loaded')
+      await flushPromises()
+      expect(wrapper.find('.search-highlight').exists()).toBe(true)
+
+      setLocale('en')
+      await flushPromises()
+      expect(wrapper.get('.textbox-anchor-label').text()).toBe('Textbox')
+      expect(wrapper.get('.textbox-anchor-info').text()).toContain('Position:')
+      expect(wrapper.get('.textbox-anchor-info').text()).toContain('Anchor: Paragraph')
+      expect(wrapper.get('.textbox-anchor-marker').attributes('title')).toContain('Floating')
+      expect(wrapper.get('.textbox-anchor-marker').attributes('title')).not.toContain('位置')
+      expect(wrapper.find('.search-highlight').exists()).toBe(true)
+
+      await wrapper.get('.search-bar button[aria-label="Close search"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.get('.textbox-anchor-label').text()).toBe('Textbox')
+      expect(wrapper.find('.search-highlight').exists()).toBe(false)
+      expect(wrapper.get('.textbox-anchor-info').text()).toContain('Position:')
+      expect(wrapper.get('.textbox-anchor-marker').attributes('title')).toContain('Floating')
+    } finally {
+      wrapper.unmount()
+      setLocale(originalLocale)
+    }
+  })
+
   it('uses only the URL pathname for the displayed source filename', async () => {
     parseBuffer.mockReturnValue(parsedDocument)
     const responseBody = new ReadableStream<Uint8Array>({
