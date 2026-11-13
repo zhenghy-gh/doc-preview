@@ -178,8 +178,10 @@ watch(darkMode, (val) => {
 
           <div class="url-section">
             <div class="divider"><span>{{ t('app.upload.or') }}</span></div>
+            <label class="url-label" for="source-url">{{ t('app.upload.url.label') }}</label>
             <div class="url-input-row">
               <input
+                id="source-url"
                 type="text"
                 v-model="urlInput"
                 :placeholder="t('app.upload.url.placeholder')"
@@ -407,6 +409,13 @@ watch(darkMode, (val) => {
 
 .divider span {
   padding: 0 16px;
+}
+
+.url-label {
+  display: block;
+  margin-bottom: 8px;
+  color: #555;
+  font-size: 0.95rem;
 }
 
 .url-input-row {

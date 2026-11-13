@@ -3,11 +3,35 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import App from '../src/App.vue'
 import { MAX_DOC_FILE_SIZE } from '../src/utils/docLimits'
+import { currentLocale, setLocale } from '../src/utils/locale'
 
 describe('App upload accessibility', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
+  })
+
+  it('labels the URL input in the active locale and keeps its example hint concise', () => {
+    const originalLocale = currentLocale.value
+    try {
+      for (const [locale, expectedLabel] of [['zh-CN', '文档地址'], ['en', 'Document URL']] as const) {
+        setLocale(locale)
+        const wrapper = mount(App)
+        try {
+          const input = wrapper.get('.url-input')
+          const inputId = input.attributes('id')
+          const label = wrapper.get('label[for="' + inputId + '"]')
+
+          expect(inputId).toBeTruthy()
+          expect(label.text()).toBe(expectedLabel)
+          expect(input.attributes('placeholder')).toBe('https://...')
+        } finally {
+          wrapper.unmount()
+        }
+      }
+    } finally {
+      setLocale(originalLocale)
+    }
   })
 
   it('announces upload validation errors through the persistent polite status region', async () => {
