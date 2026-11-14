@@ -1,6 +1,8 @@
 // @vitest-environment happy-dom
 import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
+import { nextTick } from 'vue'
+import { currentLocale, setLocale } from '../../src/utils/locale'
 import CollapsiblePanel from '../../src/components/CollapsiblePanel.vue'
 import DocStatsPanel from '../../src/components/DocStatsPanel.vue'
 import ErrorDisplay from '../../src/components/ErrorDisplay.vue'
@@ -113,6 +115,27 @@ describe('ShortcutsPanel', () => {
     expect(wrapper.findAll('kbd').length).toBeGreaterThan(0)
     await wrapper.find('.shortcuts-close').trigger('click')
     expect(wrapper.emitted('update:modelValue')).toEqual([[false]])
+  })
+
+  it('resolves nested shortcut labels and updates with the active locale', async () => {
+    const originalLocale = currentLocale.value
+    setLocale('en')
+    const wrapper = mount(ShortcutsPanel, { props: { modelValue: true } })
+    try {
+      const labels = wrapper.findAll('.shortcut-label')
+      expect(labels[0].text()).toBe('Search document')
+      expect(labels[1].text()).toBe('Next match')
+      expect(wrapper.text()).not.toContain('shortcuts.items.')
+
+      setLocale('zh-CN')
+      await nextTick()
+      expect(wrapper.findAll('.shortcut-label')[0].text()).toBe('搜索文档')
+      expect(wrapper.findAll('.shortcut-label')[1].text()).toBe('下一个匹配')
+      expect(wrapper.text()).not.toContain('shortcuts.items.')
+    } finally {
+      wrapper.unmount()
+      setLocale(originalLocale)
+    }
   })
 
   it('renders nothing when closed', () => {

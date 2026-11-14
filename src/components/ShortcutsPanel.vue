@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { t } from '../utils/locale'
+import { t, tMap } from '../utils/locale'
 
 interface ShortcutItem {
   keys: string
@@ -17,19 +17,19 @@ const emit = defineEmits<{
 }>()
 
 const shortcutList = computed<ShortcutItem[]>(() => [
-  { keys: 'Ctrl+F', label: t('shortcuts.items.toggleSearch') },
-  { keys: 'F3 / Ctrl+G', label: t('shortcuts.items.nextMatch') },
-  { keys: 'Shift+F3 / Ctrl+Shift+G', label: t('shortcuts.items.prevMatch') },
-  { keys: 'Escape', label: t('shortcuts.items.closeSearch') },
-  { keys: 'Ctrl+P', label: t('shortcuts.items.print') },
-  { keys: 'Ctrl+= / Ctrl++', label: t('shortcuts.items.zoomIn') },
-  { keys: 'Ctrl+-', label: t('shortcuts.items.zoomOut') },
-  { keys: 'Ctrl+0', label: t('shortcuts.items.zoomReset') },
-  { keys: 'PageUp', label: t('shortcuts.items.prevPage') },
-  { keys: 'PageDown', label: t('shortcuts.items.nextPage') },
-  { keys: 'Home', label: t('shortcuts.items.firstPage') },
-  { keys: 'End', label: t('shortcuts.items.lastPage') },
-  { keys: '? / Ctrl+/', label: t('shortcuts.items.toggleShortcuts') },
+  { keys: 'Ctrl+F', label: tMap('shortcuts.items', 'toggleSearch') },
+  { keys: 'F3 / Ctrl+G', label: tMap('shortcuts.items', 'nextMatch') },
+  { keys: 'Shift+F3 / Ctrl+Shift+G', label: tMap('shortcuts.items', 'prevMatch') },
+  { keys: 'Escape', label: tMap('shortcuts.items', 'closeSearch') },
+  { keys: 'Ctrl+P', label: tMap('shortcuts.items', 'print') },
+  { keys: 'Ctrl+= / Ctrl++', label: tMap('shortcuts.items', 'zoomIn') },
+  { keys: 'Ctrl+-', label: tMap('shortcuts.items', 'zoomOut') },
+  { keys: 'Ctrl+0', label: tMap('shortcuts.items', 'zoomReset') },
+  { keys: 'PageUp', label: tMap('shortcuts.items', 'prevPage') },
+  { keys: 'PageDown', label: tMap('shortcuts.items', 'nextPage') },
+  { keys: 'Home', label: tMap('shortcuts.items', 'firstPage') },
+  { keys: 'End', label: tMap('shortcuts.items', 'lastPage') },
+  { keys: '? / Ctrl+/', label: tMap('shortcuts.items', 'toggleShortcuts') },
 ])
 </script>
 
