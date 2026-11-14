@@ -221,6 +221,42 @@ describe('DocPreview source lifecycle', () => {
     }
   })
 
+  it('localizes cross-reference label punctuation', async () => {
+    const originalLocale = currentLocale.value
+    parseFile.mockResolvedValue({
+      ...parsedDocument,
+      document: {
+        ...parsedDocument.document,
+        crossReferences: [{
+          cpStart: 0,
+          cpEnd: 10,
+          type: 'ref',
+          instruction: 'REF _Ref1',
+          targetBookmarkName: 'Bookmark1',
+          result: '1',
+          switches: ['h'],
+        }],
+      },
+    })
+    setLocale('en')
+    const wrapper = mount(DocPreview, { props: { source: new File(['doc'], 'reference.doc') } })
+
+    try {
+      await flushPromises()
+      await wrapper.get('.cross-refs-panel .stories-toggle').trigger('click')
+      expect(wrapper.get('.cross-ref-target').text()).toBe('Target Bookmark: Bookmark1')
+      expect(wrapper.get('.cross-ref-switches').text()).toContain('Switches:')
+
+      setLocale('zh-CN')
+      await flushPromises()
+      expect(wrapper.get('.cross-ref-target').text()).toBe('目标书签：Bookmark1')
+      expect(wrapper.get('.cross-ref-switches').text()).toContain('开关：')
+    } finally {
+      wrapper.unmount()
+      setLocale(originalLocale)
+    }
+  })
+
   it('localizes skip links, section labels, and embedded image alternatives', async () => {
     const originalLocale = currentLocale.value
     parseFile.mockResolvedValue({

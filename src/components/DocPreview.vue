@@ -3685,11 +3685,11 @@ defineExpose({ reload, getPlainText, focusContent })
               <span v-if="cr.result" class="cross-ref-result">{{ t('crossRefs.show', { v: cr.result }) }}</span>
             </div>
             <div class="cross-ref-target">
-              {{ t('crossRefs.target') }}：<code>{{ cr.targetBookmarkName }}</code>
+              {{ t('crossRefs.target') }}{{ currentLocale === 'en' ? ': ' : '：' }}<code>{{ cr.targetBookmarkName }}</code>
             </div>
             <div class="cross-ref-instruction">{{ t('crossRefs.instruction', { inst: cr.instruction }) }}</div>
             <div v-if="cr.switches.length > 0" class="cross-ref-switches">
-              {{ t('crossRefs.switches') }}：
+              {{ t('crossRefs.switches') }}{{ currentLocale === 'en' ? ': ' : '：' }}
               <span
                 v-for="sw in cr.switches"
                 :key="sw"
