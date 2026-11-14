@@ -292,6 +292,9 @@ try {
   const remoteText = await page.locator('.doc-preview .document-content').innerText()
   assert.ok(remoteText.includes(contentMarker), 'URL stream should render the source DOC content')
   assert.equal(await page.locator('.doc-info .doc-name').textContent(), 'doc-101.doc')
+  const appPreviewFileName = await page.locator('.preview-header .file-name').textContent()
+  assert.equal(appPreviewFileName, 'doc-101.doc')
+  assert.ok(!appPreviewFileName.includes('browser-smoke'))
   const remoteDownloadStarted = page.waitForEvent('download')
   await page.getByRole('button', { name: 'Download as text file' }).click()
   const remoteDownload = await remoteDownloadStarted

@@ -14,6 +14,7 @@ import { escapeHtml, applyTabStops, formatTextWithInferredFormat } from '../util
 import { sanitizePreviewHtml } from '../utils/sanitizeHtml'
 import { MAX_DOC_FILE_SIZE, getFileSizeLimitError, readResponseWithLimit } from '../utils/docLimits'
 import { downloadBlob } from '../utils/downloadBlob'
+import { getFileNameFromUrl } from '../utils/urlFileName'
 import { WORD_VERSION_LABELS, type WordVersion } from '../utils/fibParser'
 import { currentLocale, t, tMap } from '../utils/locale'
 // import DocStatsPanel from './DocStatsPanel.vue'
@@ -922,30 +923,6 @@ const loadFromFile = async (file: File) => {
       emit('loading', false)
       stopLoadingTimer()
     }
-  }
-}
-
-function sanitizeUrlFileName(candidate: string): string {
-  let fileName = candidate
-  try {
-    const decoded = decodeURIComponent(candidate)
-    if (!/[\/\\\u0000-\u001f\u007f]/.test(decoded)) fileName = decoded
-  } catch {
-    // Keep malformed percent escapes as literal text, then remove unsafe characters below.
-  }
-  return fileName.replace(/[\/\\\u0000-\u001f\u007f]/g, '').trim() || 'document.doc'
-}
-
-function getFileNameFromUrl(url: string): string {
-  const fallbackPath = url.split(/[?#]/, 1)[0]
-  const fallbackSegment = fallbackPath.split('/').pop() || ''
-  try {
-    const baseUrl = typeof document !== 'undefined' ? document.baseURI : 'http://localhost/'
-    const pathname = new URL(url, baseUrl).pathname
-    const segment = pathname.slice(pathname.lastIndexOf('/') + 1)
-    return sanitizeUrlFileName(segment || fallbackSegment)
-  } catch {
-    return sanitizeUrlFileName(fallbackSegment)
   }
 }
 

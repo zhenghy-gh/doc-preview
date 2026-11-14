@@ -1,14 +1,19 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import DocPreview from './components/DocPreview.vue'
 import { currentLocale, setLocale, t } from './utils/locale'
 import { isDocFileTooLarge } from './utils/docLimits'
+import { getFileNameFromUrl } from './utils/urlFileName'
 
 const selectedFile = ref<File | null>(null)
 const urlInput = ref('')
 const previewSource = ref<File | string | null>(null)
 const errorMessage = ref('')
 const isDragOver = ref(false)
+const previewFileName = computed(() => {
+  if (typeof previewSource.value === 'string') return getFileNameFromUrl(previewSource.value)
+  return selectedFile.value?.name || t('app.title')
+})
 
 watch(currentLocale, (locale) => {
   document.title = t('app.title')
@@ -204,7 +209,7 @@ watch(darkMode, (val) => {
 
       <template v-else>
         <div class="preview-header">
-          <span class="file-name">{{ typeof previewSource === 'string' ? previewSource.split('/').pop() : selectedFile?.name || t('app.title') }}</span>
+          <span class="file-name">{{ previewFileName }}</span>
           <div class="header-actions">
             <button
               class="header-btn"
