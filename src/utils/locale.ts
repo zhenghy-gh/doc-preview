@@ -98,6 +98,7 @@ const zh: Record<string, TransValue> = {
   // Search
   'search.placeholder': '搜索文档内容...',
   'search.no.results': '无匹配结果',
+  'search.position': ({ current, total }) => `第 ${current} 项，共 ${total} 项`,
   'search.results': ({ n }) => `找到 ${n} 个匹配`,
   'search.case': '大小写敏感',
   'search.word': '全词匹配',
@@ -476,6 +477,7 @@ const en: Record<string, TransValue> = {
   // Search
   'search.placeholder': 'Search document content...',
   'search.no.results': 'No matches found',
+  'search.position': ({ current, total }) => `Match ${current} of ${total}`,
   'search.results': ({ n }) => `Found ${n} matches`,
   'search.case': 'Case sensitive',
   'search.word': 'Whole word',

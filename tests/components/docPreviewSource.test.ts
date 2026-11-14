@@ -291,13 +291,69 @@ describe('DocPreview source lifecycle', () => {
     try {
       await flushPromises()
       await wrapper.get('.toolbar button[aria-label="Search document"]').trigger('click')
+      const status = wrapper.get('.search-status')
+      expect(wrapper.get('.search-status-visual').text()).toBe('')
+      expect(wrapper.get('.search-status .sr-only').text()).toBe('')
       await wrapper.get('.search-input').setValue('not-a-match')
       await flushPromises()
-      expect(wrapper.get('.search-status').text()).toBe('No matches found')
+      expect(status.attributes('role')).toBe('status')
+      expect(status.attributes('aria-live')).toBe('polite')
+      expect(status.attributes('aria-atomic')).toBe('true')
+      expect(wrapper.get('.search-status-visual').attributes('aria-hidden')).toBe('true')
+      expect(wrapper.get('.search-status-visual').text()).toBe('No matches found')
+      expect(wrapper.get('.search-status .sr-only').text()).toBe('No matches found')
 
       setLocale('zh-CN')
       await flushPromises()
-      expect(wrapper.get('.search-status').text()).toBe('无匹配结果')
+      expect(wrapper.get('.search-status-visual').text()).toBe('无匹配结果')
+      expect(wrapper.get('.search-status .sr-only').text()).toBe('无匹配结果')
+    } finally {
+      wrapper.unmount()
+      setLocale(originalLocale)
+    }
+  })
+
+  it('announces the current search match and total in the active locale', async () => {
+    const originalLocale = currentLocale.value
+    const parsedWithRepeatedMatches = {
+      ...parsedDocument,
+      document: {
+        ...parsedDocument.document,
+        paragraphs: [{
+          text: 'needle needle needle',
+          charFormat: { fontSize: 12 },
+          paraFormat: { alignment: 'left' },
+          _cpStart: 0,
+        }],
+      },
+    }
+    parseFile.mockResolvedValue(parsedWithRepeatedMatches)
+    setLocale('en')
+    const wrapper = mount(DocPreview, { props: { source: new File(['doc'], 'matches.doc') } })
+
+    try {
+      await flushPromises()
+      await wrapper.get('.toolbar button[aria-label="Search document"]').trigger('click')
+      await wrapper.get('.search-input').setValue('needle')
+      await flushPromises()
+      const status = wrapper.get('.search-status')
+      const visualStatus = wrapper.get('.search-status-visual')
+      const liveAnnouncement = wrapper.get('.search-status .sr-only')
+      expect(visualStatus.text()).toBe('1 / 3')
+      expect(visualStatus.attributes('aria-hidden')).toBe('true')
+      expect(liveAnnouncement.text()).toBe('Match 1 of 3')
+
+      await wrapper.get('.search-bar button[aria-label="Next match"]').trigger('click')
+      expect(visualStatus.text()).toBe('2 / 3')
+      expect(liveAnnouncement.text()).toBe('Match 2 of 3')
+      expect(status.attributes('role')).toBe('status')
+      expect(status.attributes('aria-live')).toBe('polite')
+      expect(status.attributes('aria-atomic')).toBe('true')
+
+      setLocale('zh-CN')
+      await flushPromises()
+      expect(visualStatus.text()).toBe('2 / 3')
+      expect(liveAnnouncement.text()).toBe('第 2 项，共 3 项')
     } finally {
       wrapper.unmount()
       setLocale(originalLocale)

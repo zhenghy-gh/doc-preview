@@ -2531,8 +2531,18 @@ function prevMatch() {
 }
 
 const searchStatusLabel = computed(() => {
+  if (!searchQuery.value.trim()) return ''
   if (searchResults.value.length === 0) return t('search.no.results')
   return `${currentSearchIndex.value + 1} / ${searchResults.value.length}`
+})
+
+const searchStatusAnnouncement = computed(() => {
+  if (!searchQuery.value.trim()) return ''
+  if (searchResults.value.length === 0) return t('search.no.results')
+  return t('search.position', {
+    current: currentSearchIndex.value + 1,
+    total: searchResults.value.length,
+  })
 })
 
 // ---- Print ----
@@ -3192,7 +3202,10 @@ defineExpose({ reload, getPlainText, focusContent })
           <input type="checkbox" v-model="searchWholeWord" @change="performSearch" />
           <span>W</span>
         </label>
-        <span class="search-status">{{ searchStatusLabel }}</span>
+        <span class="search-status" role="status" aria-live="polite" aria-atomic="true">
+          <span class="search-status-visual" aria-hidden="true">{{ searchStatusLabel }}</span>
+          <span class="sr-only">{{ searchStatusAnnouncement }}</span>
+        </span>
         <button class="toolbar-btn" @click="prevMatch" :disabled="searchResults.length === 0" :title="tMap('shortcuts.items', 'prevMatch') + ' ▲'" :aria-label="tMap('shortcuts.items', 'prevMatch')">▲</button>
         <button class="toolbar-btn" @click="nextMatch" :disabled="searchResults.length === 0" :title="tMap('shortcuts.items', 'nextMatch') + ' ▼'" :aria-label="tMap('shortcuts.items', 'nextMatch')">▼</button>
         <button class="toolbar-btn" @click="toggleSearch" :title="tMap('shortcuts.items', 'closeSearch')" :aria-label="tMap('shortcuts.items', 'closeSearch')">✕</button>

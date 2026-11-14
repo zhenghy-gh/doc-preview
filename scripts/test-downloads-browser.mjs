@@ -183,8 +183,22 @@ try {
     }
   }
 
+  const visibleText = await page.locator('.doc-preview .document-content').innerText()
+  const contentMarker = visibleText.split(/\s+/).find((word) => word.length >= 4)
+  assert.ok(contentMarker, 'The sample DOC should render readable text')
   await page.locator('.doc-preview button[aria-label="Search document"]').click()
   await page.waitForFunction(() => document.activeElement?.classList.contains('search-input'))
+  const searchStatus = page.locator('.search-status')
+  assert.equal(await searchStatus.getAttribute('role'), 'status')
+  assert.equal(await searchStatus.getAttribute('aria-live'), 'polite')
+  assert.equal(await searchStatus.getAttribute('aria-atomic'), 'true')
+  assert.equal(await searchStatus.locator('.search-status-visual').textContent(), '')
+  assert.equal(await searchStatus.locator('.sr-only').textContent(), '')
+  await page.locator('.search-input').fill(contentMarker)
+  await page.waitForFunction(() => /^Match 1 of \d+$/.test(document.querySelector('.search-status .sr-only')?.textContent ?? ''))
+  assert.match(await searchStatus.locator('.sr-only').textContent() ?? '', /^Match 1 of \d+$/)
+  assert.equal(await searchStatus.locator('.search-status-visual').getAttribute('aria-hidden'), 'true')
+  assert.match(await searchStatus.locator('.search-status-visual').textContent() ?? '', /^1 \/ \d+$/)
   for (const name of ['Previous match', 'Next match', 'Close search']) {
     assert.equal(await page.getByRole('button', { name }).count(), 1, 'English search accessible name: ' + name)
   }
@@ -205,10 +219,6 @@ try {
   await page.keyboard.press('Space')
   assert.equal(await wordCheckbox.isChecked(), true, 'Space should toggle the whole-word search option')
   await page.locator('.search-bar button[aria-label="Close search"]').click()
-
-  const visibleText = await page.locator('.doc-preview .document-content').innerText()
-  const contentMarker = visibleText.split(/\s+/).find((word) => word.length >= 4)
-  assert.ok(contentMarker, 'The sample DOC should render readable text')
 
   const exports = [
     { label: 'Download as text file', extension: 'txt' },
