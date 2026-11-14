@@ -30,6 +30,11 @@ function localizeFileSizeLimitMessage(message: string): string {
   return message === getFileSizeLimitError() ? t('app.upload.error.sizeLimit') : message
 }
 
+function formatPanelTitle(label: string, count: number): string {
+  const countText = currentLocale.value === 'en' ? ' (' + count + ')' : '（' + count + '）'
+  return label + countText
+}
+
 // ---- Types ----
 
 interface PictureInfo {
@@ -3256,7 +3261,7 @@ defineExpose({ reload, getPlainText, focusContent })
       <CollapsiblePanel
         v-if="storySections.length > 0"
         v-model="showStories"
-        :title="`${t('story.title')}（${storySections.length}）`"
+        :title="formatPanelTitle(t('story.title'), storySections.length)"
         :summary="storySections.map((s: StorySection) => s.label).join(' · ')"
         panel-class="stories-panel"
       >
@@ -3462,7 +3467,7 @@ defineExpose({ reload, getPlainText, focusContent })
       <CollapsiblePanel
         v-if="toc.length > 0"
         v-model="showToc"
-        :title="`${t('toc.title')}（${toc.length}）`"
+        :title="formatPanelTitle(t('toc.title'), toc.length)"
         panel-class="toc-panel"
       >
         <div class="toc-content">
@@ -3484,7 +3489,7 @@ defineExpose({ reload, getPlainText, focusContent })
       <CollapsiblePanel
         v-if="index.length > 0"
         v-model="showIndex"
-        :title="`${t('index.title')}（${index.length}）`"
+        :title="formatPanelTitle(t('index.title'), index.length)"
         panel-class="toc-panel"
       >
         <div class="toc-content">
@@ -3507,7 +3512,7 @@ defineExpose({ reload, getPlainText, focusContent })
       <CollapsiblePanel
         v-if="revisions.length > 0"
         v-model="showRevisions"
-        :title="`${t('revisions.title')}（${revisions.length}）`"
+        :title="formatPanelTitle(t('revisions.title'), revisions.length)"
         :summary="t('revisions.count', { n: revisionItems.length })"
         panel-class="revisions-panel"
       >
@@ -3551,7 +3556,7 @@ defineExpose({ reload, getPlainText, focusContent })
       <CollapsiblePanel
         v-if="bookmarks.length > 0"
         v-model="showBookmarks"
-        :title="`${t('bookmarks.title')}（${bookmarks.length}）`"
+        :title="formatPanelTitle(t('bookmarks.title'), bookmarks.length)"
         :summary="t('bookmarks.summary')"
         panel-class="bookmarks-panel"
       >
@@ -3571,7 +3576,7 @@ defineExpose({ reload, getPlainText, focusContent })
       <CollapsiblePanel
         v-if="sections.length > 0"
         v-model="showSections"
-        :title="`${t('sections.title')}（${sections.length}）`"
+        :title="formatPanelTitle(t('sections.title'), sections.length)"
         :summary="t('sections.summary')"
         panel-class="sections-panel"
       >
@@ -3637,7 +3642,7 @@ defineExpose({ reload, getPlainText, focusContent })
       <CollapsiblePanel
         v-if="pageFields.length > 0"
         v-model="showPageFields"
-        :title="`${t('pageFields.title')}（${pageFields.length}）`"
+        :title="formatPanelTitle(t('pageFields.title'), pageFields.length)"
         summary="PAGE / NUMPAGES"
         panel-class="page-fields-panel"
       >
@@ -3663,7 +3668,7 @@ defineExpose({ reload, getPlainText, focusContent })
       <CollapsiblePanel
         v-if="crossReferences.length > 0"
         v-model="showCrossReferences"
-        :title="`${t('crossRefs.title')}（${crossReferences.length}）`"
+        :title="formatPanelTitle(t('crossRefs.title'), crossReferences.length)"
         summary="REF / NOTEREF"
         panel-class="cross-refs-panel"
       >
@@ -3701,7 +3706,7 @@ defineExpose({ reload, getPlainText, focusContent })
       <CollapsiblePanel
         v-if="shapes.length > 0"
         v-model="showShapes"
-        :title="`${t('shapes.title')}（${shapes.length}）`"
+        :title="formatPanelTitle(t('shapes.title'), shapes.length)"
         :summary="t('shapes.summary')"
         panel-class="shapes-panel"
       >
@@ -3741,7 +3746,7 @@ defineExpose({ reload, getPlainText, focusContent })
       <CollapsiblePanel
         v-if="equations.length > 0"
         v-model="showEquations"
-        :title="`${t('equations.title')}（${equations.length}）`"
+        :title="formatPanelTitle(t('equations.title'), equations.length)"
         :summary="t('equations.summary')"
         panel-class="equations-panel"
       >
@@ -3772,7 +3777,7 @@ defineExpose({ reload, getPlainText, focusContent })
       <CollapsiblePanel
         v-if="charts.length > 0"
         v-model="showCharts"
-        :title="`${t('charts.title')}（${charts.length}）`"
+        :title="formatPanelTitle(t('charts.title'), charts.length)"
         :summary="t('charts.summary')"
         panel-class="charts-panel"
       >
@@ -3809,7 +3814,7 @@ defineExpose({ reload, getPlainText, focusContent })
       <CollapsiblePanel
         v-if="wordArts.length > 0"
         v-model="showWordArts"
-        :title="`${t('wordart.title')}（${wordArts.length}）`"
+        :title="formatPanelTitle(t('wordart.title'), wordArts.length)"
         :summary="t('wordart.summary')"
         panel-class="wordart-panel"
       >
@@ -3854,7 +3859,7 @@ defineExpose({ reload, getPlainText, focusContent })
       <CollapsiblePanel
         v-if="pictures.length > 0 || images.length > 0"
         v-model="showImages"
-        :title="`${t('images.title')}（${pictures.length > 0 ? pictures.length : images.length}）`"
+        :title="formatPanelTitle(t('images.title'), pictures.length > 0 ? pictures.length : images.length)"
         :summary="t('images.summary')"
         panel-class="images-panel"
       >

@@ -250,6 +250,7 @@ describe('DocPreview source lifecycle', () => {
       await flushPromises()
       expect(wrapper.get('.skip-link').text()).toBe('Skip to document content')
       expect(wrapper.get('.document-content img').attributes('alt')).toBe('Embedded image')
+      expect(wrapper.get('.sections-panel .stories-toggle span:nth-child(2)').text()).toBe('Sections & Layout (1)')
       await wrapper.get('.sections-panel .stories-toggle').trigger('click')
       expect(wrapper.get('.section-index').text()).toBe('Section 1')
 
@@ -257,6 +258,7 @@ describe('DocPreview source lifecycle', () => {
       await flushPromises()
       expect(wrapper.get('.skip-link').text()).toBe('跳到文档内容')
       expect(wrapper.get('.document-content img').attributes('alt')).toBe('嵌入图片')
+      expect(wrapper.get('.sections-panel .stories-toggle span:nth-child(2)').text()).toBe('分节与页面布局（1）')
       expect(wrapper.get('.section-index').text()).toBe('节 1')
     } finally {
       wrapper.unmount()
