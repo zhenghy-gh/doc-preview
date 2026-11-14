@@ -144,7 +144,7 @@ watch(darkMode, (val) => {
     <header class="header">
       <div class="header-top">
         <h1>{{ t('app.title') }}</h1>
-        <button class="theme-btn" @click="toggleDarkMode" :title="darkMode ? t('app.theme.light') : t('app.theme.dark')">
+        <button class="theme-btn" @click="toggleDarkMode" :title="darkMode ? t('app.theme.light') : t('app.theme.dark')" :aria-label="darkMode ? t('app.theme.light') : t('app.theme.dark')">
           {{ darkMode ? '☀️' : '🌙' }}
         </button>
         <button class="theme-btn lang-switch" @click="setLocale(currentLocale === 'zh-CN' ? 'en' : 'zh-CN')" :title="t('app.lang.switch')">

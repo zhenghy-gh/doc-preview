@@ -11,6 +11,35 @@ describe('App upload accessibility', () => {
     vi.restoreAllMocks()
   })
 
+  it('names the theme icon by its localized action and updates after toggling', async () => {
+    const originalLocale = currentLocale.value
+    const originalDarkMode = localStorage.getItem('dark-mode')
+    localStorage.removeItem('dark-mode')
+    const wrapper = mount(App)
+    try {
+      const themeButton = wrapper.get('.theme-btn:not(.lang-switch)')
+      expect(themeButton.attributes('aria-label')).toBe('切换暗色模式')
+      expect(themeButton.attributes('title')).toBe('切换暗色模式')
+
+      setLocale('en')
+      await flushPromises()
+      expect(themeButton.attributes('aria-label')).toBe('Switch to dark mode')
+
+      await themeButton.trigger('click')
+      expect(themeButton.attributes('aria-label')).toBe('Switch to light mode')
+      expect(themeButton.attributes('title')).toBe('Switch to light mode')
+
+      setLocale('zh-CN')
+      await flushPromises()
+      expect(themeButton.attributes('aria-label')).toBe('切换亮色模式')
+    } finally {
+      wrapper.unmount()
+      setLocale(originalLocale)
+      if (originalDarkMode === null) localStorage.removeItem('dark-mode')
+      else localStorage.setItem('dark-mode', originalDarkMode)
+    }
+  })
+
   it('synchronizes the browser title when the UI locale changes', async () => {
     const originalLocale = currentLocale.value
     const originalTitle = document.title
