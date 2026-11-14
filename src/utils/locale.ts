@@ -51,7 +51,7 @@ const zh: Record<string, TransValue> = {
   'app.font.off': '启用 Web Font',
   'app.reader.on': '退出阅读模式',
   'app.reader.off': '阅读模式',
-  'app.lang.switch': '切换语言 / Switch Language',
+  'app.lang.switch': '切换语言',
 
   // Loading / Error
   'loading.text': '正在解析文档...',
@@ -432,7 +432,7 @@ const en: Record<string, TransValue> = {
   'app.font.off': 'Enable Web Font',
   'app.reader.on': 'Exit reader mode',
   'app.reader.off': 'Reader mode',
-  'app.lang.switch': 'Switch Language / 切换语言',
+  'app.lang.switch': 'Switch language',
 
   // Loading / Error
   'loading.text': 'Parsing document...',

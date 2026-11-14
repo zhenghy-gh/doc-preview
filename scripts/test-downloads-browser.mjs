@@ -136,6 +136,7 @@ try {
     document.querySelector('.doc-preview [role="status"]')?.textContent?.includes('doc-101.doc')
   ))
 
+  assert.equal(await page.locator('.lang-switch').getAttribute('title'), 'Switch language')
   for (const name of [
     'Enable Web Font',
     'Reader mode',
@@ -158,6 +159,7 @@ try {
 
   await page.locator('.lang-switch').click()
   await page.waitForFunction(() => document.documentElement.lang === 'zh-CN')
+  assert.equal(await page.locator('.lang-switch').getAttribute('title'), '切换语言')
   for (const name of ['缩小', '重置缩放为 100%', '放大', '搜索文档', '打印 / 导出 PDF']) {
     assert.equal(await page.getByRole('button', { name }).count(), 1, 'Chinese accessible name: ' + name)
   }
@@ -174,6 +176,7 @@ try {
 
   await page.locator('.lang-switch').click()
   await page.waitForFunction(() => document.documentElement.lang === 'en')
+  assert.equal(await page.locator('.lang-switch').getAttribute('title'), 'Switch language')
 
   if (forceNoHas) {
     const copiedRuleCount = await forceNoHasFallback(page)
