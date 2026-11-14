@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import { currentLocale, setLocale } from '../../src/utils/locale'
@@ -135,6 +135,33 @@ describe('ShortcutsPanel', () => {
     } finally {
       wrapper.unmount()
       setLocale(originalLocale)
+    }
+  })
+
+  it('shows Command modifiers on Apple platforms and Control elsewhere', () => {
+    vi.stubGlobal('navigator', { platform: 'MacIntel' })
+    const macWrapper = mount(ShortcutsPanel, { props: { modelValue: true } })
+    try {
+      const macKeys = macWrapper.findAll('kbd').map(key => key.text())
+      expect(macKeys[0]).toBe('⌘F')
+      expect(macKeys[2]).toBe('⌘G')
+      expect(macKeys[3]).toBe('⇧F3')
+      expect(macKeys[4]).toBe('⇧⌘G')
+      expect(macKeys).not.toContain('Ctrl+F')
+    } finally {
+      macWrapper.unmount()
+      vi.unstubAllGlobals()
+    }
+
+    vi.stubGlobal('navigator', { platform: 'Win32' })
+    const windowsWrapper = mount(ShortcutsPanel, { props: { modelValue: true } })
+    try {
+      const windowsKeys = windowsWrapper.findAll('kbd').map(key => key.text())
+      expect(windowsKeys[0]).toBe('Ctrl+F')
+      expect(windowsKeys[4]).toBe('Ctrl+Shift+G')
+    } finally {
+      windowsWrapper.unmount()
+      vi.unstubAllGlobals()
     }
   })
 
