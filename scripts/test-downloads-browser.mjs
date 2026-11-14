@@ -136,14 +136,42 @@ try {
     document.querySelector('.doc-preview [role="status"]')?.textContent?.includes('doc-101.doc')
   ))
 
-  for (const name of ['Zoom out', 'Reset zoom to 100%', 'Zoom in', 'Search document', 'Print / Export PDF']) {
+  for (const name of [
+    'Enable Web Font',
+    'Reader mode',
+    'Zoom out',
+    'Reset zoom to 100%',
+    'Zoom in',
+    'Search document',
+    'Print / Export PDF',
+  ]) {
     assert.equal(await page.getByRole('button', { name }).count(), 1, 'English accessible name: ' + name)
   }
+  const fontButton = page.getByRole('button', { name: 'Enable Web Font' })
+  await fontButton.click()
+  assert.equal(await page.getByRole('button', { name: 'Disable Web Font' }).count(), 1)
+  await page.getByRole('button', { name: 'Disable Web Font' }).click()
+  const readerButton = page.getByRole('button', { name: 'Reader mode' })
+  await readerButton.click()
+  assert.equal(await page.getByRole('button', { name: 'Exit reader mode' }).count(), 1)
+  await page.getByRole('button', { name: 'Exit reader mode' }).click()
+
   await page.locator('.lang-switch').click()
   await page.waitForFunction(() => document.documentElement.lang === 'zh-CN')
   for (const name of ['缩小', '重置缩放为 100%', '放大', '搜索文档', '打印 / 导出 PDF']) {
     assert.equal(await page.getByRole('button', { name }).count(), 1, 'Chinese accessible name: ' + name)
   }
+  const zhFontButton = page.getByRole('button', { name: '启用 Web Font' })
+  assert.equal(await zhFontButton.count(), 1)
+  await zhFontButton.click()
+  assert.equal(await page.getByRole('button', { name: '关闭 Web Font' }).count(), 1)
+  await page.getByRole('button', { name: '关闭 Web Font' }).click()
+  const zhReaderButton = page.getByRole('button', { name: '阅读模式' })
+  assert.equal(await zhReaderButton.count(), 1)
+  await zhReaderButton.click()
+  assert.equal(await page.getByRole('button', { name: '退出阅读模式' }).count(), 1)
+  await page.getByRole('button', { name: '退出阅读模式' }).click()
+
   await page.locator('.lang-switch').click()
   await page.waitForFunction(() => document.documentElement.lang === 'en')
 

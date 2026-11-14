@@ -211,10 +211,16 @@ watch(darkMode, (val) => {
               @click="toggleWebFont"
               :class="{ active: useWebFont }"
               :title="useWebFont ? t('app.font.on') : t('app.font.off')"
+              :aria-label="useWebFont ? t('app.font.on') : t('app.font.off')"
             >
               🔤
             </button>
-            <button class="header-btn" @click="toggleReaderMode" :title="readerMode ? t('app.reader.on') : t('app.reader.off')">
+            <button
+              class="header-btn"
+              @click="toggleReaderMode"
+              :title="readerMode ? t('app.reader.on') : t('app.reader.off')"
+              :aria-label="readerMode ? t('app.reader.on') : t('app.reader.off')"
+            >
               {{ readerMode ? '⊟' : '⊞' }}
             </button>
             <button class="back-btn" @click="resetFile">
