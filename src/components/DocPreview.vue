@@ -1494,15 +1494,17 @@ function renderParagraphHtml(
       const allPics: PicSource[] = pictures.value.length > 0 ? pictures.value : images.value.map(url => ({
         format: 'jpeg', dataUrl: url, widthPx: undefined, heightPx: undefined
       }))
+      const pictureIndexBefore = globalPicIdx
       textWithLinks = textWithLinks.replace(/\u0001/g, () => {
         if (globalPicIdx < allPics.length) {
           const pic = allPics[globalPicIdx++]
           const src = typeof pic === 'string' ? pic : pic.dataUrl
           const style = 'max-width:100%;height:auto;margin:8px 0;'
-          return `<img src="${src}" alt="Embedded image" style="${style}" loading="lazy" />`
+          return `<img src="${src}" alt="${escapeHtml(t('images.embedded.alt'))}" style="${style}" loading="lazy" />`
         }
         return '\u0001'
       })
+      if (globalPicIdx > pictureIndexBefore) hasHtml = true
     }
     // Phase 2: Replace any remaining placeholders with charts.
     if (textWithLinks.includes('\u0001') && charts.value.length > 0) {
@@ -2129,7 +2131,7 @@ const formatFormattedTextToHtml = (paragraphs: ParaWithList[], hyperlinks?: Hype
               const pic = allPics[globalPicIdx++]
               const src = typeof pic === 'string' ? pic : pic.dataUrl
               const style = 'max-width:100%;height:auto;margin:8px 0;'
-              return `<img src="${src}" alt="Embedded image" style="${style}" loading="lazy" />`
+              return `<img src="${src}" alt="${escapeHtml(t('images.embedded.alt'))}" style="${style}" loading="lazy" />`
             }
             return '\u0001'
           })
@@ -2213,7 +2215,7 @@ const formatFormattedTextToHtml = (paragraphs: ParaWithList[], hyperlinks?: Hype
     if (typeof pic !== 'string' && pic.cp !== undefined && pic.cp >= 0) continue
     const src = typeof pic === 'string' ? pic : pic.dataUrl
     const style = 'max-width:100%;height:auto;margin:8px 0;'
-    const imgHtml = `<img src="${src}" alt="Embedded image" style="${style}" loading="lazy" />`
+    const imgHtml = `<img src="${src}" alt="${escapeHtml(t('images.embedded.alt'))}" style="${style}" loading="lazy" />`
     addToPage(imgHtml, 200)
   }
 
@@ -2987,9 +2989,10 @@ watch(currentLocale, () => {
   const hasAnchoredTextbox = shapes.value.some(
     shape => shape.type === 'textbox' && shape.anchorCp !== undefined && shape.anchorCp > 0,
   )
+  const hasEmbeddedImages = images.value.length > 0 || pictures.value.length > 0
   const hasPageBreakMarker = cached.paragraphs.some(paragraph => paragraph.paraFormat?.pageBreakBefore)
   const hasEmptyDocumentPlaceholder = cached.paragraphs.length === 0
-  if (!hasAnchoredTextbox && !hasPageBreakMarker && !hasEmptyDocumentPlaceholder) return
+  if (!hasAnchoredTextbox && !hasEmbeddedImages && !hasPageBreakMarker && !hasEmptyDocumentPlaceholder) return
 
   applyFormattedPages(cached.paragraphs, cached.hyperlinks, cached.revisions)
   if (showSearch.value) {
@@ -3059,7 +3062,7 @@ defineExpose({ reload, getPlainText, focusContent })
     :style="{ '--zoom': zoomLevel / 100 }"
     tabindex="-1"
   >
-    <a class="skip-link" href="#" @click.prevent="focusContent">跳到文档内容</a>
+    <a class="skip-link" href="#" @click.prevent="focusContent">{{ t('app.skip.content') }}</a>
     <div class="sr-only" role="status" aria-live="polite" aria-atomic="true">{{ statusAnnouncement }}</div>
     <!-- Loading -->
     <LoadingOverlay
@@ -3273,7 +3276,7 @@ defineExpose({ reload, getPlainText, focusContent })
             >
               <img
                 :src="img.dataUrl"
-                :alt="`图片 ${idx + 1}`"
+                :alt="t('images.alt', { n: idx + 1 })"
                 :style="{
                   maxWidth: '100%',
                   height: 'auto',
@@ -3579,7 +3582,7 @@ defineExpose({ reload, getPlainText, focusContent })
             class="section-item"
           >
             <div class="section-header">
-              <span class="section-index">节 {{ sec.index + 1 }}</span>
+              <span class="section-index">{{ t('sections.index', { n: sec.index }) }}</span>
               <span v-if="sec.breakType" class="section-break">
                 {{ t('sections.break.' + sec.breakType) || sec.breakType }}
               </span>
@@ -3862,13 +3865,13 @@ defineExpose({ reload, getPlainText, focusContent })
               :key="idx"
               class="image-item"
             >
-              <img :src="pic.dataUrl" :alt="`图片 ${idx + 1}`" loading="lazy" />
+              <img :src="pic.dataUrl" :alt="t('images.alt', { n: idx + 1 })" loading="lazy" />
               <div class="image-meta">
                 <span class="image-format">{{ pic.format.toUpperCase() }}</span>
                 <template v-if="pic.widthPx && pic.heightPx">
                   <span class="image-size">{{ pic.widthPx }} × {{ pic.heightPx }}</span>
                 </template>
-                <span v-if="pic.floating" class="image-floating">浮动</span>
+                <span v-if="pic.floating" class="image-floating">{{ t('images.floating') }}</span>
               </div>
             </div>
           </template>

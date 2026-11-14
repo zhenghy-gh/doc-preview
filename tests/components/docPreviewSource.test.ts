@@ -221,6 +221,49 @@ describe('DocPreview source lifecycle', () => {
     }
   })
 
+  it('localizes skip links, section labels, and embedded image alternatives', async () => {
+    const originalLocale = currentLocale.value
+    parseFile.mockResolvedValue({
+      ...parsedDocument,
+      document: {
+        ...parsedDocument.document,
+        paragraphs: [{
+          text: 'An image \u0001 appears in this paragraph.',
+          charFormat: { fontSize: 12 },
+          paraFormat: { alignment: 'left' },
+          _cpStart: 0,
+        }],
+        pictures: [{
+          format: 'png',
+          dataUrl: 'data:image/png;base64,aGk=',
+          widthPx: 1,
+          heightPx: 1,
+          floating: false,
+        }],
+        sections: [{ cpStart: 0, cpEnd: 100, index: 0 }],
+      },
+    })
+    setLocale('en')
+    const wrapper = mount(DocPreview, { props: { source: new File(['doc'], 'image.doc') } })
+
+    try {
+      await flushPromises()
+      expect(wrapper.get('.skip-link').text()).toBe('Skip to document content')
+      expect(wrapper.get('.document-content img').attributes('alt')).toBe('Embedded image')
+      await wrapper.get('.sections-panel .stories-toggle').trigger('click')
+      expect(wrapper.get('.section-index').text()).toBe('Section 1')
+
+      setLocale('zh-CN')
+      await flushPromises()
+      expect(wrapper.get('.skip-link').text()).toBe('跳到文档内容')
+      expect(wrapper.get('.document-content img').attributes('alt')).toBe('嵌入图片')
+      expect(wrapper.get('.section-index').text()).toBe('节 1')
+    } finally {
+      wrapper.unmount()
+      setLocale(originalLocale)
+    }
+  })
+
   it('shows copy feedback in English after the copy control is localized', async () => {
     const originalLocale = currentLocale.value
     parseFile.mockResolvedValue(parsedDocument)
@@ -290,6 +333,7 @@ describe('DocPreview source lifecycle', () => {
 
     try {
       await flushPromises()
+      expect(wrapper.get('.skip-link').text()).toBe('Skip to document content')
       await wrapper.get('.toolbar button[aria-label="Search document"]').trigger('click')
       const status = wrapper.get('.search-status')
       expect(wrapper.get('.search-status-visual').text()).toBe('')
@@ -305,6 +349,7 @@ describe('DocPreview source lifecycle', () => {
 
       setLocale('zh-CN')
       await flushPromises()
+      expect(wrapper.get('.skip-link').text()).toBe('跳到文档内容')
       expect(wrapper.get('.search-status-visual').text()).toBe('无匹配结果')
       expect(wrapper.get('.search-status .sr-only').text()).toBe('无匹配结果')
     } finally {

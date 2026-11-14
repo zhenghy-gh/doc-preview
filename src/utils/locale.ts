@@ -30,6 +30,7 @@ type TransValue = string | Record<string, string> | ((params: Record<string, any
 const zh: Record<string, TransValue> = {
   // App
   'app.title': 'DOC文件在线预览',
+  'app.skip.content': '跳到文档内容',
   'app.desc': '上传或通过地址加载 .doc 文件进行在线预览（纯前端实现）',
   'app.upload.area.title': '选择或拖拽DOC文档',
   'app.upload.area.title.drag': '释放文件开始预览',
@@ -348,6 +349,7 @@ const zh: Record<string, TransValue> = {
   'images.title': '文档图片',
   'images.summary': '点击展开查看嵌入图片',
   'images.alt': ({ n }) => `图片 ${n}`,
+  'images.embedded.alt': '嵌入图片',
   'images.floating': '浮动',
 
   // Stats panel
@@ -409,6 +411,7 @@ const zh: Record<string, TransValue> = {
 const en: Record<string, TransValue> = {
   // App
   'app.title': 'DOC File Online Preview',
+  'app.skip.content': 'Skip to document content',
   'app.desc': 'Upload or load a .doc file for online preview (frontend only)',
   'app.upload.area.title': 'Select or Drag & Drop DOC File',
   'app.upload.area.title.drag': 'Release to Preview',
@@ -727,6 +730,7 @@ const en: Record<string, TransValue> = {
   'images.title': 'Images',
   'images.summary': 'Click to view embedded images',
   'images.alt': ({ n }) => `Image ${n}`,
+  'images.embedded.alt': 'Embedded image',
   'images.floating': 'Floating',
 
   // Stats panel
