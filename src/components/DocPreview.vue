@@ -2872,15 +2872,16 @@ function toggleShortcuts() {
 
 function handleKeydown(e: KeyboardEvent) {
   const isCtrl = e.ctrlKey || e.metaKey
+  const key = e.key.toLowerCase()
 
-  if (isCtrl && e.key === 'f') {
+  if (isCtrl && !e.shiftKey && key === 'f') {
     e.preventDefault()
     if (!showSearch.value) toggleSearch()
     else searchInputRef.value?.focus()
     return
   }
 
-  if (isCtrl && e.key === 'p') {
+  if (isCtrl && !e.shiftKey && key === 'p') {
     e.preventDefault()
     printDocument()
     return
@@ -2913,15 +2914,15 @@ function handleKeydown(e: KeyboardEvent) {
     return
   }
 
-  // F3 or Ctrl+G for next match
-  if (e.key === 'F3' || (isCtrl && e.key === 'g')) {
-    if (showSearch.value) { e.preventDefault(); nextMatch() }
+  // Check modified shortcuts first so Shift+F3/Ctrl+Shift+G are not handled as next-match keys.
+  if ((e.key === 'F3' && e.shiftKey) || (isCtrl && e.shiftKey && key === 'g')) {
+    if (showSearch.value) { e.preventDefault(); prevMatch() }
     return
   }
 
-  // Shift+F3 or Ctrl+Shift+G for prev match
-  if (e.key === 'F3' && e.shiftKey || (isCtrl && e.shiftKey && e.key === 'g')) {
-    if (showSearch.value) { e.preventDefault(); prevMatch() }
+  // F3 or Ctrl+G for next match
+  if ((e.key === 'F3' && !e.shiftKey) || (isCtrl && !e.shiftKey && key === 'g')) {
+    if (showSearch.value) { e.preventDefault(); nextMatch() }
     return
   }
 

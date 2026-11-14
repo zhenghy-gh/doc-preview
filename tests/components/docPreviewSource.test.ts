@@ -443,6 +443,105 @@ describe('DocPreview source lifecycle', () => {
     }
   })
 
+  it('does not intercept browser Ctrl+Shift+F or Ctrl+Shift+P shortcuts', async () => {
+    const originalLocale = currentLocale.value
+    const printWindow = {
+      document: { write: vi.fn(), close: vi.fn() },
+      addEventListener: vi.fn(),
+    }
+    const printSpy = vi.spyOn(window, 'open').mockReturnValue(printWindow as unknown as Window)
+    parseFile.mockResolvedValue(parsedDocument)
+    setLocale('en')
+    const wrapper = mount(DocPreview, { props: { source: new File(['doc'], 'shortcuts.doc') } })
+
+    try {
+      await flushPromises()
+      for (const key of ['F', 'P']) {
+        for (const modifier of [{ ctrlKey: true }, { metaKey: true }]) {
+          const event = new KeyboardEvent('keydown', {
+            key,
+            shiftKey: true,
+            bubbles: true,
+            cancelable: true,
+            ...modifier,
+          })
+          document.dispatchEvent(event)
+          expect(event.defaultPrevented).toBe(false)
+        }
+      }
+      expect(wrapper.find('.search-bar').exists()).toBe(false)
+      expect(printSpy).not.toHaveBeenCalled()
+
+      for (const modifier of [{ ctrlKey: true }, { metaKey: true }]) {
+        const findEvent = new KeyboardEvent('keydown', { key: 'f', bubbles: true, cancelable: true, ...modifier })
+        document.dispatchEvent(findEvent)
+        expect(findEvent.defaultPrevented).toBe(true)
+        await flushPromises()
+        expect(wrapper.find('.search-bar').exists()).toBe(true)
+        await wrapper.get('.search-bar button[aria-label="Close search"]').trigger('click')
+
+        const printEvent = new KeyboardEvent('keydown', { key: 'p', bubbles: true, cancelable: true, ...modifier })
+        document.dispatchEvent(printEvent)
+        expect(printEvent.defaultPrevented).toBe(true)
+      }
+      expect(printSpy).toHaveBeenCalledTimes(2)
+    } finally {
+      wrapper.unmount()
+      setLocale(originalLocale)
+    }
+  })
+
+  it('routes Shift+F3 and Ctrl+Shift+G to the previous search match', async () => {
+    const originalLocale = currentLocale.value
+    const originalScrollIntoView = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView')
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() })
+    parseFile.mockResolvedValue({
+      ...parsedDocument,
+      document: {
+        ...parsedDocument.document,
+        paragraphs: [{
+          text: 'needle needle needle',
+          charFormat: { fontSize: 12 },
+          paraFormat: { alignment: 'left' },
+          _cpStart: 0,
+        }],
+      },
+    })
+    setLocale('en')
+    const wrapper = mount(DocPreview, { props: { source: new File(['doc'], 'matches.doc') } })
+
+    try {
+      await flushPromises()
+      await wrapper.get('.toolbar button[aria-label="Search document"]').trigger('click')
+      await wrapper.get('.search-input').setValue('needle')
+      await flushPromises()
+      const visualStatus = wrapper.get('.search-status-visual')
+      const dispatchKey = (key: string, modifiers: KeyboardEventInit = {}) => {
+        const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...modifiers })
+        document.dispatchEvent(event)
+        return event.defaultPrevented
+      }
+
+      expect(dispatchKey('F3', { shiftKey: true })).toBe(true)
+      await flushPromises()
+      expect(visualStatus.text()).toBe('3 / 3')
+      dispatchKey('G', { ctrlKey: true, shiftKey: true })
+      await flushPromises()
+      expect(visualStatus.text()).toBe('2 / 3')
+      dispatchKey('g', { ctrlKey: true })
+      await flushPromises()
+      expect(visualStatus.text()).toBe('3 / 3')
+      dispatchKey('F3')
+      await flushPromises()
+      expect(visualStatus.text()).toBe('1 / 3')
+    } finally {
+      wrapper.unmount()
+      setLocale(originalLocale)
+      if (originalScrollIntoView) Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', originalScrollIntoView)
+      else delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView
+    }
+  })
+
   it('localizes empty document placeholders and no-text parse errors', async () => {
     const originalLocale = currentLocale.value
     parseFile.mockResolvedValue({ success: true, document: { paragraphs: [] } })
