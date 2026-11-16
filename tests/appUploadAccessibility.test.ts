@@ -154,7 +154,10 @@ describe('App upload accessibility', () => {
 
           expect(inputId).toBeTruthy()
           expect(label.text()).toBe(expectedLabel)
+          expect(input.attributes('type')).toBe('url')
           expect(input.attributes('inputmode')).toBe('url')
+          expect(input.attributes('autocomplete')).toBe('url')
+          expect(input.attributes('spellcheck')).toBe('false')
           expect(input.attributes('enterkeyhint')).toBe('go')
           expect(input.attributes('placeholder')).toBe('https://...')
         } finally {

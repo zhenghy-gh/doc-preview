@@ -281,8 +281,10 @@ function toggleWebFont() {
             <div class="url-input-row">
               <input
                 id="source-url"
-                type="text"
+                type="url"
                 inputmode="url"
+                autocomplete="url"
+                spellcheck="false"
                 enterkeyhint="go"
                 v-model="urlInput"
                 :placeholder="t('app.upload.url.placeholder')"
