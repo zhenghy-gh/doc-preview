@@ -125,6 +125,14 @@ const handleFileChange = (event) => {
 </script>
 ```
 
+TypeScript 项目可以直接导入公开类型：
+
+```ts
+import { DocPreview, type ParseResult, type ParsedDocument } from '@zhenghy/doc-preview'
+```
+
+包会根据 ESM/CJS 消费方式分别解析声明入口；Node16、NodeNext 与 Bundler 模块解析均有对应的类型声明。
+
 The component can be imported and its idle shell server-rendered. Document parsing
 and DOM interactions start after client mount.
 
@@ -446,7 +454,16 @@ npx vue-tsc --noEmit
 npm run build:lib
 ```
 
-构建后的文件将输出到 `dist` 目录，含 ES + UMD 双格式和 `.d.ts` 类型声明。
+构建后的文件将输出到 `dist` 目录，含 ES + UMD 双格式，以及通用 `.d.ts`、ESM `.d.mts` 和 CJS `.d.cts` 类型声明。
+
+### Package 类型声明验证
+
+`npm run verify:package` 会检查实际 npm tarball，并在 Node16、NodeNext（ESM/CJS）和 Bundler（ESM）配置下编译消费者示例，分别验证 `skipLibCheck` 开启和关闭时的类型解析。
+
+```bash
+npm run build:lib
+npm run verify:package
+```
 
 ### 构建文档预览版本
 
