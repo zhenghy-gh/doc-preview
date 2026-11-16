@@ -165,6 +165,27 @@ describe('App upload accessibility', () => {
     }
   })
 
+  it('reports an empty URL submission through the visible and live error regions', async () => {
+    const originalLocale = currentLocale.value
+    const wrapper = mount(App)
+    try {
+      setLocale('en')
+      await flushPromises()
+      await wrapper.get('.url-btn').trigger('click')
+      expect(wrapper.get('.error-banner').text()).toBe('Enter a document URL')
+      expect(wrapper.find('[role="status"]').text()).toBe('Enter a document URL')
+
+      setLocale('zh-CN')
+      await flushPromises()
+      await wrapper.get('.url-btn').trigger('click')
+      expect(wrapper.get('.error-banner').text()).toBe('请输入文档地址')
+      expect(wrapper.find('[role="status"]').text()).toBe('请输入文档地址')
+    } finally {
+      wrapper.unmount()
+      setLocale(originalLocale)
+    }
+  })
+
   it('announces upload validation errors through the persistent polite status region', async () => {
     const wrapper = mount(App)
     const status = wrapper.find('[role="status"]')

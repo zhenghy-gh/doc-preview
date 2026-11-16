@@ -98,7 +98,10 @@ const handleDragLeave = () => {
 
 const loadFromUrl = () => {
   const url = urlInput.value.trim()
-  if (!url) return
+  if (!url) {
+    errorMessage.value = t('app.upload.url.required')
+    return
+  }
   errorMessage.value = ''
   previewSource.value = url
   selectedFile.value = null

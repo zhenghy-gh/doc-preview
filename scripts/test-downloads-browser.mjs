@@ -192,6 +192,9 @@ try {
   await page.locator('.lang-switch').click()
   await page.waitForFunction(() => document.title === 'DOC File Online Preview' && document.documentElement.lang === 'en')
   assert.equal(await page.locator('meta[name="text-scale"]').getAttribute('content'), 'scale')
+  await page.locator('.url-btn').click()
+  assert.equal(await page.locator('.error-banner').textContent(), 'Enter a document URL')
+  assert.equal(await page.locator('.sr-only').first().textContent(), 'Enter a document URL')
   const resizableBuffersAvailable = await page.evaluate(() => (
     typeof ArrayBuffer.prototype.resize === 'function'
   ))
