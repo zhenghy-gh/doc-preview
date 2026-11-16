@@ -12,6 +12,8 @@ type AppError = { key: string; params?: Record<string, unknown> } | null
 const errorState = ref<AppError>(null)
 const errorMessage = computed(() => errorState.value ? t(errorState.value.key, errorState.value.params) : '')
 const isUrlError = computed(() => errorState.value?.key === 'app.upload.url.required')
+const isFileError = computed(() => ['app.upload.error.format', 'app.upload.error.docx', 'app.upload.error.sizeLimit'].includes(errorState.value?.key || ''))
+const errorId = computed(() => isUrlError.value ? 'url-error' : isFileError.value ? 'file-error' : undefined)
 const isDragOver = ref(false)
 const previewFileName = computed(() => {
   if (typeof previewSource.value === 'string') return getFileNameFromUrl(previewSource.value)
@@ -262,7 +264,7 @@ function toggleWebFont() {
           <h2>{{ isDragOver ? t('app.upload.area.title.drag') : t('app.upload.area.title') }}</h2>
           <p>{{ t('app.upload.area.hint') }}</p>
 
-          <div v-if="errorMessage" :id="isUrlError ? 'url-error' : undefined" class="error-banner">
+          <div v-if="errorMessage" :id="errorId" class="error-banner">
             {{ errorMessage }}
           </div>
 
@@ -272,6 +274,8 @@ function toggleWebFont() {
               accept=".doc,.dot"
               @change="handleFileChange"
               class="file-input"
+              :aria-invalid="isFileError ? 'true' : undefined"
+              :aria-describedby="isFileError ? 'file-error' : undefined"
             />
             <span>{{ t('app.upload.btn') }}</span>
           </label>

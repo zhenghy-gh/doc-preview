@@ -213,6 +213,9 @@ describe('App upload accessibility', () => {
     await flushPromises()
 
     expect(wrapper.find('.error-banner').text()).toContain('.pdf')
+    expect(wrapper.get('.file-input').attributes('aria-invalid')).toBe('true')
+    expect(wrapper.get('.file-input').attributes('aria-describedby')).toBe('file-error')
+    expect(wrapper.get('.error-banner').attributes('id')).toBe('file-error')
     expect(status.text()).toContain('.pdf')
     wrapper.unmount()
   })
