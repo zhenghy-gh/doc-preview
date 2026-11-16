@@ -163,6 +163,14 @@ const percentLabel = computed(() => {
   }
 }
 
+.progress-percent {
+  text-align: center;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin: 4px 0 8px;
+  font-variant-numeric: tabular-nums;
+}
+
 .loading-filename {
   color: var(--text-muted);
   font-size: 0.85rem;
