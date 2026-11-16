@@ -3238,7 +3238,11 @@ defineExpose({ reload, getPlainText, focusContent })
               :title="t('pagination.prev')"
               :aria-label="t('pagination.prev')"
             >◀</button>
-            <span class="pagination-info">
+            <span
+              class="pagination-info"
+              role="status"
+              :aria-label="t('pagination.page.aria', { current: currentPage, total: totalPages })"
+            >
               {{ currentPage }} / {{ totalPages }}
             </span>
             <button

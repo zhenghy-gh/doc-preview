@@ -225,8 +225,9 @@ try {
   await fileInput.setInputFiles('docs/doc-101.doc')
   await page.locator('.doc-preview .document-content').waitFor({ state: 'attached', timeout: 15_000 })
   await page.waitForFunction(() => (
-    document.querySelector('.doc-preview [role="status"]')?.textContent?.includes('doc-101.doc')
+    document.querySelector('.doc-preview .sr-only[role="status"]')?.textContent?.includes('doc-101.doc')
   ))
+  assert.equal(await page.getByRole('status', { name: 'Page 1 of 1' }).count(), 1)
   const previewThemeButton = page.locator('.doc-preview .toolbar-right button[aria-label="Dark mode"]')
   assert.equal(await previewThemeButton.getAttribute('aria-pressed'), 'false')
   await previewThemeButton.click()
@@ -463,9 +464,9 @@ try {
   await page.locator('.url-btn').click()
   await page.locator('.doc-preview .document-content').waitFor({ state: 'attached', timeout: 30_000 })
   await page.waitForFunction(() => (
-    document.querySelector('.doc-preview [role="status"]')?.textContent?.includes('doc-101.doc')
+    document.querySelector('.doc-preview .sr-only[role="status"]')?.textContent?.includes('doc-101.doc')
   ), { timeout: 30_000 })
-  assert.equal(await page.locator('.doc-preview [role="status"]').textContent(), 'Document parsing complete: doc-101.doc')
+  assert.equal(await page.locator('.doc-preview .sr-only[role="status"]').textContent(), 'Document parsing complete: doc-101.doc')
   const remotePreviewThemeButton = page.locator('.doc-preview .toolbar-right button[aria-label="Dark mode"]')
   assert.equal(await remotePreviewThemeButton.getAttribute('aria-pressed'), 'false')
   await remotePreviewThemeButton.click()
@@ -494,7 +495,7 @@ try {
   await fileInput.setInputFiles(templateFile)
   await page.locator('.doc-preview .document-content').waitFor({ state: 'attached', timeout: 15_000 })
   await page.waitForFunction(() => (
-    document.querySelector('.doc-preview [role="status"]')?.textContent?.includes('template.dot')
+    document.querySelector('.doc-preview .sr-only[role="status"]')?.textContent?.includes('template.dot')
   ))
   const templateText = await page.locator('.doc-preview .document-content').innerText()
   assert.ok(templateText.includes(contentMarker), 'DOT template should render DOC-compatible content')

@@ -113,6 +113,7 @@ const zh: Record<string, TransValue> = {
   'pagination.prev': '上一页',
   'pagination.next': '下一页',
   'pagination.page': ({ current, total }) => `${current} / ${total}`,
+  'pagination.page.aria': ({ current, total }) => `第 ${current} 页，共 ${total} 页`,
 
   // Doc status
   'doc.status.ok': '✓ 解析成功',
@@ -499,6 +500,7 @@ const en: Record<string, TransValue> = {
   'pagination.prev': 'Previous page',
   'pagination.next': 'Next page',
   'pagination.page': ({ current, total }) => `${current} / ${total}`,
+  'pagination.page.aria': ({ current, total }) => `Page ${current} of ${total}`,
 
   // Doc status
   'doc.status.ok': '✓ Parse succeeded',
