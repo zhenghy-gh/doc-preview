@@ -373,6 +373,7 @@ describe('DocPreview source lifecycle', () => {
       await flushPromises()
       expect(wrapper.get('.skip-link').text()).toBe('Skip to document content')
       await wrapper.get('.toolbar button[aria-label="Search document"]').trigger('click')
+      expect(wrapper.get('.search-input').attributes('aria-label')).toBe('Search document')
       const status = wrapper.get('.search-status')
       expect(wrapper.get('.search-status-visual').text()).toBe('')
       expect(wrapper.get('.search-status .sr-only').text()).toBe('')
@@ -388,6 +389,7 @@ describe('DocPreview source lifecycle', () => {
       setLocale('zh-CN')
       await flushPromises()
       expect(wrapper.get('.skip-link').text()).toBe('跳到文档内容')
+      expect(wrapper.get('.search-input').attributes('aria-label')).toBe('搜索文档')
       expect(wrapper.get('.search-status-visual').text()).toBe('无匹配结果')
       expect(wrapper.get('.search-status .sr-only').text()).toBe('无匹配结果')
     } finally {

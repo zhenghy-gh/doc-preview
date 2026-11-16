@@ -259,6 +259,8 @@ try {
   assert.ok(contentMarker, 'The sample DOC should render readable text')
   await page.locator('.doc-preview button[aria-label="Search document"]').click()
   await page.waitForFunction(() => document.activeElement?.classList.contains('search-input'))
+  const searchInput = page.getByRole('textbox', { name: 'Search document' })
+  assert.equal(await searchInput.count(), 1)
   const searchStatus = page.locator('.search-status')
   assert.equal(await searchStatus.getAttribute('role'), 'status')
   assert.equal(await searchStatus.getAttribute('aria-live'), 'polite')

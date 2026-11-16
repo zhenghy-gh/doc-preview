@@ -3176,6 +3176,7 @@ defineExpose({ reload, getPlainText, focusContent })
           v-model="searchQuery"
           type="text"
           class="search-input"
+          :aria-label="t('toolbar.search')"
           :placeholder="t('search.placeholder')"
           @input="performSearch"
           @keyup.enter="nextMatch"
