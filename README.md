@@ -202,6 +202,11 @@ and DOM interactions start after client mount.
 | `Ctrl+=` / `Ctrl++` | 放大 |
 | `Ctrl+-` | 缩小 |
 | `Ctrl+0` | 重置缩放 |
+| `PageUp` / `PageDown` | 上一页 / 下一页 |
+| `Home` / `End` | 跳到首页 / 末页 |
+| `?` / `Ctrl+/` | 打开或关闭快捷键面板 |
+
+快捷键作用于文档预览区域；当搜索或 URL 输入框等可编辑控件聚焦时，Ctrl/Meta+F 和 Ctrl/Meta+P 会保留给输入/浏览器行为，不会抢占输入。
 
 ## API
 
