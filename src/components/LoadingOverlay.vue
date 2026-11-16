@@ -40,7 +40,7 @@ const percentLabel = computed(() => {
 <template>
   <div class="loading-container">
     <div class="loading-spinner"></div>
-    <p class="loading-step">{{ progressStep || t('loading.text') }}</p>
+    <p class="loading-step" role="status" aria-live="polite" aria-atomic="true">{{ progressStep || t('loading.text') }}</p>
     <p class="loading-filename" v-if="fileName">{{ fileName }}</p>
     <div
       class="progress-track"
