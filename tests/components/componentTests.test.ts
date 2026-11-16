@@ -67,6 +67,7 @@ describe('ErrorDisplay', () => {
     expect(alert.text().length).toBeGreaterThan(0)
     const retryBtn = wrapper.find('.error-retry-btn')
     expect(retryBtn.exists()).toBe(true)
+    expect(retryBtn.attributes('type')).toBe('button')
     await retryBtn.trigger('click')
     expect(wrapper.emitted('retry')).toHaveLength(1)
   })

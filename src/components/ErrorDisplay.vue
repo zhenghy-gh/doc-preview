@@ -31,6 +31,7 @@ const icon = computed(() => ERROR_CATEGORY_ICON[classified.value.category])
       <div class="error-actions">
         <button
           v-if="classified.retryable"
+          type="button"
           class="error-retry-btn"
           @click="emit('retry')"
         >
