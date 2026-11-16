@@ -4,6 +4,7 @@ import { once } from 'node:events'
 import { createServer } from 'node:net'
 import { access, readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
+import { stripVTControlCharacters } from 'node:util'
 import { chromium, firefox, webkit } from 'playwright'
 
 async function getAvailablePort() {
@@ -39,7 +40,7 @@ let previewServerClosed = false
 let previewServerReady = false
 previewServer.stdout.on('data', (chunk) => {
   const output = chunk.toString()
-  if (output.includes(previewBaseUrl)) previewServerReady = true
+  if (stripVTControlCharacters(output).includes(previewBaseUrl)) previewServerReady = true
   process.stdout.write(chunk)
 })
 previewServer.stderr.on('data', (chunk) => process.stderr.write(chunk))
