@@ -411,6 +411,7 @@ describe('DocPreview source lifecycle', () => {
 
     try {
       await flushPromises()
+      expect(wrapper.findAll('button').every(button => button.attributes('type') === 'button')).toBe(true)
       expect(wrapper.get('.skip-link').text()).toBe('Skip to document content')
       expect(wrapper.get('.pagination-info').attributes('aria-label')).toBe('Page 1 of 1')
       expect(wrapper.get('.pagination-info').attributes('role')).toBe('status')

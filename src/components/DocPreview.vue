@@ -3151,38 +3151,39 @@ defineExpose({ reload, getPlainText, focusContent })
       <div class="toolbar">
         <div class="toolbar-left">
           <!-- Zoom -->
-          <button class="toolbar-btn" @click="zoomOut" :disabled="zoomLevel <= MIN_ZOOM" :title="t('toolbar.zoom.out')" :aria-label="t('toolbar.zoom.out')">−</button>
-          <button class="toolbar-btn zoom-label" @click="zoomReset" :title="t('toolbar.zoom.reset')" :aria-label="t('toolbar.zoom.reset.aria')">{{ zoomLabel }}</button>
-          <button class="toolbar-btn" @click="zoomIn" :disabled="zoomLevel >= MAX_ZOOM" :title="t('toolbar.zoom.in')" :aria-label="t('toolbar.zoom.in')">+</button>
+          <button type="button" class="toolbar-btn" @click="zoomOut" :disabled="zoomLevel <= MIN_ZOOM" :title="t('toolbar.zoom.out')" :aria-label="t('toolbar.zoom.out')">−</button>
+          <button type="button" class="toolbar-btn zoom-label" @click="zoomReset" :title="t('toolbar.zoom.reset')" :aria-label="t('toolbar.zoom.reset.aria')">{{ zoomLabel }}</button>
+          <button type="button" class="toolbar-btn" @click="zoomIn" :disabled="zoomLevel >= MAX_ZOOM" :title="t('toolbar.zoom.in')" :aria-label="t('toolbar.zoom.in')">+</button>
 
           <span class="toolbar-sep" role="separator"></span>
 
           <!-- Search -->
-          <button class="toolbar-btn" @click="toggleSearch" :class="{ active: showSearch }" :title="t('toolbar.search')" :aria-label="t('toolbar.search')">
+          <button type="button" class="toolbar-btn" @click="toggleSearch" :class="{ active: showSearch }" :title="t('toolbar.search')" :aria-label="t('toolbar.search')">
             🔍
           </button>
 
           <span class="toolbar-sep" role="separator"></span>
 
           <!-- Print -->
-          <button class="toolbar-btn" @click="printDocument" :title="t('toolbar.print')" :aria-label="t('toolbar.print')">🖨️</button>
+          <button type="button" class="toolbar-btn" @click="printDocument" :title="t('toolbar.print')" :aria-label="t('toolbar.print')">🖨️</button>
 
           <!-- Download text -->
-          <button class="toolbar-btn" @click="downloadText" :title="t('toolbar.download.txt')" :aria-label="t('toolbar.download.txt')">📥</button>
+          <button type="button" class="toolbar-btn" @click="downloadText" :title="t('toolbar.download.txt')" :aria-label="t('toolbar.download.txt')">📥</button>
 
           <!-- Download HTML -->
-          <button class="toolbar-btn" @click="downloadHtml" :title="t('toolbar.download.html')" :aria-label="t('toolbar.download.html')">🌐</button>
+          <button type="button" class="toolbar-btn" @click="downloadHtml" :title="t('toolbar.download.html')" :aria-label="t('toolbar.download.html')">🌐</button>
 
           <!-- Download Markdown -->
-          <button class="toolbar-btn" @click="downloadMarkdown" :title="t('toolbar.download.md')" :aria-label="t('toolbar.download.md')">📝</button>
+          <button type="button" class="toolbar-btn" @click="downloadMarkdown" :title="t('toolbar.download.md')" :aria-label="t('toolbar.download.md')">📝</button>
 
           <!-- Copy text -->
-          <button class="toolbar-btn copy-btn" @click="copyText" :title="t('toolbar.copy')" :aria-label="t('toolbar.copy')">📋</button>
+          <button type="button" class="toolbar-btn copy-btn" @click="copyText" :title="t('toolbar.copy')" :aria-label="t('toolbar.copy')">📋</button>
 
           <span class="toolbar-sep" role="separator"></span>
 
           <!-- Outline TOC -->
           <button
+            type="button"
             class="toolbar-btn"
             :class="{ active: showOutline }"
             :disabled="outline.length === 0"
@@ -3193,6 +3194,7 @@ defineExpose({ reload, getPlainText, focusContent })
 
           <!-- Hidden text toggle -->
           <button
+            type="button"
             class="toolbar-btn"
             :class="{ active: showHiddenText }"
             @click="toggleHiddenText"
@@ -3210,6 +3212,7 @@ defineExpose({ reload, getPlainText, focusContent })
 
           <!-- Dark mode toggle -->
           <button
+            type="button"
             class="toolbar-btn"
             :class="{ active: darkMode }"
             @click="toggleDarkMode"
@@ -3222,6 +3225,7 @@ defineExpose({ reload, getPlainText, focusContent })
 
           <!-- Shortcuts -->
           <button
+            type="button"
             class="toolbar-btn"
             :class="{ active: showShortcuts }"
             @click="toggleShortcuts"
@@ -3234,6 +3238,7 @@ defineExpose({ reload, getPlainText, focusContent })
           <!-- Pagination controls -->
           <div class="pagination-controls">
             <button
+              type="button"
               class="pagination-btn"
               @click="goToPrevPage"
               :disabled="currentPage <= 1"
@@ -3248,6 +3253,7 @@ defineExpose({ reload, getPlainText, focusContent })
               {{ currentPage }} / {{ totalPages }}
             </span>
             <button
+              type="button"
               class="pagination-btn"
               @click="goToNextPage"
               :disabled="currentPage >= totalPages"
@@ -3292,9 +3298,9 @@ defineExpose({ reload, getPlainText, focusContent })
           <span class="search-status-visual" aria-hidden="true">{{ searchStatusLabel }}</span>
           <span class="sr-only">{{ searchStatusAnnouncement }}</span>
         </span>
-        <button class="toolbar-btn" @click="prevMatch" :disabled="searchResults.length === 0" :title="tMap('shortcuts.items', 'prevMatch') + ' ▲'" :aria-label="tMap('shortcuts.items', 'prevMatch')">▲</button>
-        <button class="toolbar-btn" @click="nextMatch" :disabled="searchResults.length === 0" :title="tMap('shortcuts.items', 'nextMatch') + ' ▼'" :aria-label="tMap('shortcuts.items', 'nextMatch')">▼</button>
-        <button class="toolbar-btn" @click="toggleSearch" :title="tMap('shortcuts.items', 'closeSearch')" :aria-label="tMap('shortcuts.items', 'closeSearch')">✕</button>
+        <button type="button" class="toolbar-btn" @click="prevMatch" :disabled="searchResults.length === 0" :title="tMap('shortcuts.items', 'prevMatch') + ' ▲'" :aria-label="tMap('shortcuts.items', 'prevMatch')">▲</button>
+        <button type="button" class="toolbar-btn" @click="nextMatch" :disabled="searchResults.length === 0" :title="tMap('shortcuts.items', 'nextMatch') + ' ▼'" :aria-label="tMap('shortcuts.items', 'nextMatch')">▼</button>
+        <button type="button" class="toolbar-btn" @click="toggleSearch" :title="tMap('shortcuts.items', 'closeSearch')" :aria-label="tMap('shortcuts.items', 'closeSearch')">✕</button>
       </div>
 
       <!-- Document info -->
@@ -3597,6 +3603,7 @@ defineExpose({ reload, getPlainText, focusContent })
       >
         <div class="revision-mode-toolbar" role="group" :aria-label="t('revisions.title')">
           <button
+            type="button"
             class="revision-mode-btn"
             :class="{ active: revisionMode === 'marks' }"
             :aria-pressed="revisionMode === 'marks'"
@@ -3604,6 +3611,7 @@ defineExpose({ reload, getPlainText, focusContent })
             :title="t('revisions.marks')"
           >{{ t('revisions.marks') }}</button>
           <button
+            type="button"
             class="revision-mode-btn"
             :class="{ active: revisionMode === 'accepted' }"
             :aria-pressed="revisionMode === 'accepted'"
@@ -3611,6 +3619,7 @@ defineExpose({ reload, getPlainText, focusContent })
             :title="t('revisions.accept')"
           >{{ t('revisions.accept') }}</button>
           <button
+            type="button"
             class="revision-mode-btn"
             :class="{ active: revisionMode === 'rejected' }"
             :aria-pressed="revisionMode === 'rejected'"
