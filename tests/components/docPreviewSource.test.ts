@@ -606,6 +606,16 @@ describe('DocPreview source lifecycle', () => {
       expect(wrapper.find('.search-bar').exists()).toBe(false)
       expect(printSpy).not.toHaveBeenCalled()
 
+      await wrapper.get('.toolbar button[aria-label="Search document"]').trigger('click')
+      const searchInput = wrapper.get('.search-input').element
+      searchInput.focus()
+      for (const key of ['f', 'p']) {
+        const inputEvent = new KeyboardEvent('keydown', { key, ctrlKey: true, bubbles: true, cancelable: true })
+        searchInput.dispatchEvent(inputEvent)
+        expect(inputEvent.defaultPrevented).toBe(false)
+      }
+      await wrapper.get('.search-bar button[aria-label="Close search"]').trigger('click')
+
       for (const modifier of [{ ctrlKey: true }, { metaKey: true }]) {
         const findEvent = new KeyboardEvent('keydown', { key: 'f', bubbles: true, cancelable: true, ...modifier })
         document.dispatchEvent(findEvent)

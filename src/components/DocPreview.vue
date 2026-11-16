@@ -2953,8 +2953,11 @@ function toggleShortcuts(event?: MouseEvent) {
 function handleKeydown(e: KeyboardEvent) {
   const isCtrl = e.ctrlKey || e.metaKey
   const key = e.key.toLowerCase()
+  const target = e.target as HTMLElement | null
+  const isInputFocused = Boolean(target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable))
 
   if (isCtrl && !e.shiftKey && key === 'f') {
+    if (isInputFocused) return
     e.preventDefault()
     if (!showSearch.value) toggleSearch()
     else searchInputRef.value?.focus()
@@ -2962,6 +2965,7 @@ function handleKeydown(e: KeyboardEvent) {
   }
 
   if (isCtrl && !e.shiftKey && key === 'p') {
+    if (isInputFocused) return
     e.preventDefault()
     printDocument()
     return
@@ -3007,8 +3011,6 @@ function handleKeydown(e: KeyboardEvent) {
   }
 
   // PageUp/PageDown for pagination navigation (skip when focus is in input)
-  const target = e.target as HTMLElement
-  const isInputFocused = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
   if (isInputFocused) return
 
   if (e.key === 'PageUp') {
