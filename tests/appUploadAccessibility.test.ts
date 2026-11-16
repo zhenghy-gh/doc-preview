@@ -79,6 +79,40 @@ describe('App upload accessibility', () => {
     }
   })
 
+  it('keeps the app usable when browser storage is unavailable', async () => {
+    const originalLocale = currentLocale.value
+    vi.stubGlobal('localStorage', {
+      getItem: () => { throw new Error('storage blocked') },
+      setItem: () => { throw new Error('storage blocked') },
+      removeItem: () => { throw new Error('storage blocked') },
+    })
+    const wrapper = mount(App)
+    try {
+      expect(wrapper.find('.upload-area').exists()).toBe(true)
+      const themeButton = wrapper.get('.theme-btn:not(.lang-switch)')
+      const initialPressed = themeButton.attributes('aria-pressed')
+      await themeButton.trigger('click')
+      expect(themeButton.attributes('aria-pressed')).not.toBe(initialPressed)
+
+      const fileInput = wrapper.get('.file-input')
+      Object.defineProperty(fileInput.element, 'files', {
+        configurable: true,
+        value: [new File(['doc'], 'storage-blocked.doc')],
+      })
+      await fileInput.trigger('change')
+      await flushPromises()
+      const fontButton = wrapper.get('.header-actions .header-btn:nth-child(1)')
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const initialFontPressed = fontButton.attributes('aria-pressed')
+      await fontButton.trigger('click')
+      expect(fontButton.attributes('aria-pressed')).not.toBe(initialFontPressed)
+    } finally {
+      wrapper.unmount()
+      setLocale(originalLocale)
+    }
+  })
+
   it('synchronizes the browser title when the UI locale changes', async () => {
     const originalLocale = currentLocale.value
     const originalTitle = document.title

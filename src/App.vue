@@ -195,11 +195,23 @@ onUnmounted(() => {
 })
 
 // --- Web Font ---
-const useWebFont = ref(localStorage.getItem('use-webfont') === 'true')
+function readWebFontPreference(): boolean {
+  try {
+    return localStorage.getItem('use-webfont') === 'true'
+  } catch {
+    return false
+  }
+}
+
+const useWebFont = ref(readWebFontPreference())
 
 function toggleWebFont() {
   useWebFont.value = !useWebFont.value
-  localStorage.setItem('use-webfont', String(useWebFont.value))
+  try {
+    localStorage.setItem('use-webfont', String(useWebFont.value))
+  } catch {
+    // The current document still honors the toggle without persistence.
+  }
 }
 
 </script>
