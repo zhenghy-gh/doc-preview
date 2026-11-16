@@ -5,6 +5,17 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="text-scale" content="scale" />
+    <meta name="color-scheme" content="light dark" />
+    <script>
+      try {
+        const preference = localStorage.getItem('dark-mode')
+        const scheme = document.querySelector('meta[name="color-scheme"]')
+        if (preference === 'dark' || preference === 'true') scheme.content = 'dark'
+        else if (preference === 'light' || preference === 'false') scheme.content = 'light'
+        document.documentElement.classList.toggle('dark', scheme.content === 'dark')
+        document.documentElement.classList.toggle('light', scheme.content === 'light')
+      } catch {}
+    </script>
     <title>DOC文件在线预览</title>
   </head>
   <body>

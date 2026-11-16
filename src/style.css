@@ -5,6 +5,7 @@
 }
 
 :root {
+  color-scheme: light dark;
   --bg-primary: #f5f5f5;
   --bg-secondary: #ffffff;
   --bg-tertiary: #f8f9fa;
@@ -29,7 +30,8 @@
   --highlight-current: #f44336;
 }
 
-.dark {
+:root.dark {
+  color-scheme: dark;
   --bg-primary: #1a1a2e;
   --bg-secondary: #16213e;
   --bg-tertiary: #1e2a4a;
@@ -52,6 +54,41 @@
   --error-text: #e06060;
   --highlight: #8a7a20;
   --highlight-current: #a03030;
+}
+
+:root.light {
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not(.light) {
+    --bg-primary: #1a1a2e;
+    --bg-secondary: #16213e;
+    --bg-tertiary: #1e2a4a;
+    --text-primary: #e0e0e0;
+    --text-secondary: #b0b0b0;
+    --text-muted: #888888;
+    --border-color: #2a3a5c;
+    --border-light: #1e2e4e;
+    --accent: #7c8cf0;
+    --accent-light: #1a2a4a;
+    --shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+    --shadow-sm: 0 1px 4px rgba(0, 0, 0, 0.3);
+    --paper-bg: #1e2a4a;
+    --paper-shadow: 0 1px 4px rgba(0, 0, 0, 0.3), 0 2px 12px rgba(0, 0, 0, 0.2);
+    --toolbar-bg: #16213e;
+    --toolbar-border: #2a3a5c;
+    --search-bar-bg: #2a2a1e;
+    --error-bg: #2a1a1a;
+    --error-border: #4a2a2a;
+    --error-text: #e06060;
+    --highlight: #8a7a20;
+    --highlight-current: #a03030;
+  }
+
+  :root:not(.light) th {
+    background: #2a2a2a;
+  }
 }
 
 body {

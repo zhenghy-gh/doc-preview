@@ -445,6 +445,89 @@ describe('DocPreview source lifecycle', () => {
     }
   })
 
+  it('prefers stored theme overrides over stale host classes when used standalone', async () => {
+    const originalLocale = currentLocale.value
+    const originalTheme = localStorage.getItem('dark-mode')
+    const originalColorSchemeMeta = document.querySelector<HTMLMetaElement>('meta[name="color-scheme"]')
+    const originalColorScheme = originalColorSchemeMeta?.content
+    const colorSchemeMeta = originalColorSchemeMeta ?? document.createElement('meta')
+    colorSchemeMeta.name = 'color-scheme'
+    if (!originalColorSchemeMeta) document.head.append(colorSchemeMeta)
+    const hadDarkClass = document.documentElement.classList.contains('dark')
+    const hadLightClass = document.documentElement.classList.contains('light')
+    const originalMatchMedia = Object.getOwnPropertyDescriptor(window, 'matchMedia')
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
+    })
+    parseFile.mockResolvedValue(parsedDocument)
+    setLocale('en')
+
+    try {
+      colorSchemeMeta.content = 'light dark'
+      localStorage.setItem('dark-mode', 'dark')
+      document.documentElement.classList.remove('dark', 'light')
+      const darkPreview = mount(DocPreview, { props: { source: new File(['doc'], 'theme.doc') } })
+      try {
+        await flushPromises()
+        expect(darkPreview.get('.toolbar-right button[aria-label="Dark mode"]').attributes('aria-pressed')).toBe('true')
+        expect(document.documentElement.classList.contains('dark')).toBe(true)
+        expect(colorSchemeMeta.content).toBe('dark')
+      } finally {
+        darkPreview.unmount()
+      }
+
+      localStorage.setItem('dark-mode', 'light')
+      document.documentElement.classList.add('dark')
+      const lightPreview = mount(DocPreview, { props: { source: new File(['doc'], 'theme.doc') } })
+      try {
+        await flushPromises()
+        expect(lightPreview.get('.toolbar-right button[aria-label="Dark mode"]').attributes('aria-pressed')).toBe('false')
+        expect(document.documentElement.classList.contains('dark')).toBe(false)
+        expect(document.documentElement.classList.contains('light')).toBe(true)
+        expect(colorSchemeMeta.content).toBe('light')
+      } finally {
+        lightPreview.unmount()
+      }
+
+      localStorage.removeItem('dark-mode')
+      colorSchemeMeta.content = 'dark'
+      document.documentElement.classList.add('light')
+      const hostDarkPreview = mount(DocPreview, { props: { source: new File(['doc'], 'theme.doc') } })
+      try {
+        await flushPromises()
+        expect(hostDarkPreview.get('.toolbar-right button[aria-label="Dark mode"]').attributes('aria-pressed')).toBe('true')
+        expect(document.documentElement.classList.contains('dark')).toBe(true)
+        expect(colorSchemeMeta.content).toBe('dark')
+      } finally {
+        hostDarkPreview.unmount()
+      }
+
+      colorSchemeMeta.content = 'light'
+      document.documentElement.classList.add('dark')
+      const hostLightPreview = mount(DocPreview, { props: { source: new File(['doc'], 'theme.doc') } })
+      try {
+        await flushPromises()
+        expect(hostLightPreview.get('.toolbar-right button[aria-label="Dark mode"]').attributes('aria-pressed')).toBe('false')
+        expect(document.documentElement.classList.contains('dark')).toBe(false)
+        expect(document.documentElement.classList.contains('light')).toBe(true)
+        expect(colorSchemeMeta.content).toBe('light')
+      } finally {
+        hostLightPreview.unmount()
+      }
+    } finally {
+      setLocale(originalLocale)
+      if (originalTheme === null) localStorage.removeItem('dark-mode')
+      else localStorage.setItem('dark-mode', originalTheme)
+      document.documentElement.classList.toggle('dark', hadDarkClass)
+      document.documentElement.classList.toggle('light', hadLightClass)
+      if (originalColorScheme !== undefined) colorSchemeMeta.content = originalColorScheme
+      if (!originalColorSchemeMeta) colorSchemeMeta.remove()
+      if (originalMatchMedia) Object.defineProperty(window, 'matchMedia', originalMatchMedia)
+      else delete (window as Window & { matchMedia?: unknown }).matchMedia
+    }
+  })
+
   it('does not intercept browser Ctrl+Shift+F or Ctrl+Shift+P shortcuts', async () => {
     const originalLocale = currentLocale.value
     const printWindow = {

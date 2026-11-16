@@ -11,32 +11,71 @@ describe('App upload accessibility', () => {
     vi.restoreAllMocks()
   })
 
-  it('names the theme icon by its localized action and updates after toggling', async () => {
+  it('exposes the dark-mode pressed state and returns to the system scheme', async () => {
     const originalLocale = currentLocale.value
     const originalDarkMode = localStorage.getItem('dark-mode')
+    const originalColorSchemeMeta = document.querySelector<HTMLMetaElement>('meta[name="color-scheme"]')
+    const originalMeta = originalColorSchemeMeta?.content
+    const colorSchemeMeta = originalColorSchemeMeta ?? document.createElement('meta')
+    colorSchemeMeta.name = 'color-scheme'
+    if (!originalColorSchemeMeta) document.head.append(colorSchemeMeta)
+    const hadDarkClass = document.documentElement.classList.contains('dark')
+    const hadLightClass = document.documentElement.classList.contains('light')
+    const originalMatchMedia = Object.getOwnPropertyDescriptor(window, 'matchMedia')
+    const mediaListeners: ((event: MediaQueryListEvent) => void)[] = []
+    let systemDark = false
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: vi.fn(() => ({
+        get matches() { return systemDark },
+        addEventListener: (_type: string, listener: (event: MediaQueryListEvent) => void) => mediaListeners.push(listener),
+        removeEventListener: vi.fn(),
+      })),
+    })
     localStorage.removeItem('dark-mode')
     const wrapper = mount(App)
     try {
       const themeButton = wrapper.get('.theme-btn:not(.lang-switch)')
-      expect(themeButton.attributes('aria-label')).toBe('切换暗色模式')
+      expect(themeButton.attributes('aria-label')).toBe('暗色模式')
+      expect(themeButton.attributes('aria-pressed')).toBe('false')
       expect(themeButton.attributes('title')).toBe('切换暗色模式')
+      expect(colorSchemeMeta.content).toBe('light dark')
+
+      systemDark = true
+      mediaListeners.forEach(listener => listener({ matches: true } as MediaQueryListEvent))
+      await flushPromises()
+      expect(themeButton.attributes('aria-pressed')).toBe('true')
+      expect(document.documentElement.classList.contains('dark')).toBe(true)
+      expect(colorSchemeMeta.content).toBe('light dark')
 
       setLocale('en')
       await flushPromises()
-      expect(themeButton.attributes('aria-label')).toBe('Switch to dark mode')
-
+      expect(themeButton.attributes('aria-label')).toBe('Dark mode')
       await themeButton.trigger('click')
-      expect(themeButton.attributes('aria-label')).toBe('Switch to light mode')
-      expect(themeButton.attributes('title')).toBe('Switch to light mode')
+      expect(themeButton.attributes('aria-pressed')).toBe('false')
+      expect(themeButton.attributes('title')).toBe('Switch to dark mode')
+      expect(localStorage.getItem('dark-mode')).toBe('light')
+      expect(colorSchemeMeta.content).toBe('light')
 
       setLocale('zh-CN')
       await flushPromises()
-      expect(themeButton.attributes('aria-label')).toBe('切换亮色模式')
+      expect(themeButton.attributes('aria-label')).toBe('暗色模式')
+      await themeButton.trigger('click')
+      expect(themeButton.attributes('aria-pressed')).toBe('true')
+      expect(themeButton.attributes('title')).toBe('切换亮色模式')
+      expect(localStorage.getItem('dark-mode')).toBeNull()
+      expect(colorSchemeMeta.content).toBe('light dark')
     } finally {
       wrapper.unmount()
       setLocale(originalLocale)
       if (originalDarkMode === null) localStorage.removeItem('dark-mode')
       else localStorage.setItem('dark-mode', originalDarkMode)
+      document.documentElement.classList.toggle('dark', hadDarkClass)
+      document.documentElement.classList.toggle('light', hadLightClass)
+      if (originalMeta !== undefined) colorSchemeMeta.content = originalMeta
+      if (!originalColorSchemeMeta) colorSchemeMeta.remove()
+      if (originalMatchMedia) Object.defineProperty(window, 'matchMedia', originalMatchMedia)
+      else delete (window as Window & { matchMedia?: unknown }).matchMedia
     }
   })
 

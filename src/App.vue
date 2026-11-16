@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import DocPreview from './components/DocPreview.vue'
 import { currentLocale, setLocale, t } from './utils/locale'
 import { isDocFileTooLarge } from './utils/docLimits'
@@ -118,13 +118,81 @@ function toggleReaderMode() {
   readerMode.value = !readerMode.value
 }
 
-// --- Dark mode ---
-const darkMode = ref(localStorage.getItem('dark-mode') === 'true')
+// --- Color scheme ---
+type ThemePreference = 'light' | 'dark' | null
+
+function parseThemePreference(value: string | null): ThemePreference {
+  if (value === 'dark' || value === 'true') return 'dark'
+  if (value === 'light' || value === 'false') return 'light'
+  return null
+}
+
+function readThemePreference(): ThemePreference {
+  try {
+    return parseThemePreference(localStorage.getItem('dark-mode'))
+  } catch {
+    return null
+  }
+}
+
+function getSystemDarkMode(): boolean {
+  return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    ? window.matchMedia('(prefers-color-scheme: dark)').matches
+    : false
+}
+
+const themePreference = ref<ThemePreference>(readThemePreference())
+const darkMode = ref(themePreference.value === null ? getSystemDarkMode() : themePreference.value === 'dark')
+
+function applyTheme(preference: ThemePreference, systemDark = getSystemDarkMode()) {
+  themePreference.value = preference
+  darkMode.value = preference === null ? systemDark : preference === 'dark'
+  document.documentElement.classList.toggle('dark', darkMode.value)
+  document.documentElement.classList.toggle('light', preference === 'light')
+  const colorScheme = document.querySelector<HTMLMetaElement>('meta[name="color-scheme"]')
+  if (colorScheme) colorScheme.content = preference ?? 'light dark'
+}
+
+function chooseTheme(targetDark: boolean) {
+  const systemDark = getSystemDarkMode()
+  const preference: ThemePreference = targetDark === systemDark ? null : targetDark ? 'dark' : 'light'
+  try {
+    if (preference === null) localStorage.removeItem('dark-mode')
+    else localStorage.setItem('dark-mode', preference)
+  } catch {
+    // The current page still follows the requested theme without persistence.
+  }
+  applyTheme(preference, systemDark)
+}
 
 function toggleDarkMode() {
-  darkMode.value = !darkMode.value
-  localStorage.setItem('dark-mode', String(darkMode.value))
+  chooseTheme(!darkMode.value)
 }
+
+function handleSystemThemeChange(event: MediaQueryListEvent) {
+  if (themePreference.value === null) applyTheme(null, event.matches)
+}
+
+function handleThemeStorage(event: StorageEvent) {
+  if (event.key !== null && event.key !== 'dark-mode') return
+  applyTheme(parseThemePreference(event.key === null ? null : event.newValue))
+}
+
+const systemThemeQuery = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+  ? window.matchMedia('(prefers-color-scheme: dark)')
+  : null
+
+applyTheme(themePreference.value)
+
+onMounted(() => {
+  systemThemeQuery?.addEventListener('change', handleSystemThemeChange)
+  window.addEventListener('storage', handleThemeStorage)
+})
+
+onUnmounted(() => {
+  systemThemeQuery?.removeEventListener('change', handleSystemThemeChange)
+  window.removeEventListener('storage', handleThemeStorage)
+})
 
 // --- Web Font ---
 const useWebFont = ref(localStorage.getItem('use-webfont') === 'true')
@@ -134,14 +202,6 @@ function toggleWebFont() {
   localStorage.setItem('use-webfont', String(useWebFont.value))
 }
 
-// Sync dark class on mount and changes
-if (darkMode.value) {
-  document.documentElement.classList.add('dark')
-}
-
-watch(darkMode, (val) => {
-  document.documentElement.classList.toggle('dark', val)
-})
 </script>
 
 <template>
@@ -149,7 +209,13 @@ watch(darkMode, (val) => {
     <header class="header">
       <div class="header-top">
         <h1>{{ t('app.title') }}</h1>
-        <button class="theme-btn" @click="toggleDarkMode" :title="darkMode ? t('app.theme.light') : t('app.theme.dark')" :aria-label="darkMode ? t('app.theme.light') : t('app.theme.dark')">
+        <button
+          class="theme-btn"
+          @click="toggleDarkMode"
+          :title="darkMode ? t('app.theme.light') : t('app.theme.dark')"
+          :aria-label="t('app.theme.toggle')"
+          :aria-pressed="darkMode"
+        >
           {{ darkMode ? '☀️' : '🌙' }}
         </button>
         <button
@@ -240,7 +306,12 @@ watch(darkMode, (val) => {
             </button>
           </div>
         </div>
-        <DocPreview :source="previewSource" :use-web-font="useWebFont" />
+        <DocPreview
+          :source="previewSource"
+          :use-web-font="useWebFont"
+          :dark-mode="darkMode"
+          @theme-change="chooseTheme"
+        />
       </template>
     </main>
   </div>

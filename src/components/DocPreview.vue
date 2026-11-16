@@ -159,15 +159,19 @@ interface SearchMatch {
 
 // ---- Props & Emits ----
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   source: File | string | null
   useWebFont?: boolean
-}>()
+  darkMode?: boolean | null
+}>(), {
+  darkMode: null,
+})
 
 const emit = defineEmits<{
   error: [message: string]
   loaded: []
   loading: [isLoading: boolean]
+  'theme-change': [isDark: boolean]
 }>()
 
 // ---- State ----
@@ -286,12 +290,81 @@ const MAX_ZOOM = 200
 const ZOOM_STEP = 10
 
 // --- Dark mode ---
-const darkMode = ref(typeof document !== 'undefined' && document.documentElement.classList.contains('dark'))
+type LocalThemePreference = 'light' | 'dark' | null
+
+function readLocalThemePreference(): LocalThemePreference {
+  try {
+    const stored = localStorage.getItem('dark-mode')
+    if (stored === 'dark' || stored === 'true') return 'dark'
+    if (stored === 'light' || stored === 'false') return 'light'
+  } catch {
+    return null
+  }
+  return null
+}
+
+const localThemePreference = ref<LocalThemePreference>(readLocalThemePreference())
+
+function readHostThemePreference(): LocalThemePreference {
+  if (typeof document === 'undefined') return null
+  const scheme = document.querySelector<HTMLMetaElement>('meta[name="color-scheme"]')?.content
+  return scheme === 'dark' || scheme === 'light' ? scheme : null
+}
+
+const hostThemePreference = ref<LocalThemePreference>(readHostThemePreference())
+
+function getInitialLocalDarkMode(): boolean {
+  if (localThemePreference.value !== null) return localThemePreference.value === 'dark'
+  if (hostThemePreference.value !== null) return hostThemePreference.value === 'dark'
+  if (typeof document === 'undefined') return false
+
+  const systemDark = typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-color-scheme: dark)').matches
+  const followsSystem = document.querySelector<HTMLMetaElement>('meta[name="color-scheme"]')?.content === 'light dark'
+  return followsSystem ? systemDark : document.documentElement.classList.contains('dark') || systemDark
+}
+
+const localDarkMode = ref(getInitialLocalDarkMode())
+const darkMode = computed(() => props.darkMode ?? localDarkMode.value)
+const localSystemThemeQuery = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+  ? window.matchMedia('(prefers-color-scheme: dark)')
+  : null
+
+function syncLocalTheme() {
+  if (typeof document === 'undefined' || props.darkMode !== null) return
+  const preference = localThemePreference.value ?? hostThemePreference.value
+  document.documentElement.classList.toggle('dark', localDarkMode.value)
+  document.documentElement.classList.toggle('light', preference === 'light')
+  const colorScheme = document.querySelector<HTMLMetaElement>('meta[name="color-scheme"]')
+  if (colorScheme) colorScheme.content = preference ?? 'light dark'
+}
+
+syncLocalTheme()
+
+function handleLocalSystemThemeChange(event: MediaQueryListEvent) {
+  if (props.darkMode !== null || localThemePreference.value !== null || hostThemePreference.value !== null) return
+  localDarkMode.value = event.matches
+  syncLocalTheme()
+}
 
 function toggleDarkMode() {
-  darkMode.value = !darkMode.value
-  document.documentElement.classList.toggle('dark', darkMode.value)
-  localStorage.setItem('dark-mode', String(darkMode.value))
+  const nextDarkMode = !darkMode.value
+  if (props.darkMode === null) {
+    const systemDarkMode = localSystemThemeQuery?.matches ?? false
+    const hostDarkMode = hostThemePreference.value === null ? systemDarkMode : hostThemePreference.value === 'dark'
+    const returnsToHost = nextDarkMode === hostDarkMode
+    localThemePreference.value = returnsToHost ? null : nextDarkMode ? 'dark' : 'light'
+    localDarkMode.value = nextDarkMode
+    syncLocalTheme()
+    try {
+      if (returnsToHost) localStorage.removeItem('dark-mode')
+      else localStorage.setItem('dark-mode', nextDarkMode ? 'dark' : 'light')
+    } catch {
+      // Keep the in-page theme change even when storage is unavailable.
+    }
+  }
+  emit('theme-change', nextDarkMode)
 }
 
 // --- Pagination ---
@@ -2998,6 +3071,7 @@ watch(() => props.source, (newSource) => {
 
 onMounted(() => {
   document.addEventListener('keydown', handleKeydown)
+  localSystemThemeQuery?.addEventListener('change', handleLocalSystemThemeChange)
   window.addEventListener('scroll', handleVirtualScroll, { passive: true })
   window.addEventListener('resize', handleVirtualScroll, { passive: true })
   if (props.source) {
@@ -3012,6 +3086,7 @@ onUnmounted(() => {
   cancelUrlLoad()
   stopLoadingTimer()
   document.removeEventListener('keydown', handleKeydown)
+  localSystemThemeQuery?.removeEventListener('change', handleLocalSystemThemeChange)
   window.removeEventListener('scroll', handleVirtualScroll)
   window.removeEventListener('resize', handleVirtualScroll)
 })
@@ -3130,7 +3205,8 @@ defineExpose({ reload, getPlainText, focusContent })
             :class="{ active: darkMode }"
             @click="toggleDarkMode"
             :title="darkMode ? t('app.theme.light') : t('app.theme.dark')"
-            :aria-label="t('toolbar.theme')"
+            :aria-label="t('app.theme.toggle')"
+            :aria-pressed="darkMode"
           >
             {{ darkMode ? '☀️' : '🌙' }}
           </button>
