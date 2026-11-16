@@ -3305,13 +3305,14 @@ defineExpose({ reload, getPlainText, focusContent })
       <div v-if="showOutline && outline.length > 0" class="outline-sidebar">
         <div class="outline-header">{{ t('outline.header') }}</div>
         <div class="outline-list">
-          <div
+          <button
             v-for="item in outline"
             :key="item.index"
+            type="button"
             class="outline-item"
             :class="'outline-level-' + item.level"
             @click="scrollToOutline(item)"
-          >{{ item.text }}</div>
+          >{{ item.text }}</button>
         </div>
       </div>
 
@@ -4718,6 +4719,12 @@ defineExpose({ reload, getPlainText, focusContent })
 }
 
 .outline-item {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
   padding: 5px 14px 5px calc(14px + 12px * (var(--level, 1) - 1));
   cursor: pointer;
   color: var(--text-secondary);
@@ -4731,6 +4738,11 @@ defineExpose({ reload, getPlainText, focusContent })
 .outline-item:hover {
   background: var(--bg-tertiary);
   color: var(--accent);
+}
+
+.outline-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .outline-level-1 {

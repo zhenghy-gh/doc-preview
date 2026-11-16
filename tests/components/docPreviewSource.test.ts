@@ -302,6 +302,43 @@ describe('DocPreview source lifecycle', () => {
     }
   })
 
+  it('renders outline navigation as buttons that activate document navigation', async () => {
+    const originalLocale = currentLocale.value
+    const originalScrollIntoView = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView')
+    const scrollIntoView = vi.fn()
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scrollIntoView })
+    parseFile.mockResolvedValue({
+      ...parsedDocument,
+      document: {
+        ...parsedDocument.document,
+        paragraphs: [
+          { text: 'First chapter', charFormat: { fontSize: 24, bold: true }, paraFormat: { alignment: 'left' }, _cpStart: 0 },
+          { text: 'Second chapter', charFormat: { fontSize: 24, bold: true }, paraFormat: { alignment: 'left' }, _cpStart: 20 },
+        ],
+      },
+    })
+    setLocale('en')
+    const wrapper = mount(DocPreview, { props: { source: new File(['doc'], 'outline.doc') } })
+
+    try {
+      await flushPromises()
+      await wrapper.get('.toolbar button[aria-label="Document outline"]').trigger('click')
+      const outlineItem = wrapper.get('.outline-item')
+      expect(outlineItem.element.tagName).toBe('BUTTON')
+      expect(outlineItem.attributes('type')).toBe('button')
+      expect(outlineItem.text()).toBe('First chapter')
+      await outlineItem.trigger('click')
+      await flushPromises()
+      expect(scrollIntoView).toHaveBeenCalled()
+      expect(wrapper.find('.outline-sidebar').exists()).toBe(false)
+    } finally {
+      wrapper.unmount()
+      setLocale(originalLocale)
+      if (originalScrollIntoView) Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', originalScrollIntoView)
+      else delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView
+    }
+  })
+
   it('shows copy feedback in English after the copy control is localized', async () => {
     const originalLocale = currentLocale.value
     parseFile.mockResolvedValue(parsedDocument)
