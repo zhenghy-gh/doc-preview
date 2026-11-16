@@ -123,6 +123,7 @@ const icon = computed(() => ERROR_CATEGORY_ICON[classified.value.category])
 }
 
 .enhanced-error .error-retry-btn {
+  min-height: 44px;
   background: var(--accent-action, #4d5fc7);
   color: #fff;
   border: none;
