@@ -284,7 +284,10 @@ describe('DocPreview source lifecycle', () => {
 
     try {
       await flushPromises()
-      expect(wrapper.get('.skip-link').text()).toBe('Skip to document content')
+      const skipLink = wrapper.get('.skip-link')
+      expect(skipLink.text()).toBe('Skip to document content')
+      expect(skipLink.attributes('href')).toBe('#document-content')
+      expect(wrapper.get('#document-content').attributes('tabindex')).toBe('-1')
       expect(wrapper.get('.document-content img').attributes('alt')).toBe('Embedded image')
       expect(wrapper.get('.sections-panel .stories-toggle span:nth-child(2)').text()).toBe('Sections & Layout (1)')
       await wrapper.get('.sections-panel .stories-toggle').trigger('click')

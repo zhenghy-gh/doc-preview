@@ -230,6 +230,11 @@ try {
   await page.waitForFunction(() => (
     document.querySelector('.doc-preview .sr-only[role="status"]')?.textContent?.includes('doc-101.doc')
   ))
+  const skipLink = page.locator('.doc-preview .skip-link')
+  assert.equal(await skipLink.getAttribute('href'), '#document-content')
+  await skipLink.focus()
+  await skipLink.press('Enter')
+  assert.equal(await page.locator('#document-content').evaluate((element) => element === document.activeElement), true)
   assert.equal(await page.getByRole('status', { name: 'Page 1 of 1' }).count(), 1)
   const previewThemeButton = page.locator('.doc-preview .toolbar-right button[aria-label="Dark mode"]')
   assert.equal(await previewThemeButton.getAttribute('aria-pressed'), 'false')

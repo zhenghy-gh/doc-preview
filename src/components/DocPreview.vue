@@ -3113,8 +3113,10 @@ function getPlainText(): string {
 }
 
 function focusContent() {
-  previewRef.value?.querySelector('.document-content')?.scrollIntoView({ block: 'start' })
-  previewRef.value?.focus()
+  const content = previewRef.value?.querySelector('.document-content') as HTMLElement | null
+  if (!content) return
+  content.scrollIntoView({ block: 'start' })
+  content.focus({ preventScroll: true })
 }
 
 defineExpose({ reload, getPlainText, focusContent })
@@ -3127,7 +3129,7 @@ defineExpose({ reload, getPlainText, focusContent })
     :style="{ '--zoom': zoomLevel / 100 }"
     tabindex="-1"
   >
-    <a class="skip-link" href="#" @click.prevent="focusContent">{{ t('app.skip.content') }}</a>
+    <a class="skip-link" href="#document-content" @click.prevent="focusContent">{{ t('app.skip.content') }}</a>
     <div class="sr-only" role="status" aria-live="polite" aria-atomic="true">{{ statusAnnouncement }}</div>
     <!-- Loading -->
     <LoadingOverlay
@@ -3318,7 +3320,7 @@ defineExpose({ reload, getPlainText, focusContent })
 
       <!-- Document content (paper-like) -->
       <div class="paper-page">
-        <div class="document-content">
+        <div id="document-content" class="document-content" tabindex="-1">
           <template v-for="(pageHtml, idx) in pages" :key="idx">
             <div
               v-if="isPageVisible(idx)"
