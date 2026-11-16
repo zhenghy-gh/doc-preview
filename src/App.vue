@@ -11,6 +11,7 @@ const previewSource = ref<File | string | null>(null)
 type AppError = { key: string; params?: Record<string, unknown> } | null
 const errorState = ref<AppError>(null)
 const errorMessage = computed(() => errorState.value ? t(errorState.value.key, errorState.value.params) : '')
+const isUrlError = computed(() => errorState.value?.key === 'app.upload.url.required')
 const isDragOver = ref(false)
 const previewFileName = computed(() => {
   if (typeof previewSource.value === 'string') return getFileNameFromUrl(previewSource.value)
@@ -261,7 +262,7 @@ function toggleWebFont() {
           <h2>{{ isDragOver ? t('app.upload.area.title.drag') : t('app.upload.area.title') }}</h2>
           <p>{{ t('app.upload.area.hint') }}</p>
 
-          <div v-if="errorMessage" class="error-banner">
+          <div v-if="errorMessage" :id="isUrlError ? 'url-error' : undefined" class="error-banner">
             {{ errorMessage }}
           </div>
 
@@ -289,6 +290,8 @@ function toggleWebFont() {
                 v-model="urlInput"
                 :placeholder="t('app.upload.url.placeholder')"
                 class="url-input"
+                :aria-invalid="isUrlError ? 'true' : undefined"
+                :aria-describedby="isUrlError ? 'url-error' : undefined"
                 @keyup.enter="loadFromUrl"
               />
               <button type="button" class="url-btn" @click="loadFromUrl">{{ t('app.upload.url.btn') }}</button>

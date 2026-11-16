@@ -177,6 +177,8 @@ describe('App upload accessibility', () => {
       await flushPromises()
       await wrapper.get('.url-btn').trigger('click')
       expect(wrapper.get('.error-banner').text()).toBe('Enter a document URL')
+      expect(wrapper.get('.url-input').attributes('aria-invalid')).toBe('true')
+      expect(wrapper.get('.url-input').attributes('aria-describedby')).toBe('url-error')
       expect(wrapper.find('[role="status"]').text()).toBe('Enter a document URL')
 
       setLocale('zh-CN')
