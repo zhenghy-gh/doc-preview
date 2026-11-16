@@ -1,11 +1,24 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
+import { createServer } from 'node:net'
 import { access, readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { chromium, firefox, webkit } from 'playwright'
 
-const previewBaseUrl = 'http://127.0.0.1:4173/doc-preview/'
+async function getAvailablePort() {
+  const server = createServer()
+  await new Promise((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', resolve)
+  })
+  const address = server.address()
+  if (!address || typeof address === 'string') throw new Error('Could not reserve a local preview port')
+  await new Promise((resolve, reject) => {
+    server.close((error) => error ? reject(error) : resolve())
+  })
+  return address.port
+}
 const browserName = process.argv.find((argument) => argument.startsWith('--browser='))?.slice('--browser='.length) ?? 'chromium'
 const browserTypes = { chromium, firefox, webkit }
 const browserType = browserTypes[browserName]
@@ -16,11 +29,20 @@ try {
   throw new Error('Built site not found. Run npm run build before npm run test:browser.')
 }
 const viteCli = fileURLToPath(new URL('../node_modules/vite/bin/vite.js', import.meta.url))
-const previewServer = spawn(process.execPath, [viteCli, 'preview', '--host', '127.0.0.1', '--port', '4173', '--strictPort'], {
-  stdio: 'inherit',
+const previewPort = await getAvailablePort()
+const previewBaseUrl = 'http://127.0.0.1:' + previewPort + '/doc-preview/'
+const previewServer = spawn(process.execPath, [viteCli, 'preview', '--host', '127.0.0.1', '--port', String(previewPort), '--strictPort'], {
+  stdio: ['ignore', 'pipe', 'pipe'],
 })
 let previewServerError
 let previewServerClosed = false
+let previewServerReady = false
+previewServer.stdout.on('data', (chunk) => {
+  const output = chunk.toString()
+  if (output.includes(previewBaseUrl)) previewServerReady = true
+  process.stdout.write(chunk)
+})
+previewServer.stderr.on('data', (chunk) => process.stderr.write(chunk))
 previewServer.on('error', (error) => {
   previewServerError = error
 })
@@ -47,7 +69,7 @@ async function waitForPreview() {
     if (response.status === 404) {
       throw new Error('Vite preview returned 404 for the configured base path: ' + previewBaseUrl)
     }
-    if (response.ok) return
+    if (response.ok && previewServerReady) return
     await new Promise((resolve) => setTimeout(resolve, 250))
   }
   throw new Error('Vite preview did not become ready within 30 seconds')
@@ -138,8 +160,6 @@ try {
 
   assert.equal(await page.locator('.lang-switch').getAttribute('title'), 'Switch language')
   for (const name of [
-    'Enable Web Font',
-    'Reader mode',
     'Zoom out',
     'Reset zoom to 100%',
     'Zoom in',
@@ -148,14 +168,22 @@ try {
   ]) {
     assert.equal(await page.getByRole('button', { name }).count(), 1, 'English accessible name: ' + name)
   }
-  const fontButton = page.getByRole('button', { name: 'Enable Web Font' })
+  const fontButton = page.getByRole('button', { name: 'Web Font' })
+  assert.equal(await fontButton.getAttribute('aria-pressed'), 'false')
+  assert.equal(await fontButton.getAttribute('title'), 'Enable Web Font')
   await fontButton.click()
-  assert.equal(await page.getByRole('button', { name: 'Disable Web Font' }).count(), 1)
-  await page.getByRole('button', { name: 'Disable Web Font' }).click()
+  assert.equal(await fontButton.getAttribute('aria-pressed'), 'true')
+  assert.equal(await fontButton.getAttribute('title'), 'Disable Web Font')
+  await fontButton.click()
+  assert.equal(await fontButton.getAttribute('aria-pressed'), 'false')
   const readerButton = page.getByRole('button', { name: 'Reader mode' })
+  assert.equal(await readerButton.getAttribute('aria-pressed'), 'false')
+  assert.equal(await readerButton.getAttribute('title'), 'Enter reader mode')
   await readerButton.click()
-  assert.equal(await page.getByRole('button', { name: 'Exit reader mode' }).count(), 1)
-  await page.getByRole('button', { name: 'Exit reader mode' }).click()
+  assert.equal(await readerButton.getAttribute('aria-pressed'), 'true')
+  assert.equal(await readerButton.getAttribute('title'), 'Exit reader mode')
+  await readerButton.click()
+  assert.equal(await readerButton.getAttribute('aria-pressed'), 'false')
 
   await page.locator('.lang-switch').click()
   await page.waitForFunction(() => document.documentElement.lang === 'zh-CN')
@@ -163,16 +191,22 @@ try {
   for (const name of ['缩小', '重置缩放为 100%', '放大', '搜索文档', '打印 / 导出 PDF']) {
     assert.equal(await page.getByRole('button', { name }).count(), 1, 'Chinese accessible name: ' + name)
   }
-  const zhFontButton = page.getByRole('button', { name: '启用 Web Font' })
-  assert.equal(await zhFontButton.count(), 1)
+  const zhFontButton = page.getByRole('button', { name: '网页字体' })
+  assert.equal(await zhFontButton.getAttribute('aria-pressed'), 'false')
+  assert.equal(await zhFontButton.getAttribute('title'), '启用 Web Font')
   await zhFontButton.click()
-  assert.equal(await page.getByRole('button', { name: '关闭 Web Font' }).count(), 1)
-  await page.getByRole('button', { name: '关闭 Web Font' }).click()
+  assert.equal(await zhFontButton.getAttribute('aria-pressed'), 'true')
+  assert.equal(await zhFontButton.getAttribute('title'), '关闭 Web Font')
+  await zhFontButton.click()
+  assert.equal(await zhFontButton.getAttribute('aria-pressed'), 'false')
   const zhReaderButton = page.getByRole('button', { name: '阅读模式' })
-  assert.equal(await zhReaderButton.count(), 1)
+  assert.equal(await zhReaderButton.getAttribute('aria-pressed'), 'false')
+  assert.equal(await zhReaderButton.getAttribute('title'), '进入阅读模式')
   await zhReaderButton.click()
-  assert.equal(await page.getByRole('button', { name: '退出阅读模式' }).count(), 1)
-  await page.getByRole('button', { name: '退出阅读模式' }).click()
+  assert.equal(await zhReaderButton.getAttribute('aria-pressed'), 'true')
+  assert.equal(await zhReaderButton.getAttribute('title'), '退出阅读模式')
+  await zhReaderButton.click()
+  assert.equal(await zhReaderButton.getAttribute('aria-pressed'), 'false')
 
   await page.locator('.lang-switch').click()
   await page.waitForFunction(() => document.documentElement.lang === 'en')

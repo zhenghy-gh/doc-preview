@@ -49,8 +49,10 @@ const zh: Record<string, TransValue> = {
   'app.theme.light': '切换亮色模式',
   'app.font.on': '关闭 Web Font',
   'app.font.off': '启用 Web Font',
+  'app.font.toggle': '网页字体',
   'app.reader.on': '退出阅读模式',
-  'app.reader.off': '阅读模式',
+  'app.reader.toggle': '阅读模式',
+  'app.reader.off': '进入阅读模式',
   'app.lang.switch': '切换语言',
 
   // Loading / Error
@@ -430,8 +432,10 @@ const en: Record<string, TransValue> = {
   'app.theme.light': 'Switch to light mode',
   'app.font.on': 'Disable Web Font',
   'app.font.off': 'Enable Web Font',
+  'app.font.toggle': 'Web Font',
   'app.reader.on': 'Exit reader mode',
-  'app.reader.off': 'Reader mode',
+  'app.reader.toggle': 'Reader mode',
+  'app.reader.off': 'Enter reader mode',
   'app.lang.switch': 'Switch language',
 
   // Loading / Error
