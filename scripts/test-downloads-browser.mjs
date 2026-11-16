@@ -372,6 +372,15 @@ try {
       await mobilePage.addInitScript(() => localStorage.setItem('locale', 'en'))
       await mobilePage.goto(previewBaseUrl, { waitUntil: 'networkidle' })
       assert.equal(await mobilePage.evaluate(() => matchMedia('(pointer: coarse)').matches), true)
+      for (const selector of ['.header-top .theme-btn:not(.lang-switch)', '.header-top .lang-switch']) {
+        const buttonBounds = await mobilePage.locator(selector).boundingBox()
+        const buttonStyle = await mobilePage.locator(selector).evaluate((button) => ({
+          width: getComputedStyle(button).width,
+          height: getComputedStyle(button).height,
+          boxSizing: getComputedStyle(button).boxSizing,
+        }))
+        assert.ok(buttonBounds && buttonBounds.width >= 44 && buttonBounds.height >= 44, selector + ' should meet 44px coarse-pointer target: ' + JSON.stringify({ bounds: buttonBounds, style: buttonStyle }))
+      }
       await mobilePage.locator('.file-input').setInputFiles('docs/doc-101.doc')
       await mobilePage.locator('.doc-preview .document-content').waitFor({ state: 'attached', timeout: 15_000 })
       assert.ok(await forceNoHasFallback(mobilePage) > 0)
