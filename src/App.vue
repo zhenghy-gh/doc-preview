@@ -8,7 +8,9 @@ import { getFileNameFromUrl } from './utils/urlFileName'
 const selectedFile = ref<File | null>(null)
 const urlInput = ref('')
 const previewSource = ref<File | string | null>(null)
-const errorMessage = ref('')
+type AppError = { key: string; params?: Record<string, unknown> } | null
+const errorState = ref<AppError>(null)
+const errorMessage = computed(() => errorState.value ? t(errorState.value.key, errorState.value.params) : '')
 const isDragOver = ref(false)
 const previewFileName = computed(() => {
   if (typeof previewSource.value === 'string') return getFileNameFromUrl(previewSource.value)
@@ -29,12 +31,10 @@ const getFileExt = (file: File): string => {
   return file.name.split('.').pop()?.toLowerCase() || ''
 }
 
-const formatErrorMessage = (file: File): string => {
+const formatError = (file: File): AppError => {
   const ext = getFileExt(file)
-  if (ext === 'docx') {
-    return t('app.upload.error.docx')
-  }
-  return t('app.upload.error.format', { ext })
+  if (ext === 'docx') return { key: 'app.upload.error.docx' }
+  return { key: 'app.upload.error.format', params: { ext } }
 }
 
 const isValidFileSize = (file: File): boolean => {
@@ -48,15 +48,15 @@ const handleFileChange = (event: Event) => {
 
   const file = files[0]
   target.value = ''
-  errorMessage.value = ''
+  errorState.value = null
 
   if (!isValidFile(file)) {
-    errorMessage.value = formatErrorMessage(file)
+    errorState.value = formatError(file)
     return
   }
 
   if (!isValidFileSize(file)) {
-    errorMessage.value = t('app.upload.error.sizeLimit')
+    errorState.value = { key: 'app.upload.error.sizeLimit' }
     return
   }
 
@@ -71,15 +71,15 @@ const handleDrop = (event: DragEvent) => {
   const file = event.dataTransfer?.files?.[0]
   if (!file) return
 
-  errorMessage.value = ''
+  errorState.value = null
 
   if (!isValidFile(file)) {
-    errorMessage.value = formatErrorMessage(file)
+    errorState.value = formatError(file)
     return
   }
 
   if (!isValidFileSize(file)) {
-    errorMessage.value = t('app.upload.error.sizeLimit')
+    errorState.value = { key: 'app.upload.error.sizeLimit' }
     return
   }
 
@@ -99,10 +99,10 @@ const handleDragLeave = () => {
 const loadFromUrl = () => {
   const url = urlInput.value.trim()
   if (!url) {
-    errorMessage.value = t('app.upload.url.required')
+    errorState.value = { key: 'app.upload.url.required' }
     return
   }
-  errorMessage.value = ''
+  errorState.value = null
   previewSource.value = url
   selectedFile.value = null
 }
@@ -111,7 +111,7 @@ const resetFile = () => {
   selectedFile.value = null
   previewSource.value = null
   urlInput.value = ''
-  errorMessage.value = ''
+  errorState.value = null
 }
 
 // --- Reader mode ---

@@ -177,7 +177,6 @@ describe('App upload accessibility', () => {
 
       setLocale('zh-CN')
       await flushPromises()
-      await wrapper.get('.url-btn').trigger('click')
       expect(wrapper.get('.error-banner').text()).toBe('请输入文档地址')
       expect(wrapper.find('[role="status"]').text()).toBe('请输入文档地址')
     } finally {
