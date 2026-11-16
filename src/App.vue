@@ -225,6 +225,7 @@ function toggleWebFont() {
       <div class="header-top">
         <h1>{{ t('app.title') }}</h1>
         <button
+          type="button"
           class="theme-btn"
           @click="toggleDarkMode"
           :title="darkMode ? t('app.theme.light') : t('app.theme.dark')"
@@ -234,6 +235,7 @@ function toggleWebFont() {
           {{ darkMode ? '☀️' : '🌙' }}
         </button>
         <button
+          type="button"
           class="theme-btn lang-switch"
           @click="setLocale(currentLocale === 'zh-CN' ? 'en' : 'zh-CN')"
           :title="t('app.lang.switch')"
@@ -287,7 +289,7 @@ function toggleWebFont() {
                 class="url-input"
                 @keyup.enter="loadFromUrl"
               />
-              <button class="url-btn" @click="loadFromUrl">{{ t('app.upload.url.btn') }}</button>
+              <button type="button" class="url-btn" @click="loadFromUrl">{{ t('app.upload.url.btn') }}</button>
             </div>
           </div>
         </div>

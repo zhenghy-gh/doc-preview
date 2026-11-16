@@ -147,6 +147,7 @@ describe('App upload accessibility', () => {
         setLocale(locale)
         const wrapper = mount(App)
         try {
+          expect(wrapper.findAll('button').every(button => button.attributes('type') === 'button')).toBe(true)
           const input = wrapper.get('.url-input')
           const inputId = input.attributes('id')
           const label = wrapper.get('label[for="' + inputId + '"]')
