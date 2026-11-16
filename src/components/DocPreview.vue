@@ -3258,11 +3258,21 @@ defineExpose({ reload, getPlainText, focusContent })
           @keyup.enter="nextMatch"
         />
         <label class="search-option" :title="t('search.case')">
-          <input type="checkbox" v-model="searchCaseSensitive" @change="performSearch" />
+          <input
+            type="checkbox"
+            v-model="searchCaseSensitive"
+            :aria-label="t('search.case') + ' (Aa)'"
+            @change="performSearch"
+          />
           <span>Aa</span>
         </label>
         <label class="search-option" :title="t('search.word')">
-          <input type="checkbox" v-model="searchWholeWord" @change="performSearch" />
+          <input
+            type="checkbox"
+            v-model="searchWholeWord"
+            :aria-label="t('search.word') + ' (W)'"
+            @change="performSearch"
+          />
           <span>W</span>
         </label>
         <span class="search-status" role="status" aria-live="polite" aria-atomic="true">

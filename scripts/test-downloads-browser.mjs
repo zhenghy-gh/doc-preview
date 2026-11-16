@@ -300,6 +300,8 @@ try {
   await page.waitForFunction(() => document.activeElement?.classList.contains('search-input'))
   const searchInput = page.getByRole('textbox', { name: 'Search document' })
   assert.equal(await searchInput.count(), 1)
+  assert.equal(await page.getByRole('checkbox', { name: 'Case sensitive (Aa)' }).count(), 1)
+  assert.equal(await page.getByRole('checkbox', { name: 'Whole word (W)' }).count(), 1)
   const searchStatus = page.locator('.search-status')
   assert.equal(await searchStatus.getAttribute('role'), 'status')
   assert.equal(await searchStatus.getAttribute('aria-live'), 'polite')

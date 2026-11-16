@@ -374,6 +374,8 @@ describe('DocPreview source lifecycle', () => {
       expect(wrapper.get('.skip-link').text()).toBe('Skip to document content')
       await wrapper.get('.toolbar button[aria-label="Search document"]').trigger('click')
       expect(wrapper.get('.search-input').attributes('aria-label')).toBe('Search document')
+      expect(wrapper.findAll('.search-option input')[0].attributes('aria-label')).toBe('Case sensitive (Aa)')
+      expect(wrapper.findAll('.search-option input')[1].attributes('aria-label')).toBe('Whole word (W)')
       const status = wrapper.get('.search-status')
       expect(wrapper.get('.search-status-visual').text()).toBe('')
       expect(wrapper.get('.search-status .sr-only').text()).toBe('')
@@ -390,6 +392,8 @@ describe('DocPreview source lifecycle', () => {
       await flushPromises()
       expect(wrapper.get('.skip-link').text()).toBe('跳到文档内容')
       expect(wrapper.get('.search-input').attributes('aria-label')).toBe('搜索文档')
+      expect(wrapper.findAll('.search-option input')[0].attributes('aria-label')).toBe('大小写敏感 (Aa)')
+      expect(wrapper.findAll('.search-option input')[1].attributes('aria-label')).toBe('全词匹配 (W)')
       expect(wrapper.get('.search-status-visual').text()).toBe('无匹配结果')
       expect(wrapper.get('.search-status .sr-only').text()).toBe('无匹配结果')
     } finally {
