@@ -11,9 +11,13 @@ export default defineConfig(({ mode }) => {
       vue(),
       isLib && dts({
         entryRoot: resolve(import.meta.dirname, 'src'),
-        include: ['src/index.ts', 'src/utils/docParser.ts', 'src/utils/docFormat.ts', 'src/utils/parseWithWorker.ts', 'src/components/DocPreview.vue', 'src/vite-env.d.ts'],
-        outDir: resolve(import.meta.dirname, 'dist'),
+        outDirs: [
+          resolve(import.meta.dirname, 'dist'),
+          { dir: resolve(import.meta.dirname, 'dist'), moduleFormat: 'esm' },
+          { dir: resolve(import.meta.dirname, 'dist'), moduleFormat: 'cjs' },
+        ],
         tsconfigPath: resolve(import.meta.dirname, 'tsconfig.json'),
+        bundleTypes: true,
       }),
     ].filter(Boolean),
     resolve: {

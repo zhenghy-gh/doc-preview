@@ -5,9 +5,12 @@ import { existsSync, readFileSync } from 'node:fs'
 const manifest = JSON.parse(readFileSync('package.json', 'utf8'))
 const packed = JSON.parse(execFileSync('npm', ['pack', '--dry-run', '--json'], { encoding: 'utf8' }))[0]
 const packedFiles = new Set(packed.files.map(({ path }) => path))
-const exportTargets = Object.values(manifest.exports).flatMap((entry) =>
-  typeof entry === 'string' ? [entry] : Object.values(entry).filter((value) => typeof value === 'string'),
-)
+function collectExportTargets(entry) {
+  if (typeof entry === 'string') return [entry]
+  if (!entry || typeof entry !== 'object') return []
+  return Object.values(entry).flatMap(collectExportTargets)
+}
+const exportTargets = Object.values(manifest.exports).flatMap(collectExportTargets)
 const entrypoints = [manifest.main, manifest.module, manifest.types, ...exportTargets].filter(Boolean)
 
 for (const target of entrypoints) {
@@ -21,6 +24,8 @@ for (const requiredFile of [
   'dist/doc-preview.umd.cjs',
   'dist/doc-preview.css',
   'dist/index.d.ts',
+  'dist/index.d.mts',
+  'dist/index.d.cts',
 ]) {
   assert(packedFiles.has(requiredFile), 'Required package file is missing: ' + requiredFile)
 }
