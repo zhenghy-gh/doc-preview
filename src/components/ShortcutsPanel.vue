@@ -198,6 +198,11 @@ const shortcutList = computed<ShortcutItem[]>(() => [
 }
 
 .shortcuts-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
   background: none;
   border: none;
   font-size: 16px;
