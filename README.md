@@ -44,8 +44,9 @@ list type) and supports search, zoom, print, and dark mode.
   are available, reducing main-thread parsing work. Rendering still uses the main thread.
 - **Built-in UX**: keyword search with highlighting, zoom (50%–200%), print
   (browser print to PDF), text copy, text download, document outline / TOC.
-- **Accessibility**: keyboard shortcuts, ARIA labels, skip-link, dark mode with
-  `localStorage` persistence, mobile responsive. The demo opts into OS text
+- **Accessibility**: keyboard shortcuts, ARIA labels, skip-link, polite loading/error
+  announcements, field-level validation associations, dark mode with `localStorage`
+  persistence, mobile responsive. The demo opts into OS text
   scaling where supported; component consumers must add
   `<meta name="text-scale" content="scale">` to their host page to opt in.
 - **Privacy**: files never leave the browser — safe for confidential docs.
