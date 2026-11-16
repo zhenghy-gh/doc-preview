@@ -262,6 +262,7 @@ try {
   await fontButton.click()
   assert.equal(await fontButton.getAttribute('aria-pressed'), 'true')
   assert.equal(await fontButton.getAttribute('title'), 'Disable Web Font')
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('.header-btn.active')).backgroundColor === 'rgb(77, 95, 199)')
   const activeFontContrast = await getMinimumTextContrasts(page, [
     { name: 'active Web Font control', foregroundSelector: '.header-btn.active', backgroundSelector: '.header-btn.active' },
   ])

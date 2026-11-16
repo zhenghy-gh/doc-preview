@@ -60,7 +60,10 @@ describe('ErrorDisplay', () => {
       props: { error: 'Failed to fetch the file' },
     })
     expect(wrapper.text().length).toBeGreaterThan(0)
-    expect(wrapper.find('[role="alert"]').exists()).toBe(true)
+    const alert = wrapper.get('[role="alert"]')
+    expect(alert.classes()).toContain('error-container')
+    expect(alert.attributes('aria-atomic')).toBe('true')
+    expect(alert.text().length).toBeGreaterThan(0)
     const retryBtn = wrapper.find('.error-retry-btn')
     expect(retryBtn.exists()).toBe(true)
     await retryBtn.trigger('click')

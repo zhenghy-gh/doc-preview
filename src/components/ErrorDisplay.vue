@@ -20,10 +20,10 @@ const icon = computed(() => ERROR_CATEGORY_ICON[classified.value.category])
 </script>
 
 <template>
-  <div class="error-container enhanced-error">
-    <div class="error-icon">{{ icon }}</div>
+  <div class="error-container enhanced-error" role="alert" aria-atomic="true">
+    <div class="error-icon" aria-hidden="true">{{ icon }}</div>
     <div class="error-body">
-      <div class="error-title" role="alert">{{ classified.title }}</div>
+      <div class="error-title">{{ classified.title }}</div>
       <div class="error-detail">{{ classified.detail }}</div>
       <ul v-if="classified.suggestions.length > 0" class="error-suggestions">
         <li v-for="(s, idx) in classified.suggestions" :key="idx">{{ s }}</li>
