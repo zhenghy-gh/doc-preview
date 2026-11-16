@@ -4022,109 +4022,6 @@ defineExpose({ reload, getPlainText, focusContent })
   top: 8px;
 }
 
-/* ==================== Loading ==================== */
-.loading-container {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 100px 20px;
-  background: var(--bg-secondary);
-  border-radius: 0 0 16px 16px;
-}
-
-.loading-spinner {
-  width: 50px;
-  height: 50px;
-  border: 4px solid var(--border-color);
-  border-top: 4px solid var(--accent);
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-  margin-bottom: 20px;
-}
-
-@keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
-}
-
-.loading-container p {
-  color: var(--text-secondary);
-  font-size: 1.1rem;
-}
-
-.loading-step {
-  margin-top: 4px;
-  font-size: 0.95rem;
-  min-height: 1.4em;
-}
-
-.progress-track {
-  width: 280px;
-  max-width: 80%;
-  height: 6px;
-  background: var(--border-color);
-  border-radius: 4px;
-  margin: 16px auto 8px;
-  overflow: hidden;
-}
-
-.progress-bar {
-  height: 100%;
-  border-radius: 4px;
-  background: linear-gradient(90deg, var(--accent), var(--accent-light));
-  transition: width 0.3s ease;
-}
-
-.progress-bar.indeterminate {
-  width: 35%;
-  animation: progressIndeterminate 1.5s ease-in-out infinite;
-  background: linear-gradient(
-    90deg,
-    var(--accent) 0%,
-    var(--accent-light) 50%,
-    var(--accent) 100%
-  );
-  background-size: 200% 100%;
-  animation: progressIndeterminate 1.5s ease-in-out infinite,
-             progressShimmer 2s linear infinite;
-}
-
-@keyframes progressIndeterminate {
-  0% { transform: translateX(-100%); }
-  100% { transform: translateX(380px); }
-}
-
-@keyframes progressShimmer {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
-}
-
-.loading-filename {
-  color: var(--text-muted);
-  font-size: 0.85rem;
-  margin-top: 8px;
-}
-
-.loading-meta {
-  color: var(--text-muted);
-  font-size: 0.8rem;
-  margin-top: 4px;
-  display: flex;
-  gap: 12px;
-  justify-content: center;
-  flex-wrap: wrap;
-}
-
-.worker-badge {
-  background: var(--accent-light);
-  color: var(--accent);
-  padding: 2px 8px;
-  border-radius: 10px;
-  font-weight: 500;
-  font-size: 0.75rem;
-}
-
 /* ==================== Error ==================== */
 .error-container {
   display: flex;
@@ -6175,7 +6072,6 @@ defineExpose({ reload, getPlainText, focusContent })
     margin: 6px auto;
   }
 
-  .loading-container,
   .error-container {
     padding: 60px 20px;
   }
