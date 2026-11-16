@@ -51,12 +51,14 @@ describe('App upload accessibility', () => {
       expect(document.title).toBe('DOC文件在线预览')
       expect(document.documentElement.lang).toBe('zh-CN')
       expect(wrapper.get('.lang-switch').attributes('title')).toBe('切换语言')
+      expect(wrapper.get('.lang-switch').attributes('aria-label')).toBe('EN，切换到英文')
 
       setLocale('en')
       await flushPromises()
       expect(document.title).toBe('DOC File Online Preview')
       expect(document.documentElement.lang).toBe('en')
       expect(wrapper.get('.lang-switch').attributes('title')).toBe('Switch language')
+      expect(wrapper.get('.lang-switch').attributes('aria-label')).toBe('中文, switch to Chinese')
     } finally {
       wrapper.unmount()
       setLocale(originalLocale)

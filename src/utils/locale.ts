@@ -54,6 +54,8 @@ const zh: Record<string, TransValue> = {
   'app.reader.toggle': '阅读模式',
   'app.reader.off': '进入阅读模式',
   'app.lang.switch': '切换语言',
+  'app.lang.switchToEnglish': 'EN，切换到英文',
+  'app.lang.switchToChinese': '中文，切换到中文',
 
   // Loading / Error
   'loading.text': '正在解析文档...',
@@ -437,6 +439,8 @@ const en: Record<string, TransValue> = {
   'app.reader.toggle': 'Reader mode',
   'app.reader.off': 'Enter reader mode',
   'app.lang.switch': 'Switch language',
+  'app.lang.switchToEnglish': 'EN, switch to English',
+  'app.lang.switchToChinese': '中文, switch to Chinese',
 
   // Loading / Error
   'loading.text': 'Parsing document...',
