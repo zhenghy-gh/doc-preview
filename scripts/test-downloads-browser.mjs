@@ -20,6 +20,29 @@ async function getAvailablePort() {
   })
   return address.port
 }
+
+async function getMinimumTextContrasts(page, pairs) {
+  return page.evaluate((items) => {
+    const luminance = (color) => {
+      const channels = color.match(/[\d.]+/g).slice(0, 3).map(Number).map(value => value / 255)
+      const linear = channels.map(value => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4)
+      return linear[0] * 0.2126 + linear[1] * 0.7152 + linear[2] * 0.0722
+    }
+    const ratio = (foreground, background) => {
+      const a = luminance(foreground)
+      const b = luminance(background)
+      return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)
+    }
+    return Object.fromEntries(items.map(({ name, foregroundSelector, backgroundSelector }) => {
+      const foreground = getComputedStyle(document.querySelector(foregroundSelector)).color
+      const backgroundStyle = getComputedStyle(document.querySelector(backgroundSelector))
+      const backgrounds = backgroundStyle.backgroundImage === 'none'
+        ? [backgroundStyle.backgroundColor]
+        : backgroundStyle.backgroundImage.match(/rgb\([^)]*\)/g) ?? [backgroundStyle.backgroundColor]
+      return [name, Math.min(...backgrounds.map(background => ratio(foreground, background)))]
+    }))
+  }, pairs)
+}
 const browserName = process.argv.find((argument) => argument.startsWith('--browser='))?.slice('--browser='.length) ?? 'chromium'
 const browserTypes = { chromium, firefox, webkit }
 const browserType = browserTypes[browserName]
@@ -127,8 +150,22 @@ try {
   assert.equal(await appThemeButton.getAttribute('aria-label'), 'Dark mode')
   assert.equal(await appThemeButton.getAttribute('aria-pressed'), 'false')
   assert.equal(await page.locator('meta[name="color-scheme"]').getAttribute('content'), 'light dark')
+  const uploadSurface = page.locator('.upload-area')
+  assert.equal(await uploadSurface.evaluate((el) => getComputedStyle(el).backgroundColor), 'rgb(255, 255, 255)')
+  const lightActionContrast = await getMinimumTextContrasts(page, [
+    { name: 'upload', foregroundSelector: '.upload-btn', backgroundSelector: '.upload-btn' },
+    { name: 'url', foregroundSelector: '.url-btn', backgroundSelector: '.url-btn' },
+    { name: 'header copy', foregroundSelector: '.header p', backgroundSelector: '.app-container' },
+  ])
+  for (const [name, contrast] of Object.entries(lightActionContrast)) {
+    assert.ok(contrast >= 4.5, name + ' foreground contrast is ' + contrast.toFixed(2) + ':1')
+  }
   await appThemeButton.click()
   assert.equal(await appThemeButton.getAttribute('aria-pressed'), 'true')
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('.upload-area')).backgroundColor === 'rgb(22, 33, 62)')
+  assert.equal(await page.locator('.upload-area h2').evaluate((el) => getComputedStyle(el).color), 'rgb(224, 224, 224)')
+  assert.equal(await page.locator('.header').evaluate((el) => getComputedStyle(el).backgroundColor), 'rgb(22, 33, 62)')
+  assert.equal(await page.locator('.app-container').evaluate((el) => getComputedStyle(el).backgroundColor), 'rgb(26, 26, 46)')
   assert.equal(await page.locator('meta[name="color-scheme"]').getAttribute('content'), 'dark')
   assert.equal(await page.evaluate(() => localStorage.getItem('dark-mode')), 'dark')
   await page.reload({ waitUntil: 'networkidle' })
@@ -141,6 +178,7 @@ try {
   assert.equal(await appThemeButton.getAttribute('aria-pressed'), 'true')
   await appThemeButton.click()
   assert.equal(await appThemeButton.getAttribute('aria-pressed'), 'false')
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('.upload-area')).backgroundColor === 'rgb(255, 255, 255)')
   assert.equal(await page.evaluate(() => localStorage.getItem('dark-mode')), null)
   assert.equal(await page.locator('meta[name="color-scheme"]').getAttribute('content'), 'light dark')
   await page.emulateMedia({ colorScheme: 'dark' })
@@ -210,12 +248,20 @@ try {
   ]) {
     assert.equal(await page.getByRole('button', { name }).count(), 1, 'English accessible name: ' + name)
   }
+  const skipLinkContrast = await getMinimumTextContrasts(page, [
+    { name: 'skip link', foregroundSelector: '.doc-preview .skip-link', backgroundSelector: '.doc-preview .skip-link' },
+  ])
+  assert.ok(skipLinkContrast['skip link'] >= 4.5, 'Skip link contrast is ' + skipLinkContrast['skip link'].toFixed(2) + ':1')
   const fontButton = page.getByRole('button', { name: 'Web Font' })
   assert.equal(await fontButton.getAttribute('aria-pressed'), 'false')
   assert.equal(await fontButton.getAttribute('title'), 'Enable Web Font')
   await fontButton.click()
   assert.equal(await fontButton.getAttribute('aria-pressed'), 'true')
   assert.equal(await fontButton.getAttribute('title'), 'Disable Web Font')
+  const activeFontContrast = await getMinimumTextContrasts(page, [
+    { name: 'active Web Font control', foregroundSelector: '.header-btn.active', backgroundSelector: '.header-btn.active' },
+  ])
+  assert.ok(activeFontContrast['active Web Font control'] >= 4.5, 'Active toolbar contrast is ' + activeFontContrast['active Web Font control'].toFixed(2) + ':1')
   await fontButton.click()
   assert.equal(await fontButton.getAttribute('aria-pressed'), 'false')
   const readerButton = page.getByRole('button', { name: 'Reader mode' })

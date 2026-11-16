@@ -15,6 +15,8 @@
   --border-color: #e0e0e0;
   --border-light: #eee;
   --accent: #667eea;
+  --accent-action: #4d5fc7;
+  --accent-action-hover: #4052b5;
   --accent-light: #e8f0fe;
   --shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
   --shadow-sm: 0 1px 4px rgba(0, 0, 0, 0.12);
@@ -27,7 +29,7 @@
   --error-border: #ffcccc;
   --error-text: #d63031;
   --highlight: #ffeb3b;
-  --highlight-current: #f44336;
+  --highlight-current: #b71c1c;
 }
 
 :root.dark {
@@ -88,6 +90,34 @@
 
   :root:not(.light) th {
     background: #2a2a2a;
+  }
+}
+
+:root.dark .app-container {
+  background: var(--bg-primary);
+}
+
+:root.dark .app-container .header {
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+}
+
+:root.dark .app-container .header h1 {
+  text-shadow: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not(.light) .app-container {
+    background: var(--bg-primary);
+  }
+
+  :root:not(.light) .app-container .header {
+    color: var(--text-primary);
+    background: var(--bg-secondary);
+  }
+
+  :root:not(.light) .app-container .header h1 {
+    text-shadow: none;
   }
 }
 

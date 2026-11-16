@@ -2898,7 +2898,7 @@ function downloadHtml() {
       background-color: #ffeb3b;
     }
     .search-highlight-current {
-      background-color: #f44336;
+      background-color: #b71c1c;
       color: white;
     }
     @media print {
@@ -4001,7 +4001,7 @@ defineExpose({ reload, getPlainText, focusContent })
   position: absolute;
   top: -40px;
   left: 8px;
-  background: var(--accent);
+  background: var(--accent-action);
   color: white;
   padding: 6px 12px;
   border-radius: 4px;
@@ -4196,7 +4196,7 @@ defineExpose({ reload, getPlainText, focusContent })
 }
 
 .enhanced-error .error-retry-btn {
-  background: var(--accent, #3b82f6);
+  background: var(--accent-action, #4d5fc7);
   color: #fff;
   border: none;
   padding: 6px 16px;
@@ -4981,8 +4981,8 @@ defineExpose({ reload, getPlainText, focusContent })
 }
 
 .revision-mode-btn.active {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--accent-action);
+  border-color: var(--accent-action);
   color: #fff;
 }
 
@@ -5570,7 +5570,7 @@ defineExpose({ reload, getPlainText, focusContent })
 }
 
 .shape-picture {
-  background: #27ae60;
+  background: #1f7a43;
   color: white;
   padding: 1px 6px;
   border-radius: 3px;
@@ -5629,7 +5629,7 @@ defineExpose({ reload, getPlainText, focusContent })
 }
 
 .equation-has-picture {
-  background: #27ae60;
+  background: #1f7a43;
   color: white;
   padding: 1px 6px;
   border-radius: 3px;
@@ -5701,7 +5701,7 @@ defineExpose({ reload, getPlainText, focusContent })
 }
 
 .chart-type {
-  background: #1abc9c;
+  background: #167c68;
   color: white;
   padding: 1px 6px;
   border-radius: 3px;
@@ -5710,7 +5710,7 @@ defineExpose({ reload, getPlainText, focusContent })
 }
 
 .chart-has-picture {
-  background: #27ae60;
+  background: #1f7a43;
   color: white;
   padding: 1px 6px;
   border-radius: 3px;
@@ -5719,7 +5719,7 @@ defineExpose({ reload, getPlainText, focusContent })
 }
 
 .chart-has-data {
-  background: #3498db;
+  background: #245a8d;
   color: white;
   padding: 1px 6px;
   border-radius: 3px;
@@ -5781,7 +5781,7 @@ defineExpose({ reload, getPlainText, focusContent })
 }
 
 .wordart-effect {
-  background: #e74c3c;
+  background: #b7352a;
   color: white;
   padding: 1px 6px;
   border-radius: 3px;

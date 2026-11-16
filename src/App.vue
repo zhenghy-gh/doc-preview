@@ -345,7 +345,7 @@ function toggleWebFont() {
 .app-container {
   width: 100%;
   min-height: 100vh;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, var(--accent-action) 0%, #6f4b99 100%);
 }
 
 .header {
@@ -401,31 +401,31 @@ function toggleWebFont() {
 }
 
 .upload-area {
-  background: white;
+  background: var(--bg-secondary, #fff);
   border-radius: 16px;
   padding: 60px 40px;
   text-align: center;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
-  border: 3px dashed #ddd;
+  box-shadow: var(--shadow);
+  border: 3px dashed var(--border-color);
   transition: all 0.3s ease;
 }
 
 .upload-area:hover {
-  border-color: #667eea;
-  box-shadow: 0 25px 70px rgba(0, 0, 0, 0.2);
+  border-color: var(--accent);
+  box-shadow: var(--shadow);
 }
 
 .upload-area.drag-over {
-  border-color: #667eea;
-  background: #f0f4ff;
+  border-color: var(--accent);
+  background: var(--accent-light);
   box-shadow: 0 25px 70px rgba(102, 126, 234, 0.3);
   transform: scale(1.02);
 }
 
 .error-banner {
-  background: #fff0f0;
-  color: #d63031;
-  border: 1px solid #ffcccc;
+  background: var(--error-bg);
+  color: var(--error-text);
+  border: 1px solid var(--error-border);
   border-radius: 8px;
   padding: 10px 16px;
   margin: 16px auto;
@@ -441,12 +441,12 @@ function toggleWebFont() {
 
 .upload-area h2 {
   font-size: 1.8rem;
-  color: #333;
+  color: var(--text-primary);
   margin-bottom: 10px;
 }
 
 .upload-area p {
-  color: #666;
+  color: var(--text-secondary);
   margin-bottom: 10px;
 }
 
@@ -456,8 +456,8 @@ function toggleWebFont() {
 
 .tip {
   font-size: 0.9rem;
-  color: #888;
-  background: #f8f9fa;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
   padding: 8px 16px;
   border-radius: 20px;
 }
@@ -465,22 +465,22 @@ function toggleWebFont() {
 .upload-btn {
   display: inline-block;
   padding: 14px 40px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, var(--accent-action) 0%, #6f4b99 100%);
   color: white;
   border-radius: 30px;
   font-size: 1.1rem;
   cursor: pointer;
   transition: transform 0.2s ease, box-shadow 0.2s ease;
-  box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+  box-shadow: 0 4px 15px rgba(77, 95, 199, 0.4);
 }
 
 .upload-btn:hover {
   transform: translateY(-2px);
-  box-shadow: 0 6px 20px rgba(102, 126, 234, 0.5);
+  box-shadow: 0 6px 20px rgba(77, 95, 199, 0.5);
 }
 
 .upload-btn:focus-within {
-  outline: 3px solid #111;
+  outline: 3px solid #fff;
   outline-offset: 3px;
 }
 
@@ -505,7 +505,7 @@ function toggleWebFont() {
   display: flex;
   align-items: center;
   margin-bottom: 16px;
-  color: #999;
+  color: var(--text-muted);
   font-size: 0.85rem;
 }
 
@@ -513,7 +513,7 @@ function toggleWebFont() {
 .divider::after {
   content: '';
   flex: 1;
-  border-top: 1px solid #e0e0e0;
+  border-top: 1px solid var(--border-color);
 }
 
 .divider span {
@@ -523,7 +523,7 @@ function toggleWebFont() {
 .url-label {
   display: block;
   margin-bottom: 8px;
-  color: #555;
+  color: var(--text-secondary);
   font-size: 0.95rem;
 }
 
@@ -535,7 +535,9 @@ function toggleWebFont() {
 .url-input {
   flex: 1;
   padding: 12px 16px;
-  border: 2px solid #e0e0e0;
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+  border: 2px solid var(--border-color);
   border-radius: 8px;
   font-size: 0.95rem;
   outline: none;
@@ -543,12 +545,12 @@ function toggleWebFont() {
 }
 
 .url-input:focus {
-  border-color: #667eea;
+  border-color: var(--accent);
 }
 
 .url-btn {
   padding: 12px 24px;
-  background: #667eea;
+  background: var(--accent-action);
   color: white;
   border: none;
   border-radius: 8px;
@@ -559,11 +561,12 @@ function toggleWebFont() {
 }
 
 .url-btn:hover {
-  background: #5a6fd6;
+  background: var(--accent-action-hover);
 }
 
 .preview-header {
-  background: white;
+  color: var(--text-primary);
+  background: var(--bg-secondary);
   border-radius: 16px 16px 0 0;
   padding: 20px 30px;
   display: flex;
@@ -575,7 +578,7 @@ function toggleWebFont() {
 .file-name {
   font-size: 1.1rem;
   font-weight: 600;
-  color: #333;
+  color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -584,7 +587,8 @@ function toggleWebFont() {
 
 .back-btn {
   padding: 8px 20px;
-  background: #f0f0f0;
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
   border: none;
   border-radius: 8px;
   font-size: 0.95rem;
@@ -593,7 +597,7 @@ function toggleWebFont() {
 }
 
 .back-btn:hover {
-  background: #e0e0e0;
+  background: var(--bg-secondary);
 }
 
 .header-actions {
@@ -604,7 +608,8 @@ function toggleWebFont() {
 
 .header-btn {
   padding: 8px 14px;
-  background: #f0f0f0;
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
   border: none;
   border-radius: 8px;
   font-size: 1.1rem;
@@ -614,11 +619,11 @@ function toggleWebFont() {
 }
 
 .header-btn:hover {
-  background: #e0e0e0;
+  background: var(--bg-secondary);
 }
 
 .header-btn.active {
-  background: #667eea;
+  background: var(--accent-action);
   color: white;
 }
 
