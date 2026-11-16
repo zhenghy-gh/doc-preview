@@ -30,6 +30,7 @@ function toggle() {
 <template>
   <div :class="['collapsible-panel', panelClass]">
     <button
+      type="button"
       class="stories-toggle"
       @click="toggle"
       :aria-expanded="isOpen"

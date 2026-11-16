@@ -17,6 +17,7 @@ describe('CollapsiblePanel', () => {
     })
     expect(wrapper.text()).toContain('面板')
     expect(wrapper.find('.stories-content').exists()).toBe(true)
+    expect(wrapper.find('.stories-toggle').attributes('type')).toBe('button')
     await wrapper.find('.stories-toggle').trigger('click')
     expect(wrapper.emitted('update:modelValue')).toEqual([[false]])
   })
