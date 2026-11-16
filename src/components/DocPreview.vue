@@ -4552,38 +4552,6 @@ defineExpose({ reload, getPlainText, focusContent })
   overflow: hidden;
 }
 
-.stories-toggle {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 10px 16px;
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 0.88rem;
-  cursor: pointer;
-  text-align: left;
-  transition: background 0.15s;
-}
-
-.stories-toggle:hover {
-  background: var(--bg-tertiary);
-}
-
-.stories-toggle-icon {
-  display: inline-block;
-  width: 12px;
-  color: var(--text-muted);
-  font-size: 0.75rem;
-}
-
-.stories-toggle-summary {
-  margin-left: auto;
-  color: var(--text-muted);
-  font-size: 0.78rem;
-}
-
 /* ==================== Properties panel ==================== */
 .properties-panel {
   max-width: 800px;
@@ -4592,12 +4560,6 @@ defineExpose({ reload, getPlainText, focusContent })
   border: 1px solid var(--border-color);
   border-radius: 8px;
   overflow: hidden;
-}
-
-.properties-panel .stories-content {
-  padding: 16px;
-  display: grid;
-  gap: 12px;
 }
 
 .property-item {
@@ -4734,12 +4696,6 @@ defineExpose({ reload, getPlainText, focusContent })
   border: 1px solid var(--border-color);
   border-radius: 8px;
   overflow: hidden;
-}
-
-.revisions-panel .stories-content {
-  padding: 12px 16px;
-  display: grid;
-  gap: 8px;
 }
 
 .revision-mode-toolbar {
@@ -4971,13 +4927,6 @@ defineExpose({ reload, getPlainText, focusContent })
   color: #e74c3c;
   background: rgba(231, 76, 60, 0.08);
   opacity: 0.85;
-}
-
-.stories-content {
-  padding: 4px 16px 14px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
 }
 
 .story-section {
@@ -5678,129 +5627,7 @@ defineExpose({ reload, getPlainText, focusContent })
   padding: 12px 16px 16px;
 }
 
-.stats-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
-}
-
-.stat-item {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  padding: 12px 8px;
-  background: var(--bg-primary, #fff);
-  border-radius: 8px;
-  border: 1px solid var(--border-color, #e8e8e8);
-}
-
-.stat-value {
-  font-size: 1.25rem;
-  font-weight: 700;
-  color: var(--accent, #1a73e8);
-  line-height: 1.2;
-}
-
-.stat-label {
-  font-size: 0.78rem;
-  color: var(--text-secondary, #888);
-}
-
 /* ==================== Shortcuts Panel ==================== */
-.shortcuts-panel {
-  background: var(--bg-primary, #fff);
-  color: var(--text-primary, #333);
-  border: 0;
-  border-radius: 12px;
-  margin: auto;
-  padding: 0;
-  width: min(480px, calc(100vw - 32px));
-  max-height: min(70vh, 500px);
-  overflow: hidden;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
-}
-
-.shortcuts-panel[open] {
-  display: flex;
-  flex-direction: column;
-}
-
-.shortcuts-panel:modal {
-  overscroll-behavior: contain;
-}
-
-.shortcuts-panel::backdrop {
-  background: rgba(0, 0, 0, 0.4);
-  overflow: hidden;
-  overscroll-behavior: contain;
-}
-
-.shortcuts-title {
-  margin: 0;
-  font: inherit;
-}
-
-.shortcuts-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16px 20px;
-  font-size: 15px;
-  font-weight: 600;
-  border-bottom: 1px solid var(--border-color, #e8e8e8);
-}
-
-.shortcuts-close {
-  background: none;
-  border: none;
-  font-size: 16px;
-  cursor: pointer;
-  padding: 4px 8px;
-  border-radius: 4px;
-  color: var(--text-secondary, #666);
-  line-height: 1;
-}
-
-.shortcuts-close:hover {
-  background: var(--bg-secondary, #f0f0f0);
-  color: var(--text-primary, #333);
-}
-
-.shortcuts-body {
-  padding: 8px 0;
-  overflow-y: auto;
-  flex: 1;
-}
-
-.shortcut-row {
-  display: flex;
-  align-items: center;
-  padding: 8px 20px;
-  gap: 12px;
-}
-
-.shortcut-keys {
-  display: inline-block;
-  background: var(--bg-secondary, #f0f0f0);
-  border: 1px solid var(--border-color, #d8d8d8);
-  border-radius: 4px;
-  padding: 2px 7px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 12px;
-  color: var(--text-primary, #333);
-  white-space: nowrap;
-  box-shadow: 0 1px 0 rgba(0,0,0,0.08);
-}
-
-.shortcut-label {
-  font-size: 14px;
-  color: var(--text-primary, #333);
-  margin-left: auto;
-  text-align: right;
-  white-space: nowrap;
-}
-
 /* ==================== Print styles ==================== */
 @media print {
   .doc-preview {
@@ -6021,7 +5848,6 @@ defineExpose({ reload, getPlainText, focusContent })
     margin: 0 10px 20px 10px;
   }
 
-  .stories-content,
   .properties-content,
   .doc-flags-content,
   .toc-content,
@@ -6048,24 +5874,9 @@ defineExpose({ reload, getPlainText, focusContent })
     gap: 4px;
   }
 
-  .stories-toggle {
-    padding: 10px;
-    font-size: 0.82rem;
-  }
-
   .revision-mode-btn {
     padding: 6px 10px;
     font-size: 0.75rem;
-  }
-
-  .shortcuts-panel {
-    width: calc(100vw - 24px);
-    max-height: min(80vh, 480px);
-    border-radius: 10px;
-  }
-
-  .shortcut-row {
-    padding: 6px 14px;
   }
 
   .page-host .page-content {

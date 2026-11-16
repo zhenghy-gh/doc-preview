@@ -152,3 +152,110 @@ const shortcutList = computed<ShortcutItem[]>(() => [
     </div>
   </dialog>
 </template>
+
+<style scoped>
+.shortcuts-panel {
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary, #333);
+  border: 0;
+  border-radius: 12px;
+  margin: auto;
+  padding: 0;
+  width: min(480px, calc(100vw - 32px));
+  max-height: min(70vh, 500px);
+  overflow: hidden;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+}
+
+.shortcuts-panel[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+.shortcuts-panel:modal {
+  overscroll-behavior: contain;
+}
+
+.shortcuts-panel::backdrop {
+  background: rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+  overscroll-behavior: contain;
+}
+
+.shortcuts-title {
+  margin: 0;
+  font: inherit;
+}
+
+.shortcuts-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  font-size: 15px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border-color, #e8e8e8);
+}
+
+.shortcuts-close {
+  background: none;
+  border: none;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  color: var(--text-secondary, #666);
+  line-height: 1;
+}
+
+.shortcuts-close:hover {
+  background: var(--bg-secondary, #f0f0f0);
+  color: var(--text-primary, #333);
+}
+
+.shortcuts-body {
+  padding: 8px 0;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.shortcut-row {
+  display: flex;
+  align-items: center;
+  padding: 8px 20px;
+  gap: 12px;
+}
+
+.shortcut-keys {
+  display: inline-block;
+  background: var(--bg-secondary, #f0f0f0);
+  border: 1px solid var(--border-color, #d8d8d8);
+  border-radius: 4px;
+  padding: 2px 7px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  color: var(--text-primary, #333);
+  white-space: nowrap;
+  box-shadow: 0 1px 0 rgba(0,0,0,0.08);
+}
+
+.shortcut-label {
+  font-size: 14px;
+  color: var(--text-primary, #333);
+  margin-left: auto;
+  text-align: right;
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .shortcuts-panel {
+    width: calc(100vw - 24px);
+    max-height: min(80vh, 480px);
+    border-radius: 10px;
+  }
+
+  .shortcut-row {
+    padding: 6px 14px;
+  }
+}
+</style>
