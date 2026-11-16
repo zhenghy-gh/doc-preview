@@ -145,6 +145,9 @@ const icon = computed(() => ERROR_CATEGORY_ICON[classified.value.category])
 }
 
 .enhanced-error .error-raw summary {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
   cursor: pointer;
   user-select: none;
   padding: 4px 0;
