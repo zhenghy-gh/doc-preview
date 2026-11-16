@@ -109,12 +109,17 @@ describe('LoadingOverlay', () => {
 })
 
 describe('ShortcutsPanel', () => {
-  it('shows the shortcut list and closes via the close button', async () => {
+  it('opens the native shortcuts dialog and closes via the close button', async () => {
     const wrapper = mount(ShortcutsPanel, { props: { modelValue: true } })
-    expect(wrapper.find('.shortcuts-overlay').exists()).toBe(true)
+    await nextTick()
+    const dialog = wrapper.get('dialog')
+    expect((dialog.element as HTMLDialogElement).open).toBe(true)
+    expect(dialog.attributes('aria-labelledby')).toBe('shortcuts-title')
     expect(wrapper.findAll('kbd').length).toBeGreaterThan(0)
     await wrapper.find('.shortcuts-close').trigger('click')
+    await nextTick()
     expect(wrapper.emitted('update:modelValue')).toEqual([[false]])
+    wrapper.unmount()
   })
 
   it('resolves nested shortcut labels and updates with the active locale', async () => {
@@ -165,8 +170,10 @@ describe('ShortcutsPanel', () => {
     }
   })
 
-  it('renders nothing when closed', () => {
+  it('keeps the native shortcuts dialog closed when modelValue is false', async () => {
     const wrapper = mount(ShortcutsPanel, { props: { modelValue: false } })
-    expect(wrapper.find('.shortcuts-overlay').exists()).toBe(false)
+    await nextTick()
+    expect((wrapper.get('dialog').element as HTMLDialogElement).open).toBe(false)
+    wrapper.unmount()
   })
 })

@@ -251,6 +251,7 @@ const previewRef = ref<HTMLElement | null>(null)
 
 // --- Shortcuts panel ---
 const showShortcuts = ref(false)
+const shortcutsPanelRef = ref<{ showDialog: (invoker?: HTMLElement | null) => void; closeDialog: () => void } | null>(null)
 
 // --- Document stats ---
 // const showStats = ref(false)
@@ -2939,8 +2940,14 @@ function downloadMarkdown() {
 
 // ---- Keyboard shortcuts ----
 
-function toggleShortcuts() {
-  showShortcuts.value = !showShortcuts.value
+function toggleShortcuts(event?: MouseEvent) {
+  if (showShortcuts.value) {
+    shortcutsPanelRef.value?.closeDialog()
+    return
+  }
+  showShortcuts.value = true
+  const invoker = event?.currentTarget instanceof HTMLElement ? event.currentTarget : null
+  shortcutsPanelRef.value?.showDialog(invoker)
 }
 
 function handleKeydown(e: KeyboardEvent) {
@@ -2966,7 +2973,7 @@ function handleKeydown(e: KeyboardEvent) {
       return
     }
     if (showShortcuts.value) {
-      showShortcuts.value = false
+      shortcutsPanelRef.value?.closeDialog()
       return
     }
   }
@@ -3962,7 +3969,7 @@ defineExpose({ reload, getPlainText, focusContent })
       <!-- <DocStatsPanel v-model="showStats" :stats="docStats" /> -->
 
       <!-- Keyboard shortcuts panel -->
-      <ShortcutsPanel v-model="showShortcuts" />
+      <ShortcutsPanel ref="shortcutsPanelRef" v-model="showShortcuts" />
     </div>
   </div>
 </template>
@@ -5912,25 +5919,37 @@ defineExpose({ reload, getPlainText, focusContent })
 }
 
 /* ==================== Shortcuts Panel ==================== */
-.shortcuts-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.4);
-  z-index: 10000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
 .shortcuts-panel {
   background: var(--bg-primary, #fff);
+  color: var(--text-primary, #333);
+  border: 0;
   border-radius: 12px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+  margin: auto;
+  padding: 0;
   width: min(480px, calc(100vw - 32px));
   max-height: min(70vh, 500px);
+  overflow: hidden;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+}
+
+.shortcuts-panel[open] {
   display: flex;
   flex-direction: column;
+}
+
+.shortcuts-panel:modal {
+  overscroll-behavior: contain;
+}
+
+.shortcuts-panel::backdrop {
+  background: rgba(0, 0, 0, 0.4);
   overflow: hidden;
+  overscroll-behavior: contain;
+}
+
+.shortcuts-title {
+  margin: 0;
+  font: inherit;
 }
 
 .shortcuts-header {
