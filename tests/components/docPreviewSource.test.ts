@@ -288,6 +288,7 @@ describe('DocPreview source lifecycle', () => {
       expect(skipLink.text()).toBe('Skip to document content')
       expect(skipLink.attributes('href')).toBe('#document-content')
       expect(wrapper.get('#document-content').attributes('tabindex')).toBe('-1')
+      expect(wrapper.get('.doc-preview').attributes('aria-busy')).toBe('false')
       expect(wrapper.get('.document-content img').attributes('alt')).toBe('Embedded image')
       expect(wrapper.get('.sections-panel .stories-toggle span:nth-child(2)').text()).toBe('Sections & Layout (1)')
       await wrapper.get('.sections-panel .stories-toggle').trigger('click')
@@ -998,6 +999,7 @@ describe('DocPreview source lifecycle', () => {
       },
     })
     await flushPromises()
+    expect(wrapper.get('.doc-preview').attributes('aria-busy')).toBe('true')
     expect(wrapper.find('[role="status"]').text()).toBe('')
     expect(loadingEvent).toHaveBeenCalledTimes(1)
     expect(loadingEvent).toHaveBeenLastCalledWith(true)

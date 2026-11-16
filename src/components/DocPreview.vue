@@ -3127,6 +3127,7 @@ defineExpose({ reload, getPlainText, focusContent })
     class="doc-preview"
     :class="{ 'web-font-enabled': props.useWebFont }"
     :style="{ '--zoom': zoomLevel / 100 }"
+    :aria-busy="loading"
     tabindex="-1"
   >
     <a class="skip-link" href="#document-content" @click.prevent="focusContent">{{ t('app.skip.content') }}</a>
