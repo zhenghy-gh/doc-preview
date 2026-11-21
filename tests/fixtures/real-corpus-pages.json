@@ -1,0 +1,137 @@
+{
+  "doc-100kb.doc": {
+    "pages": 4,
+    "sha1": "f66f09e8bdb3a38f9fd614272ef6d43ef493a140",
+    "firstPageLen": 3412
+  },
+  "doc-101.doc": {
+    "pages": 1,
+    "sha1": "42f29a0721f6d332799e00fba9ea6bbea050323b",
+    "firstPageLen": 7102
+  },
+  "doc-161.doc": {
+    "pages": 1,
+    "sha1": "42f29a0721f6d332799e00fba9ea6bbea050323b",
+    "firstPageLen": 7102
+  },
+  "doc-1mb.doc": {
+    "pages": 5,
+    "sha1": "9b6cb5ceaaf3063e0e13e42d3fbdf62c39d55f9d",
+    "firstPageLen": 3412
+  },
+  "doc-261.doc": {
+    "pages": 1,
+    "sha1": "42f29a0721f6d332799e00fba9ea6bbea050323b",
+    "firstPageLen": 7102
+  },
+  "doc-321.doc": {
+    "pages": 1,
+    "sha1": "42f29a0721f6d332799e00fba9ea6bbea050323b",
+    "firstPageLen": 7102
+  },
+  "doc-500kb.doc": {
+    "pages": 5,
+    "sha1": "4d44f17872e0cb6e99c184770012e4e98ba15a0c",
+    "firstPageLen": 3412
+  },
+  "fsample1.doc": {
+    "pages": 8,
+    "sha1": "73b2e9a669e5e86811430427bba5d49867441c4b",
+    "firstPageLen": 4579
+  },
+  "fsample3.doc": {
+    "pages": 2,
+    "sha1": "1627ebf96b6e0b6686044d884e477946452f01a2",
+    "firstPageLen": 8191
+  },
+  "fsample4.doc": {
+    "pages": 234,
+    "sha1": "288d5aacc3cea8977b8782daa8be03d38110c1fb",
+    "firstPageLen": 3013
+  },
+  "ftd-1.35mb.doc": {
+    "pages": 59,
+    "sha1": "4f1655e5b2f3e00380363fd62147a21087d02807",
+    "firstPageLen": 5183
+  },
+  "openstd-n961.doc": {
+    "pages": 19,
+    "sha1": "d31a78a1ac8d889d88a37c846dc4a6e58f6e15bb",
+    "firstPageLen": 8270
+  },
+  "unicode-01022.doc": {
+    "pages": 16,
+    "sha1": "e5b9b753a573d8d6b728a6a4f45d504f725defd7",
+    "firstPageLen": 5742
+  },
+  "unicode-01351-N2376.doc": {
+    "pages": 528,
+    "sha1": "2faf4462f98d73c054e83ce37336add32f5256b5",
+    "firstPageLen": 4790
+  },
+  "unicode-02006-zia.doc": {
+    "pages": 15,
+    "sha1": "80c9525b841985d157a0f837ac8d65a1fdcaa7b2",
+    "firstPageLen": 5221
+  },
+  "unicode-02086-n2398.doc": {
+    "pages": 2,
+    "sha1": "0286a1d5c6ebdd990d0df99ac07409ec8a87418a",
+    "firstPageLen": 5228
+  },
+  "unicode-03042-voting.doc": {
+    "pages": 64,
+    "sha1": "434b7d5777e88259ccce8e74b5fc158eb5056319",
+    "firstPageLen": 4762
+  },
+  "unicode-form.doc": {
+    "pages": 16,
+    "sha1": "45141879130f4e86a60d72e1696dd2a2f02d96b1",
+    "firstPageLen": 4825
+  },
+  "unicode-n1750w97.doc": {
+    "pages": 13,
+    "sha1": "8fac147c006fde96af10803ff435e2cd767e2ccd",
+    "firstPageLen": 2563
+  },
+  "unicode-n2298.doc": {
+    "pages": 3,
+    "sha1": "1712ab2f2dc3c5e2a1ae8add3c6f338aa5ce6181",
+    "firstPageLen": 7770
+  },
+  "unicode-n2532.doc": {
+    "pages": 3,
+    "sha1": "2d9556066882e66e7215dd1283e2da6e803e4b9b",
+    "firstPageLen": 5318
+  },
+  "unicode-n4100.doc": {
+    "pages": 11,
+    "sha1": "8cb1b92469fe5013cdfe9517cfd3a485c3a433c5",
+    "firstPageLen": 7925
+  },
+  "unicode-n4250.doc": {
+    "pages": 17,
+    "sha1": "95ea183067ca29163d13408fe985c3a943332b49",
+    "firstPageLen": 8003
+  },
+  "unicode-n4350.doc": {
+    "pages": 10,
+    "sha1": "bebe986fe9c1abfc2e51f20941093199e076695d",
+    "firstPageLen": 8003
+  },
+  "unicode-n4400.doc": {
+    "pages": 4,
+    "sha1": "c58f279a6945502d057cc7e15eeaf5fe9dcdf71f",
+    "firstPageLen": 6693
+  },
+  "uow-bio.doc": {
+    "pages": 11,
+    "sha1": "9e23a25a9a63e6ba305579fd3b3b5a8c80512e6a",
+    "firstPageLen": 3376
+  },
+  "uow-cfp.doc": {
+    "pages": 2,
+    "sha1": "81e6d29999bd03cda24126d61b2674fc50118ba9",
+    "firstPageLen": 4903
+  }
+}
