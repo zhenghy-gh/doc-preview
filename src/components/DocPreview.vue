@@ -7,7 +7,6 @@ import { renderDocumentToPages } from '../utils/rendering/documentRenderer'
 import type { CharacterFormat, ParagraphFormat, RevisionMark, RevisionType, BookmarkRange, SectionInfo, PageFieldRange, CrossReferenceRange, ShapeInfo, EquationInfo, ChartInfo, WordArtInfo, RenderParagraph, ParseErrorCode } from '../utils/docFormat'
 import type { DocumentFields } from '../utils/fieldParser'
 import { formatRevisionTime, type RevisionMode } from '../utils/revisionRender'
-import { highlightTextMatches, clearSearchHighlights } from '../utils/searchUtils'
 import { formatTextWithInferredFormat } from '../utils/textRender'
 import { formatStoryText } from '../utils/storyRender'
 import { formatPanelTitle, formatSizePt as formatSizePtUtil } from '../utils/formatUtils'
@@ -18,6 +17,7 @@ import { useWebFont as createWebFont } from '../composables/useWebFont'
 import { useDocViewport } from '../composables/useDocViewport'
 import { useExport } from '../composables/useExport'
 import { useKeyboardShortcuts } from '../composables/useKeyboardShortcuts'
+import { useDocSearch } from '../composables/useDocSearch'
 import { useDarkMode } from '../composables/useDarkMode'
 import ShortcutsPanel from './ShortcutsPanel.vue'
 import LoadingOverlay from './LoadingOverlay.vue'
@@ -164,12 +164,6 @@ interface FormattedParagraphOutput {
   _cpStart?: number
 }
 
-interface SearchMatch {
-  index: number
-  text: string
-  element: HTMLElement
-}
-
 // ---- Props & Emits ----
 
 const props = defineProps<{
@@ -253,10 +247,6 @@ const ZOOM_STEP = 10
 const { darkMode, toggleDarkMode } = useDarkMode()
 
 // --- Search ---
-const showSearch = ref(false)
-const searchQuery = ref('')
-const searchResults = ref<SearchMatch[]>([])
-const currentSearchIndex = ref(-1)
 const searchBarRef = ref<InstanceType<typeof DocSearchBar> | null>(null)
 const toolbarRef = ref<InstanceType<typeof PreviewToolbar> | null>(null)
 
@@ -268,8 +258,6 @@ const { printDocument, downloadText, downloadHtml, downloadMarkdown, copyText } 
   toolbarRef,
   t,
 })
-const searchCaseSensitive = ref(false)
-const searchWholeWord = ref(false)
 
 // --- Document stats ---
 const wordCount = ref(0)
@@ -333,6 +321,36 @@ const {
 void visibleStart
 void visibleEnd
 void pageHeights
+
+const {
+  showSearch, searchQuery, searchResults, currentSearchIndex,
+  searchCaseSensitive, searchWholeWord, searchStatusLabel,
+  restoreVirtualScroll, toggleSearch, performSearch, clearHighlights,
+  scrollToMatch, nextMatch, prevMatch, rerenderForDisplayChange,
+} = useDocSearch({
+  previewRef,
+  searchBarRef,
+  toolbarRef,
+  virtualScrollEnabled,
+  t,
+  onRerender: () => {
+    if (!lastParseResult.value) return
+    applyFormattedPages(
+      lastParseResult.value.paragraphs,
+      lastParseResult.value.hyperlinks,
+      lastParseResult.value.revisions,
+    )
+  },
+  onRestoreLayout: () => {
+    measureVisiblePageHeights()
+    updateVisibleRange()
+  },
+})
+
+// 白盒测试通过 setupState 读取这些搜索绑定；保留顶层引用以维持测试契约。
+void currentSearchIndex
+void clearHighlights
+void scrollToMatch
 
 const { handleKeydown, toggleShortcuts } = useKeyboardShortcuts({
   showSearch,
@@ -949,71 +967,6 @@ function panelTitle(key: string, n: number): string {
 // ---- Search ----
 
 /**
- * 恢复虚拟滚动的唯一入口（搜索开启 / 大纲导航共用）。
- *
- * 大纲导航会临时关闭虚拟滚动以渲染全部页面，再用 600ms 定时器恢复；若这期间
- * 用户开启搜索（搜索依赖全页 DOM 做高亮），旧实现会无条件把虚拟滚动重新打开，
- * 使窗口外页面退回占位符、高亮与计数失效。此处以 showSearch 作为恢复前置条件，
- * 并把「恢复 + 重新测量窗口」职责收口到单一函数，避免多处状态写入互相打架。
- */
-function restoreVirtualScroll() {
-  if (showSearch.value) return
-  virtualScrollEnabled.value = true
-  nextTick(() => {
-    measureVisiblePageHeights()
-    updateVisibleRange()
-  })
-}
-
-function toggleSearch() {
-  showSearch.value = !showSearch.value
-  if (showSearch.value) {
-    searchQuery.value = ''
-    searchResults.value = []
-    currentSearchIndex.value = -1
-    // 搜索仅通过 DOM Range 包装高亮（searchUtils），从不改写 htmlContent 字符串。
-    // 无需保存/恢复 htmlContent —— 搜索期间可能发生显示切换（隐藏文字/修订），
-    // applyFormattedPages 会合法更新 htmlContent，恢复旧串会回滚渲染结果、污染复制/打印。
-    // 搜索需要遍历所有页面 DOM，临时禁用虚拟滚动确保全部页面已渲染
-    virtualScrollEnabled.value = false
-    nextTick(() => searchBarRef.value?.focus())
-  } else {
-    // 仅清除 DOM 高亮；htmlContent 保持当前渲染结果不变
-    clearHighlights()
-    restoreVirtualScroll()
-    nextTick(() => {
-      toolbarRef.value?.focusSearchToggle()
-    })
-  }
-}
-
-/**
- * 显示类切换（隐藏文字 / 修订模式）需要全量重渲染 v-html 页面，
- * 而重建 DOM 会抹掉正在生效的搜索高亮 span，导致状态栏仍显示 "1 / N"
- * 但正文已无高亮、上一/下一匹配按钮点了没反应。重渲染后在 nextTick
- * 重跑 performSearch 恢复高亮与计数，保持状态与 DOM 一致。
- */
-function rerenderForDisplayChange() {
-  if (!lastParseResult.value) return
-  applyFormattedPages(
-    lastParseResult.value.paragraphs,
-    lastParseResult.value.hyperlinks,
-    lastParseResult.value.revisions
-  )
-  if (showSearch.value && searchQuery.value.trim()) {
-    nextTick(() => performSearch())
-  }
-}
-
-/**
- * 切换隐藏文字显示态，并基于 lastParseResult 全量重渲染以使样式变化生效。
- */
-function toggleHiddenText() {
-  showHiddenText.value = !showHiddenText.value
-  rerenderForDisplayChange()
-}
-
-/**
  * 切换修订显示模式并重新渲染文档。
  *
  * - 'marks'    : 显示修订标记（<ins>/<del>）
@@ -1027,82 +980,11 @@ function setRevisionMode(mode: RevisionMode) {
   rerenderForDisplayChange()
 }
 
-// 匹配枚举与高亮包装提取至 utils/searchUtils.ts。
-// 旧实现按正序对同一文本节点边替换边用旧偏移继续匹配，单个节点内
-// 出现多次关键词时会错位高亮并抛 IndexSizeError；新实现倒序应用替换。
-function performSearch() {
-  const rawQuery = searchQuery.value.trim()
-  if (!rawQuery) {
-    clearHighlights()
-    searchResults.value = []
-    currentSearchIndex.value = -1
-    return
-  }
-
-  clearHighlights()
-  searchResults.value = []
-  currentSearchIndex.value = -1
-
-  const container = previewRef.value?.querySelector('.document-content')
-  if (!container) return
-
-  const matches = highlightTextMatches(container, rawQuery, {
-    caseSensitive: searchCaseSensitive.value,
-    wholeWord: searchWholeWord.value,
-  })
-
-  searchResults.value = matches
-  if (matches.length > 0) {
-    currentSearchIndex.value = 0
-    scrollToMatch(0)
-  }
+/** 切换隐藏文字显示态，并基于 lastParseResult 全量重渲染以使样式变化生效。 */
+function toggleHiddenText() {
+  showHiddenText.value = !showHiddenText.value
+  rerenderForDisplayChange()
 }
-
-/**
- * 移除预览区内全部搜索高亮包装（委托 searchUtils.clearSearchHighlights）。
- */
-function clearHighlights() {
-  if (previewRef.value) clearSearchHighlights(previewRef.value)
-}
-
-/**
- * 高亮第 idx 个匹配（加 search-highlight-current）并平滑滚动居中；其余匹配清除 current 态；idx 越界静默忽略。
- */
-function scrollToMatch(idx: number) {
-  const matches = previewRef.value?.querySelectorAll('.search-highlight') as NodeListOf<HTMLElement>
-  if (idx >= 0 && idx < matches.length) {
-    matches.forEach((el, i) => {
-      el.classList.toggle('search-highlight-current', i === idx)
-    })
-    const current = matches[idx]
-    if (current && typeof current.scrollIntoView === 'function') {
-      current.scrollIntoView({ block: 'center', behavior: 'smooth' })
-    }
-  }
-}
-
-/**
- * 下一个匹配（模长环形轮转）。
- */
-function nextMatch() {
-  if (searchResults.value.length === 0) return
-  currentSearchIndex.value = (currentSearchIndex.value + 1) % searchResults.value.length
-  scrollToMatch(currentSearchIndex.value)
-}
-
-/**
- * 上一个匹配（模长环形轮转）。
- */
-function prevMatch() {
-  if (searchResults.value.length === 0) return
-  currentSearchIndex.value = (currentSearchIndex.value - 1 + searchResults.value.length) % searchResults.value.length
-  scrollToMatch(currentSearchIndex.value)
-}
-
-const searchStatusLabel = computed(() => {
-  if (searchResults.value.length === 0) return t('search.no.results')
-  return `${currentSearchIndex.value + 1} / ${searchResults.value.length}`
-})
 
 // ---- Download ----
 
