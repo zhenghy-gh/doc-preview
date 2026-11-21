@@ -18,6 +18,7 @@ import { useDocViewport } from '../composables/useDocViewport'
 import { useExport } from '../composables/useExport'
 import { useKeyboardShortcuts } from '../composables/useKeyboardShortcuts'
 import { useDocSearch } from '../composables/useDocSearch'
+import { useDocLoading } from '../composables/useDocLoading'
 import { useDarkMode } from '../composables/useDarkMode'
 import ShortcutsPanel from './ShortcutsPanel.vue'
 import LoadingOverlay from './LoadingOverlay.vue'
@@ -39,6 +40,12 @@ import DocSearchBar from './DocSearchBar.vue'
 import OutlineSidebar from './OutlineSidebar.vue'
 
 const { t, locale: currentLocale } = useI18n()
+
+const {
+  loading, error, errorCode, loadingTime, fileSize,
+  progressStep, progressPercent, isUsingWorker,
+  getProgressStepText, startLoadingTimer, stopLoadingTimer,
+} = useDocLoading(t)
 const { loadWebFonts, getWebFontFamily } = createWebFont(() => props.useWebFont)
 
 /**
@@ -61,7 +68,6 @@ const { loadWebFonts, getWebFontFamily } = createWebFont(() => props.useWebFont)
 
 const WORKER_THRESHOLD = 1024 * 1024 // 1MB — files larger than this use Web Worker
 const isWorkerSupported = typeof Worker !== 'undefined'
-const isUsingWorker = ref(false)
 
 // ---- Types ----
 
@@ -182,39 +188,9 @@ const emit = defineEmits<{
 const fileName = ref('')
 const htmlContent = ref('')
 const plainText = ref('')
-const loading = ref(true)
-const error = ref('')
-/** 结构化错误码：与 error 同步设置/清空，供 ErrorDisplay 直映射分类 */
-const errorCode = ref<ParseErrorCode | undefined>(undefined)
-const loadingTime = ref(0)
-const loadingTimer = ref<ReturnType<typeof setInterval> | null>(null)
-const fileSize = ref('')
-const progressStep = ref('')
-const progressPercent = ref<number>(-1)
 
 // 上次加载的源（用于错误重试）
 const lastSource = ref<{ type: 'file'; file: File } | { type: 'url'; url: string } | null>(null)
-
-/** 将解析阶段映射为本地化的进度提示文字 */
-function getProgressStepText(stage: ParseProgressStage): string {
-  switch (stage) {
-    case 'verifying':
-      return t('loading.progress.reading')
-    case 'parsing_fib':
-    case 'parsing_clx':
-    case 'parsing_formats':
-    case 'parsing_fields':
-    case 'parsing_shapes':
-      return t('loading.progress.parsing')
-    case 'building_paragraphs':
-    case 'extracting_properties':
-    case 'extracting_images':
-    case 'finalizing':
-      return t('loading.progress.rendering')
-    default:
-      return t('loading.text')
-  }
-}
 
 // --- Virtual scroll (page-level) ---
 const pages = ref<string[]>([])
@@ -563,26 +539,6 @@ function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-}
-
-/**
- * 启动解析秒表：loadingTime 归零后每秒 +1。
- */
-function startLoadingTimer() {
-  // 快速切换文件/URL 时，先清理上一轮秒表，避免多个定时器叠加。
-  stopLoadingTimer()
-  loadingTime.value = 0
-  loadingTimer.value = setInterval(() => loadingTime.value++, 1000)
-}
-
-/**
- * 停止并清理解析秒表定时器。
- */
-function stopLoadingTimer() {
-  if (loadingTimer.value) {
-    clearInterval(loadingTimer.value)
-    loadingTimer.value = null
-  }
 }
 
 // ---- Error boundary ----

@@ -153,6 +153,7 @@
 - 2026-11-21　Phase 1 续（主会话）：把打印 / TXT·HTML·MD 导出 / 剪贴板复制抽为 `composables/useExport.ts`（仍复用 `printLayout`/`markdownExport` 纯函数），DocPreview 保留大纲跳转与全部接线；fixVuew 源码守卫同步迁移到新 composable。`DocPreview.vue` 降至 **2427 行**（累计 -2733）。全量 127 文件 / 2100 项通过。
 - 2026-11-21　Phase 1 续（主会话）：键盘快捷键分发抽为 `composables/useKeyboardShortcuts.ts`（回调注入式，保留焦点守卫/翻页 in-preview 约束），新增 4 项 dispatch 单测。`DocPreview.vue` 降至 **2334 行**（累计 -2826）。全量 128 文件 / 2104 项通过。
 - 2026-11-21　Phase 1 续（主会话）：搜索状态与高亮导航抽为 `composables/useDocSearch.ts`（含 restoreVirtualScroll 与搜索中重渲染后恢复高亮的契约），新增 3 项单测；保留白盒 setupState 绑定。`DocPreview.vue` 降至 **2216 行**（累计 -2944）。全量 129 文件 / 2107 项通过。
+- 2026-11-21　Phase 1 续（主会话）：加载/错误/进度/秒表状态抽为 `composables/useDocLoading.ts`，新增 3 项单测（阶段文案、单一定时器、进度重置）。`DocPreview.vue` 降至 **2172 行**（累计 -2988）。全量 130 文件 / 2110 项通过。
 - 2026-11-21　Phase 1 续：整个工具栏抽为 `PreviewToolbar.vue`（15 个 props / 16 个 emit，搜索按钮 focus 经 defineExpose 转发），CSS 同步迁移、移动端选择器改 `:deep()`；`DocPreview.vue` 降至 3518 行（累计 -1642），新增 2 项工具栏测试。全量 110 文件 / 2014 项通过。
 - 2026-11-21　Phase 1 修复：`ShortcutsPanel.vue` 的样式此前全部留在 DocPreview 的 scoped style 中，父组件 scoped 无法命中子组件内部节点 ⇒ 快捷键模态实际无样式。整套面板 CSS（含 640px 断点）迁入组件自身 `<style scoped>`；`DocPreview.vue` 降至 3429 行。全量 110 文件 / 2014 项通过。
 - 2026-11-21　Phase 1 修复：同类问题推广到 `CollapsiblePanel`（折叠按钮/内容骨架样式此前在抽离面板时丢失）、`LoadingOverlay`、`ErrorDisplay`——样式全部迁入各自组件 scoped style。`DocPreview.vue` 降至 **3200 行**（累计 -1960）。全量 110 文件 / 2014 项通过。
