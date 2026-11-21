@@ -58,3 +58,48 @@ function toggle() {
     </div>
   </div>
 </template>
+
+<style scoped>
+/* CollapsiblePanel 自身的骨架样式：从 DocPreview.vue 迁入，保证所有面板一致。 */
+.stories-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 16px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.88rem;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s;
+}
+.stories-toggle:hover {
+  background: var(--bg-tertiary);
+}
+.stories-toggle-icon {
+  display: inline-block;
+  width: 12px;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+.stories-toggle-summary {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+.stories-content {
+  padding: 4px 16px 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+@media (max-width: 640px) {
+  .stories-toggle {
+    padding: 10px;
+    font-size: 0.82rem;
+  }
+}
+</style>

@@ -45,3 +45,132 @@ const icon = computed(() => ERROR_CATEGORY_ICON[classified.value.category])
     </div>
   </div>
 </template>
+
+<style scoped>
+/* ==================== Error ==================== */
+.error-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 100px 20px;
+  background: var(--bg-secondary);
+  border-radius: 0 0 16px 16px;
+}
+
+.error-icon {
+  font-size: 4rem;
+  margin-bottom: 20px;
+}
+
+.error-message {
+  color: var(--error-text);
+  font-size: 1.1rem;
+  text-align: center;
+  white-space: pre-line;
+  max-width: 480px;
+  line-height: 1.6;
+}
+
+/* Enhanced error display */
+.enhanced-error {
+  flex-direction: row;
+  gap: 16px;
+  text-align: left;
+  align-items: flex-start;
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.enhanced-error .error-icon {
+  font-size: 2.5rem;
+  margin-bottom: 0;
+  flex-shrink: 0;
+}
+
+.enhanced-error .error-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.enhanced-error .error-title {
+  font-size: 1.2rem;
+  font-weight: 600;
+  color: var(--error-text);
+  margin-bottom: 8px;
+}
+
+.enhanced-error .error-detail {
+  color: var(--text-primary);
+  font-size: 0.95rem;
+  line-height: 1.5;
+  margin-bottom: 12px;
+  white-space: pre-line;
+}
+
+.enhanced-error .error-suggestions {
+  margin: 0 0 12px 0;
+  padding-left: 20px;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
+.enhanced-error .error-suggestions li {
+  margin-bottom: 4px;
+}
+
+.enhanced-error .error-actions {
+  margin-bottom: 8px;
+}
+
+.enhanced-error .error-retry-btn {
+  background: var(--accent, #3b82f6);
+  color: #fff;
+  border: none;
+  padding: 6px 16px;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.enhanced-error .error-retry-btn:hover {
+  opacity: 0.85;
+}
+
+.enhanced-error .error-raw {
+  margin-top: 8px;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.enhanced-error .error-raw summary {
+  cursor: pointer;
+  user-select: none;
+  padding: 4px 0;
+}
+
+.enhanced-error .error-raw pre {
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: var(--bg-secondary);
+  border-radius: 4px;
+  overflow-x: auto;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* Progress percent text */
+.progress-percent {
+  text-align: center;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin: 4px 0 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+</style>
