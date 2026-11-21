@@ -1521,7 +1521,11 @@ async function copyText() {
     // FIX-VUEW：原选择器 .toolbar-btn[title*="复制"] 依赖中文 title 文本，
     // i18n 化或切 EN（title 变 "Copy text to clipboard"）后即失效。
     // 改为语言无关的 data-action 属性定位（见模板 📋 按钮）。
-    const btn = document.querySelector('.toolbar-btn[data-action="copy-text"]')
+    // 再限定到本实例的 toolbarRef（库场景下同页可有多个 DocPreview；
+    // 全局 document.querySelector 会把 ✓ 反馈打到第一个实例的按钮上）。
+    const btn = toolbarRef.value?.$el?.querySelector(
+      '.toolbar-btn[data-action="copy-text"]'
+    ) as HTMLElement | null
     if (btn) {
       const originalText = btn.innerHTML
       btn.innerHTML = '✓'
