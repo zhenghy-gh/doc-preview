@@ -128,6 +128,40 @@ const VT_LPWSTR = 0x001F // LPWSTR (Unicode string)
 const VT_FILETIME = 0x0040 // Windows FILETIME (64-bit)
 const VT_BLOB = 0x0041 // Binary blob
 
+/**
+ * MS-OLEPS §2.13：每个属性节的属性 PID=1（VT_I4）是 CodePage，
+ * 决定本节所有 VT_LPSTR 字符串使用的代码页。下表把常见 Windows 代码页号
+ * 映射到 WHATWG TextDecoder 标签；表外代码页回退到 windows-1252 —— 与旧实现
+ * `new TextDecoder('latin1')` 完全等价（WHATWG 中 latin1 是 windows-1252 的别名）。
+ */
+const CODEPAGE_LABELS: Record<number, string> = {
+  874: 'windows-874',
+  932: 'shift_jis',
+  936: 'gbk',
+  949: 'euc-kr',
+  950: 'big5',
+  1250: 'windows-1250',
+  1251: 'windows-1251',
+  1252: 'windows-1252',
+  1253: 'windows-1253',
+  1254: 'windows-1254',
+  1255: 'windows-1255',
+  1256: 'windows-1256',
+  65001: 'utf-8',
+}
+
+const DEFAULT_CODEPAGE = 1252
+
+function getSectionDecoder(codepage: number): TextDecoder {
+  const label = CODEPAGE_LABELS[codepage]
+  try {
+    return new TextDecoder(label ?? 'windows-1252')
+  } catch {
+    // 运行环境不支持该标签（如老浏览器缺 gbk）→ 退回与旧实现一致的行为。
+    return new TextDecoder('windows-1252')
+  }
+}
+
 function readUint64(data: Uint8Array, offset: number): bigint {
   const low = BigInt(readUint32(data, offset))
   const high = BigInt(readUint32(data, offset + 4))
@@ -135,14 +169,16 @@ function readUint64(data: Uint8Array, offset: number): bigint {
 }
 
 /**
- * Read a null-terminated ANSI string from the data.
+ * Read a null-terminated ANSI string from the data, decoded with the section's
+ * CodePage. Returns the decoded string plus its byte length (which can differ
+ * from `str.length` for multi-byte code pages such as GBK / Shift-JIS).
  */
-function readAnsiString(data: Uint8Array, offset: number): string {
+function readAnsiString(data: Uint8Array, offset: number, decoder: TextDecoder): { str: string; byteLen: number } {
   let end = offset
   while (end < data.length && data[end] !== 0) {
     end++
   }
-  return new TextDecoder('latin1').decode(data.subarray(offset, end))
+  return { str: decoder.decode(data.subarray(offset, end)), byteLen: end - offset }
 }
 
 /**
@@ -165,7 +201,7 @@ function readUnicodeString(data: Uint8Array, offset: number): string {
  * Parse a property value based on its type.
  * Returns the value and the number of bytes consumed.
  */
-function parsePropertyValue(data: Uint8Array, offset: number, type: number): { value: unknown; size: number } {
+function parsePropertyValue(data: Uint8Array, offset: number, type: number, decoder: TextDecoder): { value: unknown; size: number } {
   switch (type) {
     case VT_EMPTY:
     case VT_NULL:
@@ -197,9 +233,9 @@ function parsePropertyValue(data: Uint8Array, offset: number, type: number): { v
       return { value: readUint64(data, offset), size: 8 }
 
     case VT_LPSTR: {
-      const str = readAnsiString(data, offset)
-      // String + null terminator + padding to 4-byte boundary
-      const size = str.length + 1
+      const { str, byteLen } = readAnsiString(data, offset, decoder)
+      // 字节数 + null 终止符 + 4 字节对齐（多字节代码页下 byteLen ≠ str.length）
+      const size = byteLen + 1
       return { value: str, size: size + (4 - (size % 4)) % 4 }
     }
 
@@ -308,18 +344,31 @@ function parsePropertySetSection(data: Uint8Array, sectionOffset: number, isDocS
 
   const properties: DocumentProperties = {}
 
+  // 第一遍：收集有效条目并读取本节 CodePage（PID=1, VT_I4）。
+  // CodePage 可能排在字符串属性之后，故须先扫一遍再解码 LPSTR。
+  const entries: Array<{ propertyId: number; propDataOffset: number }> = []
+  let codepage = DEFAULT_CODEPAGE
   for (let i = 0; i < propertyCount; i++) {
     const entryOffset = sectionOffset + 8 + i * 8
     if (entryOffset + 8 > data.length) break
 
     const propertyId = readUint32(data, entryOffset)
     const propertyOffset = readUint32(data, entryOffset + 4)
-
     const propDataOffset = sectionOffset + propertyOffset
     if (propDataOffset + 4 > data.length) continue
 
+    entries.push({ propertyId, propDataOffset })
+    if (propertyId === 0x01 && readUint32(data, propDataOffset) === VT_I4) {
+      codepage = readInt32(data, propDataOffset + 4)
+    }
+  }
+
+  const decoder = getSectionDecoder(codepage)
+
+  // 第二遍：按节 CodePage 解码每个属性值。
+  for (const { propertyId, propDataOffset } of entries) {
     const type = readUint32(data, propDataOffset)
-    const { value } = parsePropertyValue(data, propDataOffset + 4, type)
+    const { value } = parsePropertyValue(data, propDataOffset + 4, type, decoder)
 
     if (isDocSummary) {
       mapDocSummaryProperty(properties, propertyId, value)
