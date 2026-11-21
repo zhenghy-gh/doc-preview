@@ -43,6 +43,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "scan:corpus": "node scripts/corpusHealth.mjs",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "release": "node scripts/publish.mjs",
