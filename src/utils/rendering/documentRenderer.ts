@@ -16,7 +16,7 @@
  */
 import { applyRevisionsToText } from '../revisionRender'
 import type { RevisionMode } from '../revisionRender'
-import { escapeHtml } from '../textRender'
+import { escapeHtml, escapeHtmlAttribute } from '../textRender'
 import { collectTableBlock, renderNestedTableHtml } from '../tableText'
 import { renderChartHtml } from './chartRenderer'
 import { renderInlinePictureHtml, renderTextboxAnchorHtml } from './inlineAssetRenderer'
@@ -204,7 +204,7 @@ export function renderDocumentToPages(input: RenderInput): string[] {
             const pic = allPics[picIdx++]
             const src = typeof pic === 'string' ? pic : pic.dataUrl
             const style = 'max-width:100%;height:auto;margin:8px 0;'
-            return `<img src="${src}" alt="Embedded image" style="${style}" loading="lazy" />`
+            return `<img src="${escapeHtmlAttribute(src)}" alt="Embedded image" style="${style}" loading="lazy" />`
           }
           return '\u0001'
         })
@@ -496,7 +496,7 @@ export function renderDocumentToPages(input: RenderInput): string[] {
             const pic = allPics[picIdx++]
             const src = typeof pic === 'string' ? pic : pic.dataUrl
             const style = 'max-width:100%;height:auto;margin:8px 0;'
-            return `<img src="${src}" alt="Embedded image" style="${style}" loading="lazy" />`
+            return `<img src="${escapeHtmlAttribute(src)}" alt="Embedded image" style="${style}" loading="lazy" />`
           }
           return null
         },
@@ -572,7 +572,7 @@ export function renderDocumentToPages(input: RenderInput): string[] {
     if (typeof pic !== 'string' && pic.cp !== undefined && pic.cp >= 0) continue
     const src = typeof pic === 'string' ? pic : pic.dataUrl
     const style = 'max-width:100%;height:auto;margin:8px 0;'
-    const imgHtml = `<img src="${src}" alt="Embedded image" style="${style}" loading="lazy" />`
+    const imgHtml = `<img src="${escapeHtmlAttribute(src)}" alt="Embedded image" style="${style}" loading="lazy" />`
     addToPage(imgHtml, 200)
   }
 

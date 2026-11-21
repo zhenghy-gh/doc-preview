@@ -61,6 +61,25 @@ describe('sanitizeUrl', () => {
   })
 })
 
+describe('inline picture src escaping', () => {
+  it('escapes quotes in image URLs so they cannot break out of the src attribute', () => {
+    const malicious = 'data:image/png;base64,AA" onerror="alert(1)'
+    const paragraphs: RenderParagraph[] = [{
+      text: '\u0001',
+      charFormat: {},
+      paraFormat: {},
+      _cpStart: 0,
+      _cpEnd: 1,
+    }]
+    const html = renderDocumentToPages({
+      ...baseInput(paragraphs),
+      pictures: [{ format: 'png', dataUrl: malicious }],
+    }).join('\n')
+    expect(html).toContain('onerror=&quot;alert(1)')
+    expect(html).not.toMatch(/<img[^>]+onerror="alert/)
+  })
+})
+
 describe('renderDocumentToPages hyperlink safety', () => {
   it('never emits an executable href for a malicious HYPERLINK field', () => {
     const paragraphs: RenderParagraph[] = [{
