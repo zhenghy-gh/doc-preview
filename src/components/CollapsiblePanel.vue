@@ -41,7 +41,7 @@ function toggle() {
       @click="toggle"
       :id="titleId"
       :aria-expanded="isOpen"
-      :aria-controls="contentId"
+      :aria-controls="isOpen ? contentId : undefined"
     >
       <span class="stories-toggle-icon" aria-hidden="true">{{ isOpen ? '▾' : '▸' }}</span>
       <span>{{ title }}</span>

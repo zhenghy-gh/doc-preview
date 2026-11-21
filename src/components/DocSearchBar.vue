@@ -173,14 +173,30 @@ defineExpose({ focus })
   border-color: var(--border-color, #ddd);
 }
 
+/* 视觉隐藏但保留键盘可聚焦性与无障碍树可见性：display:none 会让复选框
+   退出 Tab 序列，键盘用户无法切换大小写/全词选项。 */
 .search-option input {
-  display: none;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .search-option:has(input:checked) {
   background: #e3f2fd;
   border-color: #2196f3;
   color: #1565c0;
+}
+
+/* 键盘聚焦（Tab）到视觉隐藏的复选框时，在可见 label 上给出焦点环。 */
+.search-option:has(input:focus-visible) {
+  outline: 2px solid var(--accent, #2196f3);
+  outline-offset: 2px;
 }
 
 :root.dark .search-option:has(input:checked) {

@@ -52,7 +52,7 @@ defineExpose({ focusSearchToggle: () => searchToggleRef.value?.focus() })
 
       <span class="toolbar-sep" aria-hidden="true"></span>
 
-      <button ref="searchToggleRef" type="button" class="toolbar-btn" @click="emit('toggle-search')" :class="{ active: props.searchOpen }" :title="t('toolbar.search')" :aria-label="t('toolbar.search')" :aria-expanded="props.searchOpen" aria-controls="doc-search-bar">🔍</button>
+      <button ref="searchToggleRef" type="button" class="toolbar-btn" @click="emit('toggle-search')" :class="{ active: props.searchOpen }" :title="t('toolbar.search')" :aria-label="t('toolbar.search')" :aria-expanded="props.searchOpen" :aria-controls="props.searchOpen ? 'doc-search-bar' : undefined">🔍</button>
 
       <span class="toolbar-sep" aria-hidden="true"></span>
 
@@ -73,7 +73,7 @@ defineExpose({ focusSearchToggle: () => searchToggleRef.value?.focus() })
         :title="t('toolbar.outline')"
         :aria-label="t('toolbar.outline')"
         :aria-expanded="props.outlineOpen"
-        aria-controls="doc-outline-sidebar"
+        :aria-controls="props.outlineOpen ? 'doc-outline-sidebar' : undefined"
       >📑</button>
 
       <button
@@ -112,7 +112,7 @@ defineExpose({ focusSearchToggle: () => searchToggleRef.value?.focus() })
         :title="t('toolbar.shortcuts') + ' (?)'"
         :aria-label="t('toolbar.shortcuts')"
         :aria-expanded="props.shortcutsOpen"
-        aria-controls="doc-shortcuts-panel"
+        :aria-controls="props.shortcutsOpen ? 'doc-shortcuts-panel' : undefined"
       >⌨️</button>
 
       <span class="toolbar-sep" aria-hidden="true"></span>
