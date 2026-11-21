@@ -281,6 +281,15 @@ export function extractAllFields(
       continue
     }
 
+    // 非法 CP 序（separator 不在 begin 之后 / end 不在 separator 之后）无法
+    // 构成「指令 + 结果」窗口；若继续构造 FieldRange，会得到 cpStart/cpEnd
+    // 合法但 instruction/result 恒空的伪字段，污染下游页码/交叉引用面板。
+    // 注意：空指令 sep.cp=begin.cp+1、空结果 end.cp=sep.cp+1 仍是合法结构。
+    if (sep.cp <= begin.cp || end.cp <= sep.cp) {
+      i++
+      continue
+    }
+
     const instrStart = begin.cp + 1
     const instrEnd = sep.cp
     const resultStart = sep.cp + 1
@@ -460,9 +469,11 @@ export function parseIndexResult(result: string): IndexEntry[] {
     const trimmed = line.trim()
     if (!trimmed) continue
 
-    // Check if this is an indented sub-term
-    const leadingSpaces = line.length - trimmed.length
-    const isSubTerm = leadingSpaces >= 2
+    // 缩进只由「行首」空白决定。此前用 `line.length - trimmed.length`，
+    // 它同时计入行尾空白：带行尾填充空格的主索引项会被误判为上一项的子项；
+    // 同时单个制表符（Word INDEX 子项的常见缩进）也因长度=1 而漏判。
+    const leadingWhitespace = line.slice(0, line.length - line.trimStart().length)
+    const isSubTerm = leadingWhitespace.includes('\t') || leadingWhitespace.length >= 2
 
     // Match dot leader pattern: text + dots + page number
     const dotPattern = /^(.*?)\.{3,}\s*(\d+)$/
