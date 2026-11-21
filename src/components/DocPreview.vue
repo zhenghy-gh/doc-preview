@@ -355,7 +355,6 @@ const searchResults = ref<SearchMatch[]>([])
 const currentSearchIndex = ref(-1)
 const searchBarRef = ref<InstanceType<typeof DocSearchBar> | null>(null)
 const toolbarRef = ref<InstanceType<typeof PreviewToolbar> | null>(null)
-const originalHtml = ref('') // saved before search highlighting
 const searchCaseSensitive = ref(false)
 const searchWholeWord = ref(false)
 
@@ -1168,18 +1167,15 @@ function toggleSearch() {
     searchQuery.value = ''
     searchResults.value = []
     currentSearchIndex.value = -1
-    // Save original HTML before any highlighting
-    originalHtml.value = htmlContent.value
+    // 搜索仅通过 DOM Range 包装高亮（searchUtils），从不改写 htmlContent 字符串。
+    // 无需保存/恢复 htmlContent —— 搜索期间可能发生显示切换（隐藏文字/修订），
+    // applyFormattedPages 会合法更新 htmlContent，恢复旧串会回滚渲染结果、污染复制/打印。
     // 搜索需要遍历所有页面 DOM，临时禁用虚拟滚动确保全部页面已渲染
     virtualScrollEnabled.value = false
     nextTick(() => searchBarRef.value?.focus())
   } else {
-    // Restore original HTML when closing search
+    // 仅清除 DOM 高亮；htmlContent 保持当前渲染结果不变
     clearHighlights()
-    if (originalHtml.value) {
-      htmlContent.value = originalHtml.value
-      originalHtml.value = ''
-    }
     // 关闭搜索后恢复虚拟滚动
     virtualScrollEnabled.value = true
     nextTick(() => {
