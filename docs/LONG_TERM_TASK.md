@@ -144,3 +144,4 @@
 - 2026-11-21　Phase 4 Round 178 **整轮否决**：候选「`hasRealCharFormat` 用布尔标志替代每段落 `Object.keys(merged).length`」27 份逐字节一致，但配对端到端 5 组胜率 55.5/46.5/52.5/55.3/51.7%、符号翻转且落在噪声地板 ⇒ 撤回。连续两轮噪声主导，后续先做调用计数插桩筛方向。详见 `docs/changelog/2026-11-21-round178-optimization.md`。Next: Round 179。
 - 2026-11-21　Phase 3 切片：新增 `tests/fuzzParse.test.ts`——4 份真实语料 × 16 种确定性变异（位翻转/截断/清零区间/追加垃圾），`parse` 与 `parseWithFormat` 均不抛异常且 20s 内完成。全量 107 文件 / 2006 项通过。
 - 2026-11-21　Phase 1 续：把 `formatStoryText`、`panelTitle`、`formatSizePt` 抽到 `utils/storyRender.ts` 与 `utils/formatUtils.ts`（DocPreview 保留薄包装），新增 4 项纯函数测试。全量 108 文件 / 2010 项通过。
+- 2026-11-21　门禁：app 构建（`dist/`）与 lib 构建（`dist-lib/`，含 d.ts 生成）均通过，确认组件拆分未破坏库产物。`DocPreview.vue` 现 3812 行（起始 5160，-1348）。
