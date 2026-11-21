@@ -44,6 +44,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "scan:corpus": "node scripts/corpusHealth.mjs",
+    "audit:print": "node scripts/printPageAudit.mjs",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "release": "node scripts/publish.mjs",

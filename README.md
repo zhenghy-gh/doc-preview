@@ -150,6 +150,7 @@ npm run dev            # 开发服务器 http://localhost:5173
 npm test               # 单元测试（用例数随版本增长，以命令输出为准）
 npm run lint           # 代码检查
 npm run scan:corpus    # 27 份真实语料健康扫描（解析/分页/控制字符/NFC）
+npm run audit:print    # 预览页数 ↔ 打印布局对照审计 → tests/fixtures/print-layout-audit.json
 npm run build:lib      # 构建库产物 → dist-lib
 npm run build          # 构建演示站点 → dist
 npm run release        # 发布到 npm（同时发布 scoped 与非 scoped 两个包名）

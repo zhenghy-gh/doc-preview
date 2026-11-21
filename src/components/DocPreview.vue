@@ -4,6 +4,7 @@ import { parseDocFileWithFormat, parseDocFileFromBuffer } from '../utils/docPars
 import type { ParseProgressStage } from '../utils/docParser'
 import { parseWithWorker } from '../utils/parseWithWorker'
 import { renderDocumentToPages } from '../utils/rendering/documentRenderer'
+import { buildPrintWindowHtml } from '../utils/rendering/printLayout'
 import { PT_TO_PX } from '../utils/rendering/pageBuilder'
 import type { CharacterFormat, ParagraphFormat, RevisionMark, RevisionType, BookmarkRange, SectionInfo, PageFieldRange, CrossReferenceRange, ShapeInfo, EquationInfo, ChartInfo, WordArtInfo, RenderParagraph } from '../utils/docFormat'
 import type { DocumentFields } from '../utils/fieldParser'
@@ -1314,94 +1315,13 @@ function printDocument() {
     return
   }
   
-  const printContent = `<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${escapeHtml(fileName.value || 'DOC Preview')}</title>
-  <style>
-    @page {
-      size: A4;
-      margin: 25mm 20mm 25mm 20mm;
-      @top-center {
-        content: "${escapeHtml(fileName.value || 'DOC Preview')}";
-        font-size: 10pt;
-        color: #666;
-      }
-      @bottom-center {
-        content: "${t('print.p1')}" counter(page) "${t('print.p2')}" counter(pages) "${t('print.p3')}";
-        font-size: 10pt;
-        color: #666;
-      }
-    }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-      line-height: 1.8;
-      color: #333;
-      margin: 0;
-      padding: 0;
-    }
-    .document-content {
-      font-size: 11pt;
-    }
-    h1 { font-size: 18pt; font-weight: 600; margin-top: 0; margin-bottom: 12pt; }
-    h2 { font-size: 16pt; font-weight: 600; margin-top: 24pt; margin-bottom: 10pt; }
-    h3 { font-size: 14pt; font-weight: 600; margin-top: 20pt; margin-bottom: 8pt; }
-    h4, h5, h6 { font-size: 12pt; font-weight: 600; margin-top: 16pt; margin-bottom: 6pt; }
-    p { margin-bottom: 12pt; }
-    ul, ol { margin-left: 20pt; margin-bottom: 12pt; }
-    li { margin-bottom: 4pt; }
-    table {
-      border-collapse: collapse;
-      width: 100%;
-      margin-bottom: 12pt;
-      font-size: 10pt;
-    }
-    td, th {
-      border: 1px solid #ccc;
-      padding: 6pt 8pt;
-      vertical-align: top;
-    }
-    th {
-      background-color: #f5f5f5;
-      font-weight: 600;
-    }
-    a {
-      color: #667eea;
-      text-decoration: underline;
-    }
-    img {
-      max-width: 100%;
-      height: auto;
-    }
-    .page-break {
-      page-break-before: always;
-    }
-    .search-highlight {
-      background-color: #ffeb3b;
-    }
-    @media screen {
-      body {
-        padding: 40px;
-        max-width: 800px;
-        margin: 0 auto;
-        background: #f5f5f5;
-      }
-      .document-content {
-        background: white;
-        padding: 60px;
-        box-shadow: 0 1px 4px rgba(0,0,0,0.12);
-      }
-    }
-  </style>
-</head>
-<body>
-  <div class="document-content">
-    ${htmlContent.value}
-  </div>
-</body>
-</html>`
+  // 打印 CSS / 窗口 HTML 已抽为纯函数（utils/rendering/printLayout.ts），便于
+  // scripts/printPageAudit.mjs 在 Node 下复用同一份打印布局做可重复审计。
+  const printContent = buildPrintWindowHtml({
+    title: escapeHtml(fileName.value || 'DOC Preview'),
+    labels: { prefix: t('print.p1'), middle: t('print.p2'), suffix: t('print.p3') },
+    bodyHtml: htmlContent.value,
+  })
   
   // 注册监听后再写入文档，避免部分浏览器在 document.close() 后立即触发
   // load，导致监听器错过而无法自动打开打印对话框。
