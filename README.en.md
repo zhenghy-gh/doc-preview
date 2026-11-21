@@ -149,6 +149,9 @@ npm install
 npm run dev            # dev server at http://localhost:5173
 npm test               # unit tests (59 files / 1332 cases)
 npm run lint           # lint
+npm run scan:corpus    # health scan over 27 real .doc corpora
+npm run audit:print    # preview-vs-print layout audit → tests/fixtures/print-layout-audit.json
+npm run audit:i18n     # i18n key audit over src/**/*.{ts,vue} (non-zero exit on missing keys)
 npm run build:lib      # build the library → dist-lib
 npm run build          # build the demo site → dist
 npm run release        # publish to npm (both scoped and unscoped names)
