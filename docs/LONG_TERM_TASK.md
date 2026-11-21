@@ -147,3 +147,4 @@
 - 2026-11-21　门禁：app 构建（`dist/`）与 lib 构建（`dist-lib/`，含 d.ts 生成）均通过，确认组件拆分未破坏库产物。`DocPreview.vue` 现 3812 行（起始 5160，-1348）。
 - 2026-11-21　Phase 4 工具：新增 `scripts/perf/localPaired.mjs`（从 git HEAD 导出基线、与工作区分别 esbuild 打包、同进程交错配对）。**噪声地板实测**：基线与自身对比 300 对得 medianRatio 0.9956、胜率 54.67% —— 印证现有 57% 采纳门槛仅略高于本机噪声，R177/R178 的否决决定正确。
 - 2026-11-21　Phase 1 续：Web Font 逻辑抽离为 `composables/useWebFont.ts`（含别名表、按需加载、字体覆盖注入），DocPreview 保留薄接线；顺手修复 `getWebFontFamily` 只替换首个 `+` 导致 CSS 字体名非法的 bug；新增 2 项测试。全量 109 文件 / 2012 项通过。
+- 2026-11-21　Phase 1 续：整个工具栏抽为 `PreviewToolbar.vue`（15 个 props / 16 个 emit，搜索按钮 focus 经 defineExpose 转发），CSS 同步迁移、移动端选择器改 `:deep()`；`DocPreview.vue` 降至 3518 行（累计 -1642），新增 2 项工具栏测试。全量 110 文件 / 2014 项通过。

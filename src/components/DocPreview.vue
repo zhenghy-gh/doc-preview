@@ -32,6 +32,7 @@ import CrossReferencesPanel from './CrossReferencesPanel.vue'
 import ShapesPanel from './ShapesPanel.vue'
 import EquationsPanel from './EquationsPanel.vue'
 import WordArtsPanel from './WordArtsPanel.vue'
+import PreviewToolbar from './PreviewToolbar.vue'
 
 const { t, locale: currentLocale } = useI18n()
 const { loadWebFonts, getWebFontFamily } = createWebFont(() => props.useWebFont)
@@ -354,7 +355,7 @@ const searchQuery = ref('')
 const searchResults = ref<SearchMatch[]>([])
 const currentSearchIndex = ref(-1)
 const searchInputRef = ref<HTMLInputElement | null>(null)
-const searchToggleRef = ref<HTMLButtonElement | null>(null)
+const toolbarRef = ref<InstanceType<typeof PreviewToolbar> | null>(null)
 const originalHtml = ref('') // saved before search highlighting
 const searchCaseSensitive = ref(false)
 const searchWholeWord = ref(false)
@@ -1185,7 +1186,7 @@ function toggleSearch() {
     nextTick(() => {
       measureVisiblePageHeights()
       updateVisibleRange()
-      searchToggleRef.value?.focus()
+      toolbarRef.value?.focusSearchToggle()
     })
   }
 }
@@ -1872,127 +1873,38 @@ defineExpose({ reload, getPlainText, focusContent })
     <!-- Preview -->
     <div v-else ref="previewRef" class="preview-wrapper" tabindex="-1">
       <!-- Toolbar -->
-      <div class="toolbar" role="toolbar" :aria-label="t('toolbar.label')">
-        <div class="toolbar-left">
-          <!-- Zoom -->
-          <button type="button" class="toolbar-btn" @click="zoomOut" :disabled="zoomLevel <= MIN_ZOOM" :title="t('toolbar.zoom.out')" :aria-label="t('toolbar.zoom.out')">−</button>
-          <button type="button" class="toolbar-btn zoom-label" @click="zoomReset" :title="t('toolbar.zoom.reset')" :aria-label="t('toolbar.zoom.reset.aria')">{{ zoomLabel }}</button>
-          <button type="button" class="toolbar-btn" @click="zoomIn" :disabled="zoomLevel >= MAX_ZOOM" :title="t('toolbar.zoom.in')" :aria-label="t('toolbar.zoom.in')">+</button>
-
-          <span class="toolbar-sep" aria-hidden="true"></span>
-
-          <!-- Search -->
-          <button ref="searchToggleRef" type="button" class="toolbar-btn" @click="toggleSearch" :class="{ active: showSearch }" :title="t('toolbar.search')" :aria-label="t('toolbar.search')" :aria-expanded="showSearch" aria-controls="doc-search-bar">
-            🔍
-          </button>
-
-          <span class="toolbar-sep" aria-hidden="true"></span>
-
-          <!-- Print -->
-          <button type="button" class="toolbar-btn" @click="printDocument" :title="t('toolbar.print')" :aria-label="t('toolbar.print')">🖨️</button>
-
-          <!-- Download text -->
-          <button type="button" class="toolbar-btn" @click="downloadText" :title="t('toolbar.download.txt')" :aria-label="t('toolbar.download.txt')">📥</button>
-
-          <!-- Download HTML -->
-          <button type="button" class="toolbar-btn" @click="downloadHtml" :title="t('toolbar.download.html')" :aria-label="t('toolbar.download.html')">🌐</button>
-
-          <!-- Download Markdown -->
-          <button type="button" class="toolbar-btn" @click="downloadMarkdown" :title="t('toolbar.download.md')" :aria-label="t('toolbar.download.md')">📝</button>
-
-          <!-- Copy text -->
-          <button type="button" class="toolbar-btn" data-action="copy-text" @click="copyText" :title="t('toolbar.copy')" :aria-label="t('toolbar.copy')">📋</button>
-
-          <span class="toolbar-sep" aria-hidden="true"></span>
-
-          <!-- Outline TOC -->
-          <button
-            type="button"
-            class="toolbar-btn"
-            :class="{ active: showOutline }"
-            :disabled="outline.length === 0"
-            @click="showOutline = !showOutline"
-            :title="t('toolbar.outline')"
-            :aria-label="t('toolbar.outline')"
-            :aria-expanded="showOutline"
-            aria-controls="doc-outline-sidebar"
-          >📑</button>
-
-          <!-- Hidden text toggle -->
-          <button
-            type="button"
-            class="toolbar-btn"
-            :class="{ active: showHiddenText }"
-            @click="toggleHiddenText"
-            :title="showHiddenText ? t('toolbar.hidden.show') : t('toolbar.hidden.hide')"
-            :aria-label="t('toolbar.hidden.toggle')"
-            :aria-pressed="showHiddenText"
-          >👁️</button>
-        </div>
-
-        <div class="toolbar-right">
-          <span class="doc-stats" v-if="wordCount > 0">
-            {{ wordCount }} {{ t('stats.words') }} · {{ paragraphCount }} {{ t('stats.paragraphs') }} · {{ charCount }} {{ t('stats.chars') }}
-          </span>
-
-          <span class="toolbar-sep" aria-hidden="true"></span>
-
-          <!-- Dark mode toggle -->
-          <button
-            type="button"
-            class="toolbar-btn"
-            :class="{ active: darkMode }"
-            @click="toggleDarkMode"
-            :title="darkMode ? t('app.theme.light') : t('app.theme.dark')"
-            :aria-label="t('toolbar.theme')"
-            :aria-pressed="darkMode"
-          >
-            {{ darkMode ? '☀️' : '🌙' }}
-          </button>
-
-          <!-- Shortcuts -->
-          <button
-            type="button"
-            class="toolbar-btn"
-            :class="{ active: showShortcuts }"
-            @click="toggleShortcuts"
-            :title="t('toolbar.shortcuts') + ' (?)'"
-            :aria-label="t('toolbar.shortcuts')"
-            :aria-expanded="showShortcuts"
-            aria-controls="doc-shortcuts-panel"
-          >⌨️</button>
-
-          <span class="toolbar-sep" aria-hidden="true"></span>
-
-          <!-- Pagination controls -->
-          <div class="pagination-controls" role="group" :aria-label="t('pagination.label')">
-            <button
-              type="button"
-              class="pagination-btn"
-              @click="goToPrevPage"
-              :disabled="currentPage <= 1"
-              :title="t('pagination.prev')"
-              :aria-label="t('pagination.prev')"
-            >◀</button>
-            <span
-              class="pagination-info"
-              role="status"
-              aria-live="polite"
-              :aria-label="t('pagination.page', { current: currentPage, total: totalPages })"
-            >
-              {{ currentPage }} / {{ totalPages }}
-            </span>
-            <button
-              type="button"
-              class="pagination-btn"
-              @click="goToNextPage"
-              :disabled="currentPage >= totalPages"
-              :title="t('pagination.next')"
-              :aria-label="t('pagination.next')"
-            >▶</button>
-          </div>
-        </div>
-      </div>
+      <PreviewToolbar
+        ref="toolbarRef"
+        :zoom-label="zoomLabel"
+        :can-zoom-out="zoomLevel > MIN_ZOOM"
+        :can-zoom-in="zoomLevel < MAX_ZOOM"
+        :search-open="showSearch"
+        :outline-available="outline.length > 0"
+        :outline-open="showOutline"
+        :hidden-text-shown="showHiddenText"
+        :dark-mode="darkMode"
+        :shortcuts-open="showShortcuts"
+        :word-count="wordCount"
+        :paragraph-count="paragraphCount"
+        :char-count="charCount"
+        :current-page="currentPage"
+        :total-pages="totalPages"
+        @zoom-out="zoomOut"
+        @zoom-reset="zoomReset"
+        @zoom-in="zoomIn"
+        @toggle-search="toggleSearch"
+        @print="printDocument"
+        @download-txt="downloadText"
+        @download-html="downloadHtml"
+        @download-md="downloadMarkdown"
+        @copy-text="copyText"
+        @toggle-outline="showOutline = !showOutline"
+        @toggle-hidden="toggleHiddenText"
+        @toggle-dark="toggleDarkMode"
+        @toggle-shortcuts="toggleShortcuts"
+        @prev-page="goToPrevPage"
+        @next-page="goToNextPage"
+      />
 
       <!-- Search bar -->
       <div
@@ -2527,122 +2439,9 @@ defineExpose({ reload, getPlainText, focusContent })
   font-variant-numeric: tabular-nums;
 }
 
-/* ==================== Toolbar ==================== */
-.toolbar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 8px 16px;
-  background: var(--toolbar-bg);
-  border-bottom: 1px solid var(--toolbar-border);
-  gap: 8px;
-  flex-wrap: wrap;
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
-}
+/* Toolbar styles moved to PreviewToolbar.vue */
 
-.toolbar-left {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.toolbar-right {
-  display: flex;
-  align-items: center;
-}
-
-.toolbar-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 32px;
-  height: 32px;
-  padding: 0 8px;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 0.85rem;
-  cursor: pointer;
-  transition: all 0.15s ease;
-  user-select: none;
-}
-
-.toolbar-btn:hover:not(:disabled) {
-  background: var(--bg-tertiary);
-  border-color: var(--border-color);
-}
-
-.toolbar-btn:disabled {
-  opacity: 0.35;
-  cursor: default;
-}
-
-.toolbar-btn.active {
-  background: var(--accent-light);
-  color: var(--accent);
-  border-color: var(--accent);
-}
-
-.zoom-label {
-  font-variant-numeric: tabular-nums;
-  min-width: 44px;
-  font-weight: 600;
-  cursor: pointer !important;
-}
-
-.toolbar-sep {
-  width: 1px;
-  height: 20px;
-  background: var(--border-color);
-  margin: 0 4px;
-}
-
-.doc-stats {
-  font-size: 0.78rem;
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-
-/* ==================== Pagination ==================== */
-.pagination-controls {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.pagination-btn {
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  background: var(--bg-secondary);
-  color: var(--text-primary);
-  font-size: 0.85rem;
-  cursor: pointer;
-  transition: background-color 0.15s, border-color 0.15s;
-}
-
-.pagination-btn:hover:not(:disabled) {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-.pagination-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.pagination-info {
-  font-size: 0.85rem;
-  color: var(--text-muted);
-  min-width: 60px;
-  text-align: center;
-}
+/* Pagination controls moved to PreviewToolbar.vue */
 
 .page-content {
   break-after: page;
@@ -3411,7 +3210,7 @@ defineExpose({ reload, getPlainText, focusContent })
     min-height: auto !important;
   }
 
-  .toolbar {
+  :deep(.toolbar) {
     display: none !important;
   }
 
@@ -3468,12 +3267,12 @@ defineExpose({ reload, getPlainText, focusContent })
     font-size: 0.8rem;
   }
 
-  .toolbar {
+  :deep(.toolbar) {
     padding: 6px 8px;
     gap: 4px;
   }
 
-  .toolbar-left {
+  :deep(.toolbar-left) {
     overflow-x: auto;
     flex: 1;
     gap: 2px;
@@ -3482,15 +3281,15 @@ defineExpose({ reload, getPlainText, focusContent })
     touch-action: pan-x;
   }
 
-  .toolbar-left::-webkit-scrollbar {
+  :deep(.toolbar-left)::-webkit-scrollbar {
     display: none;
   }
 
-  .toolbar-right {
+  :deep(.toolbar-right) {
     gap: 2px;
   }
 
-  .toolbar-btn {
+  :deep(.toolbar-btn) {
     min-width: 36px;
     height: 36px;
     padding: 0 6px;
@@ -3498,12 +3297,12 @@ defineExpose({ reload, getPlainText, focusContent })
     flex-shrink: 0;
   }
 
-  .toolbar-sep {
+  :deep(.toolbar-sep) {
     margin: 0 2px;
     flex-shrink: 0;
   }
 
-  .toolbar-right .doc-stats {
+  :deep(.toolbar-right) :deep(.doc-stats) {
     font-size: 0.7rem;
   }
 
@@ -3511,11 +3310,11 @@ defineExpose({ reload, getPlainText, focusContent })
     min-width: 36px;
   }
 
-  .pagination-controls {
+  :deep(.pagination-controls) {
     gap: 2px;
   }
 
-  .pagination-btn {
+  :deep(.pagination-btn) {
     min-width: 34px;
     height: 34px;
     font-size: 0.8rem;
@@ -3527,7 +3326,7 @@ defineExpose({ reload, getPlainText, focusContent })
     flex-wrap: nowrap;
   }
 
-  .search-bar .toolbar-btn {
+  .search-bar :deep(.toolbar-btn) {
     min-width: 34px;
     height: 34px;
   }
@@ -3552,35 +3351,35 @@ defineExpose({ reload, getPlainText, focusContent })
     padding: 60px 20px;
   }
 
-  .doc-stats {
+  :deep(.doc-stats) {
     display: none;
   }
 
-  .toolbar {
+  :deep(.toolbar) {
     padding: 4px 6px;
     gap: 2px;
   }
 
-  .toolbar-left {
+  :deep(.toolbar-left) {
     gap: 1px;
   }
 
-  .toolbar-btn {
+  :deep(.toolbar-btn) {
     min-width: 40px;
     height: 40px;
     padding: 0 5px;
     font-size: 0.85rem;
   }
 
-  .toolbar-sep {
+  :deep(.toolbar-sep) {
     display: none;
   }
 
-  .pagination-controls {
+  :deep(.pagination-controls) {
     gap: 1px;
   }
 
-  .pagination-btn {
+  :deep(.pagination-btn) {
     min-width: 38px;
     height: 38px;
     font-size: 0.78rem;
@@ -3596,7 +3395,7 @@ defineExpose({ reload, getPlainText, focusContent })
     gap: 4px;
   }
 
-  .search-bar .toolbar-btn {
+  .search-bar :deep(.toolbar-btn) {
     min-width: 38px;
     height: 38px;
   }
@@ -3678,14 +3477,14 @@ defineExpose({ reload, getPlainText, focusContent })
 }
 
 @media (max-width: 480px) {
-  .toolbar-btn {
+  :deep(.toolbar-btn) {
     min-width: 44px;
     height: 44px;
     padding: 0 6px;
     font-size: 0.9rem;
   }
 
-  .pagination-btn {
+  :deep(.pagination-btn) {
     min-width: 42px;
     height: 42px;
     font-size: 0.82rem;
@@ -3701,7 +3500,7 @@ defineExpose({ reload, getPlainText, focusContent })
     min-width: 44px;
   }
 
-  .toolbar-left .toolbar-btn.zoom-reset-label {
+  :deep(.toolbar-left) :deep(.toolbar-btn).zoom-reset-label {
     display: none;
   }
 

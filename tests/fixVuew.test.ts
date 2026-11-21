@@ -58,7 +58,8 @@ describe('FIX-VUEW', () => {
   })
 
   it('pagination status announces page changes', () => {
-    const src = componentSource()
+    // 分页控件已抽到 PreviewToolbar.vue（Phase 1），守卫相应迁移。
+    const src = readFileSync(join(process.cwd(), 'src/components/PreviewToolbar.vue'), 'utf8')
     expect(src).toMatch(/class="pagination-info"[\s\S]*role="status"[\s\S]*aria-live="polite"/)
   })
 
