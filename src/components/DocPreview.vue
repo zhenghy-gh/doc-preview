@@ -11,6 +11,8 @@ import { formatRevisionTime, type RevisionMode } from '../utils/revisionRender'
 import { htmlToMarkdown } from '../utils/markdownExport'
 import { highlightTextMatches, clearSearchHighlights } from '../utils/searchUtils'
 import { escapeHtml, formatTextWithInferredFormat } from '../utils/textRender'
+import { formatStoryText } from '../utils/storyRender'
+import { formatPanelTitle, formatSizePt as formatSizePtUtil } from '../utils/formatUtils'
 import { WORD_VERSION_LABELS, type WordVersion } from '../utils/fibParser'
 import { useI18n } from '../composables/useI18n'
 import { useDarkMode } from '../composables/useDarkMode'
@@ -448,14 +450,9 @@ const styleSetLabel = computed(() =>
 
 // CHART_SUBTYPE_LABEL removed, use t('charts.subtype.' + type) instead
 
-/**
- * 尺寸格式化：pt → “x.x磅 (y.yy cm)”；undefined/≤0 返回空串。单位文案暂未 i18n（审计 A5 备忘项）。
- */
+/** 尺寸格式化（纯函数已抽离到 utils/formatUtils.ts）。 */
 function formatSizePt(pt: number | undefined): string {
-  if (pt === undefined || pt <= 0) return ''
-  // 磅 → 厘米：1 磅 = 0.0353 cm
-  const cm = (pt * 0.0353).toFixed(2)
-  return t('sections.sizePt', { pt: pt.toFixed(1), cm })
+  return formatSizePtUtil(t, pt)
 }
 
 // --- Hidden text ---
@@ -687,50 +684,7 @@ const storySections = computed<StorySection[]>(() => {
   return out
 })
 
-/**
- * 非正文 story 文本 → HTML：保留段首缩进、压缩连续空段；软换行(\v)→<br>、分页符(\f)与单元格标记(\u0007)→提示 span。特殊字符在 escapeHtml 之前以占位替换，避免被转义破坏结构。
- */
-// 每行都会用到的正则：提到行循环之外（setup 作用域），避免为每一行重新
-// 构造——原先在循环体内 `new RegExp(...)`，每次都会重新编译模式。
-// 全局标志仅配合 `String.replace` 使用，后者会重置并忽略 lastIndex，
-// 因此跨行共享同一个正则实例是安全的。
-const STORY_TRAILING_WS_RE = /\s+$/
-const STORY_SOFT_BR_RE = /\u000b/g
-const STORY_PAGE_BR_RE = /\u000c/g
-const STORY_CELL_MARK_RE = /\u0007/g
-const STORY_PAGE_BR_HTML = '<span style="display:inline-block;padding:0 4px;color:#999;font-size:0.85em">[分页]</span>'
-const STORY_CELL_MARK_HTML = '<span style="display:inline-block;padding:0 4px;color:#999;font-size:0.85em">│</span>'
-
-function formatStoryText(text: string): string {
-  // Split by single newline to preserve paragraph structure.
-  // Empty paragraphs become spacing, but consecutive empties are collapsed.
-  const lines = text.split('\n')
-  const htmlParts: string[] = []
-  let prevEmpty = false
-  for (const raw of lines) {
-    // Trim trailing whitespace only; keep leading spaces (indentation).
-    const line = raw.replace(STORY_TRAILING_WS_RE, '')
-    if (line.length === 0) {
-      if (!prevEmpty && htmlParts.length > 0) {
-        htmlParts.push('<p style="margin:0 0 6px 0">&nbsp;</p>')
-      }
-      prevEmpty = true
-      continue
-    }
-    prevEmpty = false
-    // Handle in-paragraph special chars BEFORE escaping:
-    //   \v (soft break / Shift+Enter) → <br> placeholder
-    //   \f (form feed / page break) → page-break marker placeholder
-    //   \u0007 (table cell mark) → cell separator placeholder
-    // Use placeholders to avoid interference with escapeHtml.
-    const escaped = escapeHtml(line)
-      .replace(STORY_SOFT_BR_RE, '<br>')
-      .replace(STORY_PAGE_BR_RE, STORY_PAGE_BR_HTML)
-      .replace(STORY_CELL_MARK_RE, STORY_CELL_MARK_HTML)
-    htmlParts.push(`<p style="margin:0 0 6px 0">${escaped}</p>`)
-  }
-  return htmlParts.join('')
-}
+// Story 文本格式化已抽离为纯函数 utils/storyRender.ts（Phase 1 收尾）
 
 // ---- Helpers ----
 
@@ -1295,10 +1249,9 @@ function zoomReset() {
 
 const zoomLabel = computed(() => `${zoomLevel.value}%`)
 
-/** DOC-POLISH①：面板标题计数括号按语言取形——zh 全角（n）、en 半角 (n)。 */
+/** 面板标题（纯函数已抽离到 utils/formatUtils.ts）。 */
 function panelTitle(key: string, n: number): string {
-  const base = t(key)
-  return currentLocale.value === 'en' ? `${base} (${n})` : `${base}（${n}）`
+  return formatPanelTitle(t, currentLocale.value === 'en', key, n)
 }
 
 // ---- Search ----
