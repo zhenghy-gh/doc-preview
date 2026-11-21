@@ -22,6 +22,7 @@ import BookmarksPanel from './BookmarksPanel.vue'
 import TocIndexPanel from './TocIndexPanel.vue'
 import PropertiesPanel from './PropertiesPanel.vue'
 import DocFlagsPanel from './DocFlagsPanel.vue'
+import RevisionsPanel from './RevisionsPanel.vue'
 
 /**
  * DocPreview —— .doc 解析结果的渲染宿主组件。
@@ -2290,51 +2291,15 @@ defineExpose({ reload, getPlainText, focusContent })
       />
 
       <!-- Revision marks (track changes: insert / delete) -->
-      <CollapsiblePanel
+      <RevisionsPanel
         v-if="revisions.length > 0"
         v-model="showRevisions"
         :title="panelTitle('revisions.title', revisions.length)"
         :summary="t('revisions.count', { n: revisionItems.length })"
-        panel-class="revisions-panel"
-      >
-        <div class="revision-mode-toolbar" role="group" :aria-label="t('revisions.title')">
-          <button
-            type="button"
-            class="revision-mode-btn"
-            :class="{ active: revisionMode === 'marks' }"
-            :aria-pressed="revisionMode === 'marks'"
-            @click="setRevisionMode('marks')"
-            :title="t('revisions.marks')"
-          >{{ t('revisions.marks') }}</button>
-          <button
-            type="button"
-            class="revision-mode-btn"
-            :class="{ active: revisionMode === 'accepted' }"
-            :aria-pressed="revisionMode === 'accepted'"
-            @click="setRevisionMode('accepted')"
-            :title="t('revisions.accept')"
-          >{{ t('revisions.accept') }}</button>
-          <button
-            type="button"
-            class="revision-mode-btn"
-            :class="{ active: revisionMode === 'rejected' }"
-            :aria-pressed="revisionMode === 'rejected'"
-            @click="setRevisionMode('rejected')"
-            :title="t('revisions.reject')"
-          >{{ t('revisions.reject') }}</button>
-        </div>
-        <div
-          v-for="(item, idx) in revisionItems"
-          :key="idx"
-          class="revision-item"
-          :class="'revision-type-' + item.type"
-        >
-          <span class="revision-badge">{{ item.label }}</span>
-          <span class="revision-author">{{ item.author }}</span>
-          <span v-if="item.time" class="revision-time">{{ item.time }}</span>
-          <span class="revision-count">{{ t('revisions.count', { n: item.count }) }}</span>
-        </div>
-      </CollapsiblePanel>
+        :mode="revisionMode"
+        :items="revisionItems"
+        @change-mode="setRevisionMode"
+      />
 
       <!-- Bookmarks (named ranges from PlcfBkf/PlcfBkl/SttbfBkmk) -->
       <BookmarksPanel
@@ -3457,119 +3422,7 @@ defineExpose({ reload, getPlainText, focusContent })
 
 /* TOC / Index styles moved to TocIndexPanel.vue */
 
-/* ==================== Revision marks ==================== */
-.revisions-panel {
-  max-width: 800px;
-  margin: 0 auto 32px auto;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-.revisions-panel .stories-content {
-  padding: 12px 16px;
-  display: grid;
-  gap: 8px;
-}
-
-.revision-mode-toolbar {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  padding: 8px 10px;
-  background: var(--bg-primary);
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  margin-bottom: 4px;
-}
-
-.revision-mode-btn {
-  padding: 4px 12px;
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  background: var(--bg-secondary);
-  color: var(--text-primary);
-  font-size: 0.82rem;
-  cursor: pointer;
-  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
-}
-
-.revision-mode-btn:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-.revision-mode-btn.active {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
-}
-
-.revision-item {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  flex-wrap: wrap;
-  padding: 6px 10px;
-  background: var(--bg-primary);
-  border-left: 3px solid var(--border-color);
-  border-radius: 4px;
-  font-size: 0.85rem;
-}
-
-.revision-item.revision-type-insert {
-  border-left-color: #27ae60;
-}
-
-.revision-item.revision-type-delete {
-  border-left-color: #e74c3c;
-}
-
-.revision-item.revision-type-format {
-  border-left-color: #f39c12;
-}
-
-.revision-badge {
-  display: inline-block;
-  padding: 2px 10px;
-  border-radius: 12px;
-  font-size: 0.8rem;
-  font-weight: 500;
-  white-space: nowrap;
-}
-
-.revision-type-insert .revision-badge {
-  background: rgba(39, 174, 96, 0.12);
-  color: #27ae60;
-}
-
-.revision-type-delete .revision-badge {
-  background: rgba(231, 76, 60, 0.12);
-  color: #e74c3c;
-}
-
-.revision-type-format .revision-badge {
-  background: rgba(243, 156, 18, 0.12);
-  color: #f39c12;
-}
-
-.revision-author {
-  color: var(--text-primary);
-  font-weight: 500;
-}
-
-.revision-time {
-  color: var(--text-muted);
-  font-size: 0.8rem;
-}
-
-.revision-count {
-  margin-left: auto;
-  color: var(--text-muted);
-  font-size: 0.8rem;
-}
-
+/* Revision panel styles moved to RevisionsPanel.vue */
 /* Bookmarks styles moved to BookmarksPanel.vue */
 
 /* ==================== Sections (page layout) ==================== */
@@ -4690,7 +4543,7 @@ defineExpose({ reload, getPlainText, focusContent })
   :deep(.properties-panel),
   :deep(.doc-flags-panel),
   :deep(.toc-panel),
-  .revisions-panel,
+  :deep(.revisions-panel),
   :deep(.bookmarks-panel),
   .sections-panel,
   .page-fields-panel,
@@ -4709,7 +4562,7 @@ defineExpose({ reload, getPlainText, focusContent })
   :deep(.properties-content),
   :deep(.doc-flags-content),
   :deep(.toc-content),
-  .revisions-content,
+  :deep(.revisions-content),
   :deep(.bookmarks-content),
   .sections-content,
   .page-fields-content,
@@ -4737,7 +4590,7 @@ defineExpose({ reload, getPlainText, focusContent })
     font-size: 0.82rem;
   }
 
-  .revision-mode-btn {
+  :deep(.revision-mode-btn) {
     padding: 6px 10px;
     font-size: 0.75rem;
   }
