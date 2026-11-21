@@ -3461,49 +3461,6 @@ defineExpose({ reload, getPlainText, focusContent })
   color: #1976d2;
 }
 
-/* ==================== Stats panel ==================== */
-.stats-panel {
-  max-width: 800px;
-  margin: 0 auto 32px auto;
-  background: var(--bg-secondary, #f5f5f5);
-  border: 1px solid var(--border-color, #ddd);
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-.stats-content {
-  padding: 12px 16px 16px;
-}
-
-.stats-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
-}
-
-.stat-item {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  padding: 12px 8px;
-  background: var(--bg-primary, #fff);
-  border-radius: 8px;
-  border: 1px solid var(--border-color, #e8e8e8);
-}
-
-.stat-value {
-  font-size: 1.25rem;
-  font-weight: 700;
-  color: var(--accent, #1a73e8);
-  line-height: 1.2;
-}
-
-.stat-label {
-  font-size: 0.78rem;
-  color: var(--text-secondary, #888);
-}
-
 /* ==================== Shortcuts Panel ==================== */
 .shortcuts-overlay {
   position: fixed;
@@ -3805,8 +3762,7 @@ defineExpose({ reload, getPlainText, focusContent })
   :deep(.equations-panel),
   .charts-panel,
   :deep(.wordart-panel),
-  .images-panel,
-  .stats-panel {
+  .images-panel {
     max-width: 100%;
     margin: 0 10px 20px 10px;
   }
@@ -3824,8 +3780,7 @@ defineExpose({ reload, getPlainText, focusContent })
   :deep(.equations-content),
   .charts-content,
   :deep(.wordart-content),
-  .images-content,
-  .stats-content {
+  .images-content {
     padding: 8px 10px;
   }
 

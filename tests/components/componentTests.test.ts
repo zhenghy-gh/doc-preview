@@ -3,7 +3,6 @@ import { describe, it, expect } from 'vitest'
 import { nextTick } from 'vue'
 import { mount } from '@vue/test-utils'
 import CollapsiblePanel from '../../src/components/CollapsiblePanel.vue'
-import DocStatsPanel from '../../src/components/DocStatsPanel.vue'
 import ErrorDisplay from '../../src/components/ErrorDisplay.vue'
 import LoadingOverlay from '../../src/components/LoadingOverlay.vue'
 import ShortcutsPanel from '../../src/components/ShortcutsPanel.vue'
@@ -65,29 +64,6 @@ describe('CollapsiblePanel', () => {
     expect(wrapper.find('.stories-content').exists()).toBe(false)
     expect(wrapper.find('.stories-toggle-summary').text()).toBe('3 items')
     expect(wrapper.classes()).toContain('extra')
-  })
-})
-
-describe('DocStatsPanel', () => {
-  it('renders stats when paragraphs exist', () => {
-    const wrapper = mount(DocStatsPanel, {
-      props: {
-        modelValue: true,
-        stats: { wordCount: 1234, charCount: 5678, paragraphCount: 42, pageCount: 3, imageCount: 2, tableCount: 1 },
-      },
-    })
-    expect(wrapper.text()).toContain('1,234')
-    expect(wrapper.find('.stories-content').exists()).toBe(true)
-  })
-
-  it('renders nothing without paragraphs', () => {
-    const wrapper = mount(DocStatsPanel, {
-      props: {
-        modelValue: true,
-        stats: { wordCount: 0, charCount: 0, paragraphCount: 0, pageCount: 0, imageCount: 0, tableCount: 0 },
-      },
-    })
-    expect(wrapper.find('.collapsible-panel').exists()).toBe(false)
   })
 })
 
