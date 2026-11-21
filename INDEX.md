@@ -102,14 +102,16 @@ doc-preview/
 | 文件 | 用例数 | 覆盖目标 |
 |---|---|---|
 | [oleParser.test.ts](tests/oleParser.test.ts) | 68 | OLE 格式检测、目录表、流读取 |
-| [fieldParser.test.ts](tests/fieldParser.test.ts) | 61 | PlcfFld、超链接、TOC/索引/交叉引用域 |
+| [fieldParser.test.ts](tests/fieldParser.test.ts) | 71 | PlcfFld、超链接、TOC/索引/交叉引用域 |
+| [fieldParserBoundaries.test.ts](tests/fieldParserBoundaries.test.ts) | 6 | INDEX 缩进/非法 CP 边界、PlcfFld/PlcfHdd 越界输入 |
 | [listParser.test.ts](tests/listParser.test.ts) | 44 | LST/LVLF、编号格式、CJK 编号 |
 | [listDetection.test.ts](tests/listDetection.test.ts) | 40 | 列表启发式检测（阿拉伯/拉丁/多级） |
 | [revisionRender.test.ts](tests/revisionRender.test.ts) | 38 | 修订渲染三模式、转义、时间格式化 |
 | [fibParser.test.ts](tests/fibParser.test.ts) | 36 | FIB 解析、csw 链、回退逻辑 |
 | [styleParser.test.ts](tests/styleParser.test.ts) | 34 | STSH/STD、样式继承、循环保护 |
 | [headerFooterParser.test.ts](tests/headerFooterParser.test.ts) | 29 | 页眉页脚拆分、PlcfHdd |
-| [errorClassifier.test.ts](tests/errorClassifier.test.ts) | 29 | 错误分类（中英文） |
+| [errorClassifier.test.ts](tests/errorClassifier.test.ts) | 27 | 错误分类（中英文） |
+| [errorClassifierErrorPaths.test.ts](tests/errorClassifierErrorPaths.test.ts) | 19 | docx/损坏 OLE/超大/网络/超时五路径双语分类 + ErrorDisplay |
 | [clxParser.test.ts](tests/clxParser.test.ts) | 28 | CLX/Pcdt/Piece Table 鲁棒性 |
 | [propertyParser.test.ts](tests/propertyParser.test.ts) | 27 | 文档属性解析 |
 | [docParser.test.ts](tests/docParser.test.ts) | 26 | 入口、签名校验、maxScanBytes |
