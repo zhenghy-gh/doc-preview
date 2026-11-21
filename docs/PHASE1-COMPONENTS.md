@@ -6,6 +6,7 @@
 
 `DocPreview.vue` 原为 5160 行上帝组件，16 个信息面板的模板与 CSS 全部内联。
 Phase 1 把它们拆为独立 `.vue` 组件，主文件降到 **3902 行**（-1258）。
+后续切片继续抽出工具栏与搜索/大纲等 UI 块，主文件现约 **2997 行**（累计 -2163）。
 
 ## 组件清单与契约
 
@@ -28,6 +29,15 @@ Phase 1 把它们拆为独立 `.vue` 组件，主文件降到 **3902 行**（-12
 | `WordArtsPanel.vue` | `wordArts` | `update:modelValue` |
 
 注：`PropertiesPanel` 内两个折叠面板在旧实现中共用同一个 `showProperties` 状态，拆分后继续共用 `modelValue`。
+
+## 后续抽出的非面板 UI 组件
+
+| 组件 | 职责 / 契约 |
+|---|---|
+| `PreviewToolbar.vue` | 15 props / 16 emit，含 `data-action="copy-text"` 稳定定位与 `focusSearchToggle()` expose；工具栏按钮经 `toolbarRef` 限定查询以避免多实例串扰 |
+| `DocSearchBar.vue` | 搜索状态仍由 DocPreview 持有；`v-model:query/case-sensitive/whole-word` + `perform-search/next-match/prev-match/close` 事件，`expose focus()` 转发 Ctrl+F；保留 `#doc-search-bar`/`#doc-search-status`/ARIA/`:has(input:checked)`；隐藏文字/修订重渲染后由父组件 `rerenderForDisplayChange()` 重跑搜索恢复高亮 |
+| `OutlineSidebar.vue` | 大纲条目渲染，点击/Enter/Space 转发 `navigate(item)` → 父组件 `scrollToOutline`（虚拟滚动临时关闭 + `outline-highlight` 闪烁保留在父组件） |
+| `ShortcutsPanel.vue` / `LoadingOverlay.vue` / `ErrorDisplay.vue` / `CollapsiblePanel.vue` | 通用 UI / 加载 / 错误 / 折叠骨架，各自 CSS 已迁入组件自身 scoped style |
 
 ## CSS 归属规则
 
