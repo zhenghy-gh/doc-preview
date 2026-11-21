@@ -146,3 +146,4 @@
 - 2026-11-21　Phase 1 续：把 `formatStoryText`、`panelTitle`、`formatSizePt` 抽到 `utils/storyRender.ts` 与 `utils/formatUtils.ts`（DocPreview 保留薄包装），新增 4 项纯函数测试。全量 108 文件 / 2010 项通过。
 - 2026-11-21　门禁：app 构建（`dist/`）与 lib 构建（`dist-lib/`，含 d.ts 生成）均通过，确认组件拆分未破坏库产物。`DocPreview.vue` 现 3812 行（起始 5160，-1348）。
 - 2026-11-21　Phase 4 工具：新增 `scripts/perf/localPaired.mjs`（从 git HEAD 导出基线、与工作区分别 esbuild 打包、同进程交错配对）。**噪声地板实测**：基线与自身对比 300 对得 medianRatio 0.9956、胜率 54.67% —— 印证现有 57% 采纳门槛仅略高于本机噪声，R177/R178 的否决决定正确。
+- 2026-11-21　Phase 1 续：Web Font 逻辑抽离为 `composables/useWebFont.ts`（含别名表、按需加载、字体覆盖注入），DocPreview 保留薄接线；顺手修复 `getWebFontFamily` 只替换首个 `+` 导致 CSS 字体名非法的 bug；新增 2 项测试。全量 109 文件 / 2012 项通过。

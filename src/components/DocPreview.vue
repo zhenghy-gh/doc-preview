@@ -15,6 +15,7 @@ import { formatStoryText } from '../utils/storyRender'
 import { formatPanelTitle, formatSizePt as formatSizePtUtil } from '../utils/formatUtils'
 import { WORD_VERSION_LABELS, type WordVersion } from '../utils/fibParser'
 import { useI18n } from '../composables/useI18n'
+import { useWebFont as createWebFont } from '../composables/useWebFont'
 import { useDarkMode } from '../composables/useDarkMode'
 import ShortcutsPanel from './ShortcutsPanel.vue'
 import LoadingOverlay from './LoadingOverlay.vue'
@@ -33,6 +34,7 @@ import EquationsPanel from './EquationsPanel.vue'
 import WordArtsPanel from './WordArtsPanel.vue'
 
 const { t, locale: currentLocale } = useI18n()
+const { loadWebFonts, getWebFontFamily } = createWebFont(() => props.useWebFont)
 
 /**
  * DocPreview —— .doc 解析结果的渲染宿主组件。
@@ -486,103 +488,7 @@ const revisionItems = computed<Array<{ type: RevisionType; label: string; author
   return Array.from(groups.values()).map(g => ({ ...g, label: typeLabel[g.type] }))
 })
 
-// --- Web Font ---
-const webFontLoaded = ref(false)
-
-const FONT_ALIASES: Record<string, string[]> = {
-  '宋体': ['Noto+Serif+SC', 'SimSun'],
-  '仿宋': ['Noto+Serif+SC', 'FangSong'],
-  '仿宋_GB2312': ['Noto+Serif+SC', 'FangSong_GB2312'],
-  '黑体': ['Noto+Sans+SC', 'SimHei'],
-  '楷体': ['Noto+Serif+SC', 'KaiTi'],
-  '隶书': ['Noto+Serif+SC', 'LiSu'],
-  '幼圆': ['Noto+Sans+SC', 'YouYuan'],
-  'Times New Roman': ['Noto+Serif', 'Times+New+Roman'],
-  'Arial': ['Noto+Sans', 'Arial'],
-  'Verdana': ['Noto+Sans', 'Verdana'],
-  'Georgia': ['Noto+Serif', 'Georgia'],
-  'Microsoft YaHei': ['Noto+Sans+SC', 'Microsoft+YaHei'],
-  '微软雅黑': ['Noto+Sans+SC', 'Microsoft+YaHei'],
-  '华文中宋': ['Noto+Serif+SC', 'STZhongsong'],
-  '华文仿宋': ['Noto+Serif+SC', 'STFangsong'],
-  '华文黑体': ['Noto+Sans+SC', 'STHeiti'],
-  '华文楷体': ['Noto+Serif+SC', 'STKaiti'],
-  '新宋体': ['Noto+Serif+SC', 'NSimSun'],
-}
-
-/**
- * 按需加载 Google Fonts Web Font：注入 stylesheet，成功后应用字体覆盖样式；失败仅 console.warn 并回落系统字体。webFontLoaded 门闩保证幂等。
- */
-function loadWebFonts() {
-  if (!props.useWebFont || webFontLoaded.value) return
-
-  const families = 'Noto+Serif+SC|Noto+Sans+SC|Noto+Serif|Noto+Sans'
-  const link = document.createElement('link')
-  link.href = `https://fonts.googleapis.com/css2?family=${families}&display=swap`
-  link.rel = 'stylesheet'
-  link.onload = () => {
-    webFontLoaded.value = true
-    injectWebFontOverrides()
-  }
-  link.onerror = () => {
-    console.warn('Web Font loading failed, falling back to system fonts')
-  }
-  document.head.appendChild(link)
-}
-
-/**
- * 字体名 → Web Font CSS 前缀（“Google Font, ” 含尾逗号供调用方直接拼接）；未启用或无别名映射时返回空串。
- */
-function getWebFontFamily(fontName?: string): string {
-  if (!props.useWebFont) return ''
-
-  const alias = fontName ? FONT_ALIASES[fontName] : undefined
-  if (alias) {
-    const googleFont = alias[0].replace('+', ' ')
-    return `${googleFont}, `
-  }
-  return ''
-}
-
-/**
- * 注入/更新全局 <style id=doc-preview-webfont-overrides>，把 .document-content 各级元素 font-family 覆盖为 Noto 系列回退链（!important）。
- */
-function injectWebFontOverrides() {
-  if (!props.useWebFont) return
-
-  const styleId = 'doc-preview-webfont-overrides'
-  let style = document.getElementById(styleId) as HTMLStyleElement
-  if (!style) {
-    style = document.createElement('style')
-    style.id = styleId
-    document.head.appendChild(style)
-  }
-
-  style.textContent = `
-    .document-content h1 {
-      font-family: 'Noto Serif SC', '华文中宋', 'SimHei', serif !important;
-    }
-    .document-content h2 {
-      font-family: 'Noto Serif SC', '华文中宋', 'SimHei', serif !important;
-    }
-    .document-content h3 {
-      font-family: 'Noto Serif SC', serif !important;
-    }
-    .document-content p {
-      font-family: 'Noto Serif SC', '宋体', 'SimSun', serif !important;
-    }
-    .document-content li {
-      font-family: 'Noto Serif SC', '宋体', 'SimSun', serif !important;
-    }
-    .document-content th,
-    .document-content td {
-      font-family: 'Noto Serif SC', '宋体', 'SimSun', serif !important;
-    }
-    .document-content blockquote {
-      font-family: 'Noto Serif SC', '宋体', serif !important;
-    }
-  `
-}
+// Web Font 逻辑已抽离为 composables/useWebFont.ts
 
 // --- Document properties ---
 const docProperties = ref<DocumentProperties | null>(null)
