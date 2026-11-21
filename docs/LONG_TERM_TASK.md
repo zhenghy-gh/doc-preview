@@ -132,3 +132,4 @@
 - 2026-11-21　Phase 1 切片 1：抽出 `BookmarksPanel.vue`、`TocIndexPanel.vue`（含各自 scoped CSS），`DocPreview.vue` 5160→5009 行。vue-tsc 0，npm test 1997/1997 通过。
 - 2026-11-21　Phase 1 切片 2：抽出 `PropertiesPanel.vue`（SummaryInformation + PlcfFld 两面板共用展开态）、`DocFlagsPanel.vue`，`DocPreview.vue` 5009→4798 行。vue-tsc 0，lint 0，npm test 1997/1997 通过。
 - 2026-11-21　Phase 1 切片 3：抽出 `RevisionsPanel.vue`（含三模式切换 emit），`DocPreview.vue` 4798→4651 行。vue-tsc 0，lint 0，npm test 1997/1997 通过。
+- 2026-11-21　Phase 1 切片 4（批量）：抽出剩余 7 个面板 `StoriesPanel / SectionsPanel / PageFieldsPanel / CrossReferencesPanel / ShapesPanel / EquationsPanel / WordArtsPanel`，迁移全部面板 CSS，移动端选择器统一改 `:deep()`；`DocPreview.vue` 4651→3902 行，16 个信息面板现已全部组件化。vue-tsc 0，lint 0，npm test 1997/1997 通过。

@@ -17,12 +17,18 @@ import { useDarkMode } from '../composables/useDarkMode'
 import ShortcutsPanel from './ShortcutsPanel.vue'
 import LoadingOverlay from './LoadingOverlay.vue'
 import ErrorDisplay from './ErrorDisplay.vue'
-import CollapsiblePanel from './CollapsiblePanel.vue'
 import BookmarksPanel from './BookmarksPanel.vue'
 import TocIndexPanel from './TocIndexPanel.vue'
 import PropertiesPanel from './PropertiesPanel.vue'
 import DocFlagsPanel from './DocFlagsPanel.vue'
 import RevisionsPanel from './RevisionsPanel.vue'
+import StoriesPanel from './StoriesPanel.vue'
+import SectionsPanel from './SectionsPanel.vue'
+import PageFieldsPanel from './PageFieldsPanel.vue'
+import CrossReferencesPanel from './CrossReferencesPanel.vue'
+import ShapesPanel from './ShapesPanel.vue'
+import EquationsPanel from './EquationsPanel.vue'
+import WordArtsPanel from './WordArtsPanel.vue'
 
 /**
  * DocPreview —— .doc 解析结果的渲染宿主组件。
@@ -439,10 +445,6 @@ const styleSetLabel = computed(() =>
 // CHART_TYPE_LABEL removed, use t('charts.type.' + type) instead
 
 // CHART_SUBTYPE_LABEL removed, use t('charts.subtype.' + type) instead
-
-function getWordArtEffectLabel(effect: string): string {
-  return t('wordart.effect.' + effect) || t('wordart.effect.unknown')
-}
 
 /**
  * 尺寸格式化：pt → “x.x磅 (y.yy cm)”；undefined/≤0 返回空串。单位文案暂未 i18n（审计 A5 备忘项）。
@@ -2218,44 +2220,12 @@ defineExpose({ reload, getPlainText, focusContent })
       </div>
 
       <!-- Stories panel (headers / footnotes / endnotes / comments / textboxes) -->
-      <CollapsiblePanel
-        v-if="storySections.length > 0"
+      <StoriesPanel
         v-model="showStories"
         :title="panelTitle('story.title', storySections.length)"
-        :summary="storySections.map((s: StorySection) => s.label).join(' · ')"
-        panel-class="stories-panel"
-      >
-        <div
-          v-for="section in storySections"
-          :key="section.key"
-          class="story-section"
-          :class="'story-' + section.key"
-        >
-          <div class="story-section-title">{{ section.label }}</div>
-          <div class="story-section-text" v-html="formatStoryText(section.text)"></div>
-          <div v-if="section.images && section.images.length > 0" class="story-section-images">
-            <div
-              v-for="(img, idx) in section.images"
-              :key="idx"
-              class="story-image-item"
-            >
-              <img
-                :src="img.dataUrl"
-                :alt="t('images.alt', { n: idx + 1 })"
-                :style="{
-                  maxWidth: '100%',
-                  height: 'auto',
-                  maxHeight: '200px',
-                }"
-                loading="lazy"
-                decoding="async"
-                class="story-image"
-              />
-              <span class="story-image-caption">{{ img.format?.toUpperCase() || t('story.image.caption', { fmt: '' }) }}</span>
-            </div>
-          </div>
-        </div>
-      </CollapsiblePanel>
+        :sections="storySections"
+        :format-story-text="formatStoryText"
+      />
 
       <!-- Document properties (SummaryInformation + PlcfFld fields) -->
       <PropertiesPanel
@@ -2311,204 +2281,40 @@ defineExpose({ reload, getPlainText, focusContent })
       />
 
       <!-- Sections (page layout from PlcfSed/SEPX) -->
-      <CollapsiblePanel
-        v-if="sections.length > 0"
+      <SectionsPanel
         v-model="showSections"
         :title="panelTitle('sections.title', sections.length)"
-        :summary="t('sections.summary')"
-        panel-class="sections-panel"
-      >
-        <div class="sections-content">
-          <div
-            v-for="(sec, idx) in sections"
-            :key="idx"
-            class="section-item"
-          >
-            <div class="section-header">
-              <span class="section-index">{{ t('sections.index', { n: sec.index }) }}</span>
-              <span v-if="sec.breakType" class="section-break">
-                {{ t('sections.break.' + sec.breakType) || sec.breakType }}
-              </span>
-              <span v-if="sec.orientation" class="section-orientation">
-                {{ sec.orientation === 'landscape' ? t('sections.orientation.landscape') : t('sections.orientation.portrait') }}
-              </span>
-            </div>
-            <div class="section-grid">
-              <div v-if="sec.pageWidthPt && sec.pageHeightPt" class="section-field">
-                <span class="section-field-label">{{ t('sections.pageSize') }}</span>
-                <span class="section-field-value">
-                  {{ formatSizePt(sec.pageWidthPt) }} × {{ formatSizePt(sec.pageHeightPt) }}
-                </span>
-              </div>
-              <div v-if="sec.marginLeftPt" class="section-field">
-                <span class="section-field-label">{{ t('sections.marginLeft') }}</span>
-                <span class="section-field-value">{{ formatSizePt(sec.marginLeftPt) }}</span>
-              </div>
-              <div v-if="sec.marginRightPt" class="section-field">
-                <span class="section-field-label">{{ t('sections.marginRight') }}</span>
-                <span class="section-field-value">{{ formatSizePt(sec.marginRightPt) }}</span>
-              </div>
-              <div v-if="sec.marginTopPt" class="section-field">
-                <span class="section-field-label">{{ t('sections.marginTop') }}</span>
-                <span class="section-field-value">{{ formatSizePt(sec.marginTopPt) }}</span>
-              </div>
-              <div v-if="sec.marginBottomPt" class="section-field">
-                <span class="section-field-label">{{ t('sections.marginBottom') }}</span>
-                <span class="section-field-value">{{ formatSizePt(sec.marginBottomPt) }}</span>
-              </div>
-              <div v-if="sec.gutterPt" class="section-field">
-                <span class="section-field-label">{{ t('sections.gutter') }}</span>
-                <span class="section-field-value">{{ formatSizePt(sec.gutterPt) }}</span>
-              </div>
-              <div v-if="sec.columnCount && sec.columnCount > 1" class="section-field">
-                <span class="section-field-label">{{ t('sections.columns') }}</span>
-                <span class="section-field-value">
-                  {{ sec.columnCount }} {{ t('sections.columns') }}
-                  <span v-if="sec.columnSpacingPt">{{ t('sections.columns.gap', { pt: formatSizePt(sec.columnSpacingPt) }) }}</span>
-                </span>
-              </div>
-              <div v-if="sec.pageStart !== undefined" class="section-field">
-                <span class="section-field-label">{{ t('sections.startPageNum') }}</span>
-                <span class="section-field-value">{{ sec.pageStart }}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </CollapsiblePanel>
+        :sections="sections"
+        :format-size-pt="formatSizePt"
+      />
 
       <!-- Page fields (PAGE / NUMPAGES / SECTION / SECTIONPAGES) -->
-      <CollapsiblePanel
-        v-if="pageFields.length > 0"
+      <PageFieldsPanel
         v-model="showPageFields"
         :title="panelTitle('pageFields.title', pageFields.length)"
-        summary="PAGE / NUMPAGES"
-        panel-class="page-fields-panel"
-      >
-        <div class="page-fields-content">
-          <div
-            v-for="(pf, idx) in pageFields"
-            :key="idx"
-            class="page-field-item"
-          >
-            <div class="page-field-header">
-              <span class="page-field-type">
-                {{ t('pageFields.type.' + pf.type) || pf.type }}
-              </span>
-              <span v-if="pf.result" class="page-field-result">{{ t('pageFields.value', { v: pf.result }) }}</span>
-            </div>
-            <div class="page-field-instruction">{{ t('pageFields.instruction', { inst: pf.instruction }) }}</div>
-            <div class="page-field-cp">CP: {{ pf.cpStart }} – {{ pf.cpEnd }}</div>
-          </div>
-        </div>
-      </CollapsiblePanel>
+        :fields="pageFields"
+      />
 
       <!-- Cross-references (REF / NOTEREF) -->
-      <CollapsiblePanel
-        v-if="crossReferences.length > 0"
+      <CrossReferencesPanel
         v-model="showCrossReferences"
         :title="panelTitle('crossRefs.title', crossReferences.length)"
-        summary="REF / NOTEREF"
-        panel-class="cross-refs-panel"
-      >
-        <div class="cross-refs-content">
-          <div
-            v-for="(cr, idx) in crossReferences"
-            :key="idx"
-            class="cross-ref-item"
-          >
-            <div class="cross-ref-header">
-              <span class="cross-ref-type">
-                {{ t('crossRefs.type.' + cr.type) || cr.type }}
-              </span>
-              <span v-if="cr.result" class="cross-ref-result">{{ t('crossRefs.show', { v: cr.result }) }}</span>
-            </div>
-            <div class="cross-ref-target">
-              {{ t('crossRefs.target') }}: <code>{{ cr.targetBookmarkName }}</code>
-            </div>
-            <div class="cross-ref-instruction">{{ t('crossRefs.instruction', { inst: cr.instruction }) }}</div>
-            <div v-if="cr.switches.length > 0" class="cross-ref-switches">
-              {{ t('crossRefs.switches') }}:
-              <span
-                v-for="sw in cr.switches"
-                :key="sw"
-                class="cross-ref-switch"
-                :title="t('crossRefs.switch.' + sw.replace('\\\\', ''))"
-              >{{ sw }}{{ t('crossRefs.switch.' + sw.replace('\\\\', '')) ? ` (${t('crossRefs.switch.' + sw.replace('\\\\', ''))})` : '' }}</span>
-            </div>
-            <div class="cross-ref-cp">CP: {{ cr.cpStart }} – {{ cr.cpEnd }}</div>
-          </div>
-        </div>
-      </CollapsiblePanel>
+        :references="crossReferences"
+      />
 
       <!-- Shapes (Office Art Drawing Container - floating images with anchors) -->
-      <CollapsiblePanel
-        v-if="shapes.length > 0"
+      <ShapesPanel
         v-model="showShapes"
         :title="panelTitle('shapes.title', shapes.length)"
-        :summary="t('shapes.summary')"
-        panel-class="shapes-panel"
-      >
-        <div class="shapes-content">
-          <div
-            v-for="(shape, idx) in shapes"
-            :key="idx"
-            class="shape-item"
-          >
-            <div class="shape-header">
-              <span class="shape-type">{{ t('shapes.type.' + shape.type) || shape.type }}</span>
-              <span v-if="shape.floating" class="shape-floating">{{ t('shapes.floating') }}</span>
-              <span v-if="shape.hasPicture" class="shape-picture">{{ t('shapes.hasPicture') }}</span>
-            </div>
-            <div class="shape-spid">{{ t('shapes.spid', { id: shape.spid }) }}</div>
-            <div v-if="shape.x !== undefined && shape.y !== undefined" class="shape-position">
-              {{ t('shapes.position', { x: shape.x, y: shape.y }) }}
-            </div>
-            <div v-if="shape.width !== undefined && shape.height !== undefined" class="shape-size">
-              {{ t('shapes.size', { w: shape.width, h: shape.height }) }}
-            </div>
-            <div class="shape-anchor">
-              {{ t('shapes.anchorType', { type: t('shapes.anchor.' + shape.anchorType) || shape.anchorType, cp: shape.anchorCp !== undefined ? shape.anchorCp : '' }) }}
-            </div>
-            <div v-if="shape.fcPic !== undefined" class="shape-fcpic">
-              {{ t('shapes.fcPic', { fc: shape.fcPic }) }}
-            </div>
-            <div v-if="shape.name" class="shape-name">{{ t('shapes.name', { name: shape.name }) }}</div>
-            <div v-if="shape.groupId !== undefined" class="shape-group">
-              {{ t('shapes.groupId', { id: shape.groupId }) }}
-            </div>
-          </div>
-        </div>
-      </CollapsiblePanel>
+        :shapes="shapes"
+      />
 
       <!-- Equations (Equation Editor OLE objects) -->
-      <CollapsiblePanel
-        v-if="equations.length > 0"
+      <EquationsPanel
         v-model="showEquations"
         :title="panelTitle('equations.title', equations.length)"
-        :summary="t('equations.summary')"
-        panel-class="equations-panel"
-      >
-        <div class="equations-content">
-          <div
-            v-for="(eq, idx) in equations"
-            :key="idx"
-            class="equation-item"
-          >
-            <div class="equation-header">
-              <span class="equation-id">{{ t('equations.id', { id: eq.id }) }}</span>
-              <span v-if="eq.hasPicture" class="equation-has-picture">{{ t('equations.hasPicture') }}</span>
-            </div>
-            <div v-if="eq.latex" class="equation-latex">
-              <span class="equation-label">{{ t('equations.latex') }}</span>
-              <span class="equation-code">{{ eq.latex }}</span>
-            </div>
-            <div v-if="eq.eqnText" class="equation-eqntext">
-              <span class="equation-label">{{ t('equations.original') }}</span>
-              <span class="equation-code">{{ eq.eqnText }}</span>
-            </div>
-          </div>
-        </div>
-      </CollapsiblePanel>
+        :equations="equations"
+      />
 
       <!-- Charts (MSGraph/Excel/SmartArt OLE objects) -->
       <!--
@@ -2549,48 +2355,11 @@ defineExpose({ reload, getPlainText, focusContent })
       -->
 
       <!-- WordArt (Office Art Drawing WordArt objects) -->
-      <CollapsiblePanel
-        v-if="wordArts.length > 0"
+      <WordArtsPanel
         v-model="showWordArts"
         :title="panelTitle('wordart.title', wordArts.length)"
-        :summary="t('wordart.summary')"
-        panel-class="wordart-panel"
-      >
-        <div class="wordart-content">
-          <div
-            v-for="(wa, idx) in wordArts"
-            :key="idx"
-            class="wordart-item"
-          >
-            <div class="wordart-header">
-              <span class="wordart-id">{{ t('wordart.id', { id: wa.id }) }}</span>
-              <span v-for="(effect, eIdx) in wa.effects" :key="eIdx" class="wordart-effect">
-                {{ getWordArtEffectLabel(effect) }}
-              </span>
-            </div>
-            <div v-if="wa.text" class="wordart-text">
-              <span class="wordart-label">{{ t('wordart.text') }}</span>
-              <span class="wordart-value">{{ wa.text }}</span>
-            </div>
-            <div class="wordart-name">
-              <span class="wordart-label">{{ t('wordart.name') }}</span>
-              <span class="wordart-value">{{ wa.name }}</span>
-            </div>
-            <div v-if="wa.colors && wa.colors.length > 0" class="wordart-colors">
-              <span class="wordart-label">{{ t('wordart.colors') }}</span>
-              <div class="wordart-color-list">
-                <span
-                  v-for="(color, cIdx) in wa.colors"
-                  :key="cIdx"
-                  class="wordart-color"
-                  :style="{ backgroundColor: color }"
-                  :title="color"
-                ></span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </CollapsiblePanel>
+        :word-arts="wordArts"
+      />
 
       <!-- Embedded images extracted from the Data stream -->
       <!--
@@ -3376,125 +3145,6 @@ defineExpose({ reload, getPlainText, focusContent })
   100% { background: transparent; }
 }
 
-/* ==================== Stories panel ==================== */
-.stories-panel {
-  max-width: 800px;
-  margin: 0 auto 32px auto;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-:deep(.stories-toggle) {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 10px 16px;
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 0.88rem;
-  cursor: pointer;
-  text-align: left;
-  transition: background 0.15s;
-}
-
-:deep(.stories-toggle:hover) {
-  background: var(--bg-tertiary);
-}
-
-:deep(.stories-toggle-icon) {
-  display: inline-block;
-  width: 12px;
-  color: var(--text-muted);
-  font-size: 0.75rem;
-}
-
-:deep(.stories-toggle-summary) {
-  margin-left: auto;
-  color: var(--text-muted);
-  font-size: 0.78rem;
-}
-
-/* Properties / DocFlags styles moved to PropertiesPanel.vue and DocFlagsPanel.vue */
-
-/* TOC / Index styles moved to TocIndexPanel.vue */
-
-/* Revision panel styles moved to RevisionsPanel.vue */
-/* Bookmarks styles moved to BookmarksPanel.vue */
-
-/* ==================== Sections (page layout) ==================== */
-.sections-panel {
-  max-width: 800px;
-  margin: 0 auto 32px auto;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-.sections-content {
-  padding: 12px 16px;
-  display: grid;
-  gap: 12px;
-}
-
-.section-item {
-  padding: 10px 12px;
-  background: var(--bg-primary);
-  border-left: 3px solid #9b59b6;
-  border-radius: 4px;
-}
-
-.section-header {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  margin-bottom: 8px;
-  flex-wrap: wrap;
-}
-
-.section-index {
-  font-weight: 600;
-  color: var(--text-primary);
-  font-size: 0.9rem;
-}
-
-.section-break,
-.section-orientation {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: 10px;
-  font-size: 0.75rem;
-  background: rgba(155, 89, 182, 0.12);
-  color: #9b59b6;
-}
-
-.section-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 6px 16px;
-}
-
-.section-field {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.section-field-label {
-  color: var(--text-muted);
-  font-size: 0.72rem;
-}
-
-.section-field-value {
-  color: var(--text-primary);
-  font-size: 0.82rem;
-  font-variant-numeric: tabular-nums;
-}
-
 /* Inline revision marks inside the rendered document */
 .document-content ins.rev-insert,
 .document-content del.rev-delete {
@@ -3517,35 +3167,6 @@ defineExpose({ reload, getPlainText, focusContent })
   opacity: 0.85;
 }
 
-.stories-content {
-  padding: 4px 16px 14px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.story-section {
-  padding: 10px 12px;
-  background: var(--bg-primary);
-  border-left: 3px solid var(--accent);
-  border-radius: 4px;
-}
-
-.story-section-title {
-  font-size: 0.8rem;
-  font-weight: 600;
-  color: var(--accent);
-  margin-bottom: 6px;
-}
-
-.story-section-text {
-  font-size: 0.85rem;
-  line-height: 1.6;
-  color: var(--text-secondary);
-  max-height: 240px;
-  overflow-y: auto;
-}
-
 .story-section-text :deep(p) {
   margin: 0 0 6px 0;
 }
@@ -3554,191 +3175,12 @@ defineExpose({ reload, getPlainText, focusContent })
   margin-bottom: 0;
 }
 
-.story-section-images {
-  margin-top: 10px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-}
-
-.story-image-item {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-}
-
-.story-image {
-  border-radius: 4px;
-  border: 1px solid var(--border-color);
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-}
-
-.story-image-caption {
-  font-size: 0.75rem;
-  color: var(--text-tertiary);
-}
-
-/* ==================== Page fields (PAGE / NUMPAGES) ==================== */
-.page-fields-panel {
-  max-width: 800px;
-  margin: 0 auto 32px auto;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-.page-fields-content {
-  padding: 12px 16px;
-  display: grid;
-  gap: 10px;
-}
-
-.page-field-item {
-  padding: 8px 12px;
-  background: var(--bg-primary);
-  border-left: 3px solid #16a085;
-  border-radius: 4px;
-  font-size: 0.85rem;
-}
-
-.page-field-header {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin-bottom: 4px;
-}
-
-.page-field-type {
-  color: var(--text-primary);
-  font-weight: 600;
-}
-
-.page-field-result {
-  color: #16a085;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-
-.page-field-instruction {
-  color: var(--text-muted);
-  font-size: 0.8rem;
-  word-break: break-all;
-}
-
-.page-field-cp {
-  color: var(--text-muted);
-  font-size: 0.75rem;
-  font-variant-numeric: tabular-nums;
-  margin-top: 2px;
-}
-
-/* ==================== Cross-references (REF / NOTEREF) ==================== */
-.cross-refs-panel {
-  max-width: 800px;
-  margin: 0 auto 32px auto;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-.cross-refs-content {
-  padding: 12px 16px;
-  display: grid;
-  gap: 10px;
-}
-
-.cross-ref-item {
-  padding: 8px 12px;
-  background: var(--bg-primary);
-  border-left: 3px solid #8e44ad;
-  border-radius: 4px;
-  font-size: 0.85rem;
-}
-
-.cross-ref-header {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin-bottom: 4px;
-}
-
-.cross-ref-type {
-  color: var(--text-primary);
-  font-weight: 600;
-}
-
-.cross-ref-result {
-  color: #8e44ad;
-  font-weight: 600;
-}
-
-.cross-ref-target {
-  color: var(--text-muted);
-  font-size: 0.8rem;
-  margin-top: 2px;
-}
-
 .cross-ref-target code {
   background: var(--bg-tertiary);
   padding: 1px 6px;
   border-radius: 3px;
   font-family: 'SF Mono', Consolas, Monaco, monospace;
   color: #8e44ad;
-}
-
-.cross-ref-instruction {
-  color: var(--text-muted);
-  font-size: 0.8rem;
-  word-break: break-all;
-  margin-top: 2px;
-}
-
-.cross-ref-switches {
-  color: var(--text-muted);
-  font-size: 0.78rem;
-  margin-top: 4px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-items: baseline;
-}
-
-.cross-ref-switch {
-  display: inline-block;
-  padding: 1px 6px;
-  background: var(--bg-tertiary);
-  border-radius: 3px;
-  font-family: 'SF Mono', Consolas, Monaco, monospace;
-  color: #8e44ad;
-  font-size: 0.74rem;
-}
-
-.cross-ref-cp {
-  color: var(--text-muted);
-  font-size: 0.75rem;
-  font-variant-numeric: tabular-nums;
-  margin-top: 2px;
-}
-
-/* ==================== Shapes (Office Art) ==================== */
-.shapes-panel {
-  max-width: 800px;
-  margin: 0 auto 32px auto;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-.shapes-content {
-  padding: 12px 16px;
-  display: grid;
-  gap: 10px;
 }
 
 .textbox-anchor-marker {
@@ -3872,121 +3314,6 @@ defineExpose({ reload, getPlainText, focusContent })
   color: #94a3b8;
 }
 
-.shape-item {
-  padding: 8px 12px;
-  background: var(--bg-primary);
-  border-left: 3px solid #3498db;
-  border-radius: 4px;
-  font-size: 0.85rem;
-}
-
-.shape-header {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-bottom: 4px;
-}
-
-.shape-type {
-  color: var(--text-primary);
-  font-weight: 600;
-}
-
-.shape-floating {
-  background: #f1c40f;
-  color: #333;
-  padding: 1px 6px;
-  border-radius: 3px;
-  font-size: 0.75rem;
-  font-weight: 600;
-}
-
-.shape-picture {
-  background: #27ae60;
-  color: white;
-  padding: 1px 6px;
-  border-radius: 3px;
-  font-size: 0.75rem;
-  font-weight: 600;
-}
-
-.shape-spid,
-.shape-position,
-.shape-size,
-.shape-anchor,
-.shape-fcpic,
-.shape-name,
-.shape-group {
-  color: var(--text-muted);
-  font-size: 0.8rem;
-  margin-top: 2px;
-}
-
-/* ==================== Equations ==================== */
-
-.equations-panel {
-  max-width: 800px;
-  margin: 0 auto 32px auto;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-.equations-content {
-  padding: 12px 16px;
-  display: grid;
-  gap: 10px;
-}
-
-.equation-item {
-  padding: 8px 12px;
-  background: var(--bg-primary);
-  border-left: 3px solid #9b59b6;
-  border-radius: 4px;
-  font-size: 0.85rem;
-}
-
-.equation-header {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-bottom: 4px;
-}
-
-.equation-id {
-  color: var(--text-primary);
-  font-weight: 600;
-}
-
-.equation-has-picture {
-  background: #27ae60;
-  color: white;
-  padding: 1px 6px;
-  border-radius: 3px;
-  font-size: 0.75rem;
-  font-weight: 600;
-}
-
-.equation-label {
-  color: var(--text-muted);
-  font-size: 0.78rem;
-}
-
-.equation-code {
-  display: block;
-  background: var(--bg-tertiary);
-  padding: 6px 10px;
-  border-radius: 4px;
-  font-family: 'SF Mono', Consolas, Monaco, monospace;
-  font-size: 0.8rem;
-  word-break: break-all;
-  margin-top: 4px;
-  color: var(--text-primary);
-}
-
 .equation-latex .equation-code {
   color: #9b59b6;
 }
@@ -4074,82 +3401,6 @@ defineExpose({ reload, getPlainText, focusContent })
   word-break: break-all;
   margin-top: 2px;
   color: var(--text-primary);
-}
-
-/* ==================== WordArt (Office Art) ==================== */
-.wordart-panel {
-  max-width: 800px;
-  margin: 0 auto 32px auto;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-.wordart-content {
-  padding: 12px 16px;
-  display: grid;
-  gap: 10px;
-}
-
-.wordart-item {
-  padding: 8px 12px;
-  background: var(--bg-primary);
-  border-left: 3px solid #e74c3c;
-  border-radius: 4px;
-  font-size: 0.85rem;
-}
-
-.wordart-header {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-bottom: 4px;
-}
-
-.wordart-id {
-  color: var(--text-primary);
-  font-weight: 600;
-}
-
-.wordart-effect {
-  background: #e74c3c;
-  color: white;
-  padding: 1px 6px;
-  border-radius: 3px;
-  font-size: 0.75rem;
-  font-weight: 600;
-}
-
-.wordart-label {
-  color: var(--text-muted);
-  font-size: 0.78rem;
-}
-
-.wordart-value {
-  display: block;
-  background: var(--bg-tertiary);
-  padding: 4px 8px;
-  border-radius: 3px;
-  font-size: 0.78rem;
-  word-break: break-all;
-  margin-top: 2px;
-  color: var(--text-primary);
-}
-
-.wordart-color-list {
-  display: flex;
-  gap: 6px;
-  margin-top: 4px;
-}
-
-.wordart-color {
-  width: 20px;
-  height: 20px;
-  border-radius: 4px;
-  border: 1px solid var(--border-color);
-  cursor: pointer;
 }
 
 /* ==================== Embedded images ==================== */
@@ -4539,38 +3790,38 @@ defineExpose({ reload, getPlainText, focusContent })
     font-size: 0.78rem;
   }
 
-  .stories-panel,
+  :deep(.stories-panel),
   :deep(.properties-panel),
   :deep(.doc-flags-panel),
   :deep(.toc-panel),
   :deep(.revisions-panel),
   :deep(.bookmarks-panel),
-  .sections-panel,
-  .page-fields-panel,
-  .cross-refs-panel,
-  .shapes-panel,
-  .equations-panel,
+  :deep(.sections-panel),
+  :deep(.page-fields-panel),
+  :deep(.cross-refs-panel),
+  :deep(.shapes-panel),
+  :deep(.equations-panel),
   .charts-panel,
-  .wordart-panel,
+  :deep(.wordart-panel),
   .images-panel,
   .stats-panel {
     max-width: 100%;
     margin: 0 10px 20px 10px;
   }
 
-  .stories-content,
+  :deep(.stories-content),
   :deep(.properties-content),
   :deep(.doc-flags-content),
   :deep(.toc-content),
   :deep(.revisions-content),
   :deep(.bookmarks-content),
-  .sections-content,
-  .page-fields-content,
-  .cross-refs-content,
-  .shapes-content,
-  .equations-content,
+  :deep(.sections-content),
+  :deep(.page-fields-content),
+  :deep(.cross-refs-content),
+  :deep(.shapes-content),
+  :deep(.equations-content),
   .charts-content,
-  .wordart-content,
+  :deep(.wordart-content),
   .images-content,
   .stats-content {
     padding: 8px 10px;
@@ -4585,7 +3836,7 @@ defineExpose({ reload, getPlainText, focusContent })
     gap: 4px;
   }
 
-  .stories-toggle {
+  :deep(.stories-toggle) {
     padding: 10px;
     font-size: 0.82rem;
   }
