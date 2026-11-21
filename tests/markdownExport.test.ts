@@ -74,6 +74,27 @@ describe('convertInlineToMd', () => {
     expect(convertInlineToMd(el('<mark>marked</mark>'))).toBe('marked')
   })
 
+  // URL 策略护栏：与 documentRenderer.sanitizeUrl 的 scheme 白名单保持一致，
+  // 且图片 data URL 只允许栅格格式（SVG 可携带脚本）。
+  it('keeps tel: links (matches sanitizeUrl scheme whitelist)', () => {
+    expect(convertInlineToMd(el('<a href="tel:+8613800138000">call</a>'))).toBe('[call](tel:+8613800138000)')
+    expect(convertInlineToMd(el('<a href="mailto:a@b.com">mail</a>'))).toBe('[mail](mailto:a@b.com)')
+  })
+
+  it('allows only raster data:image URLs, rejects svg+xml', () => {
+    expect(convertInlineToMd(el('<img src="data:image/png;base64,iVBOR" alt="p">'))).toBe('![p](data:image/png;base64,iVBOR)')
+    expect(convertInlineToMd(el('<img src="data:image/jpeg;base64,abc" alt="j">'))).toBe('![j](data:image/jpeg;base64,abc)')
+    // SVG 可内嵌 <script>/事件处理器，某些 Markdown 渲染器会内联执行 ⇒ 必须拒绝
+    expect(convertInlineToMd(el('<img src="data:image/svg+xml,<svg onload=alert(1)>" alt="x">'))).toBe('')
+    expect(convertInlineToMd(el('<img src="data:image/svg+xml;base64,PHN2Zz4=" alt="x">'))).toBe('')
+  })
+
+  it('rejects executable schemes in links', () => {
+    expect(convertInlineToMd(el('<a href="data:text/html,alert(1)">x</a>'))).toBe('x')
+    expect(convertInlineToMd(el('<a href="vbscript:MsgBox(1)">x</a>'))).toBe('x')
+    expect(convertInlineToMd(el('<a href="file:///etc/passwd">x</a>'))).toBe('x')
+  })
+
   it('unwraps span/font containers', () => {
     expect(convertInlineToMd(el('<span><font>s</font></span>'))).toBe('s')
   })

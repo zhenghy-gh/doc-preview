@@ -17,8 +17,13 @@ export function escapeMdText(text: string): string {
 function isSafeUrl(value: string, allowDataImage: boolean = false): boolean {
   const url = value.trim()
   if (!url || /[\u0000-\u001f\u007f]/.test(url)) return false
-  if (allowDataImage && /^data:image\/[a-z0-9.+-]+(?:;[^,]*)?,/i.test(url)) return true
-  return !/^[a-z][a-z0-9+.-]*:/i.test(url) || /^(?:https?|mailto):/i.test(url)
+  // 图片 data URL 只允许位图格式：解析器自身只会产出 png/jpeg/gif/bmp。
+  // 旧实现用 `[a-z0-9.+-]+` 放行了 `image/svg+xml`，而 SVG 可携带脚本/事件处理器，
+  // 某些 Markdown 渲染器会把 data URL 内联成可执行的 SVG ⇒ 收紧为栅格白名单。
+  if (allowDataImage && /^data:image\/(?:png|jpe?g|gif|bmp|webp)(?:;[^,]*)?,/i.test(url)) return true
+  // scheme 白名单与 documentRenderer.sanitizeUrl 保持一致（含 tel:）；
+  // 无 scheme 的相对路径/锚点照旧放行。
+  return !/^[a-z][a-z0-9+.-]*:/i.test(url) || /^(?:https?|mailto|tel):/i.test(url)
 }
 
 function escapeMdDestination(value: string): string {
