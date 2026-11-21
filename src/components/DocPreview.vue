@@ -12,7 +12,7 @@ import { htmlToMarkdown } from '../utils/markdownExport'
 import { highlightTextMatches, clearSearchHighlights } from '../utils/searchUtils'
 import { escapeHtml, formatTextWithInferredFormat } from '../utils/textRender'
 import { WORD_VERSION_LABELS, type WordVersion } from '../utils/fibParser'
-import { t, currentLocale } from '../utils/locale'
+import { useI18n } from '../composables/useI18n'
 import { useDarkMode } from '../composables/useDarkMode'
 import ShortcutsPanel from './ShortcutsPanel.vue'
 import LoadingOverlay from './LoadingOverlay.vue'
@@ -29,6 +29,8 @@ import CrossReferencesPanel from './CrossReferencesPanel.vue'
 import ShapesPanel from './ShapesPanel.vue'
 import EquationsPanel from './EquationsPanel.vue'
 import WordArtsPanel from './WordArtsPanel.vue'
+
+const { t, locale: currentLocale } = useI18n()
 
 /**
  * DocPreview —— .doc 解析结果的渲染宿主组件。
