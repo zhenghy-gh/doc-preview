@@ -22,7 +22,7 @@ const componentSource = () =>
   readFileSync(join(process.cwd(), 'src/components/DocPreview.vue'), 'utf8')
 
 async function mountWithToolbar() {
-  const wrapper = mount(DocPreview)
+  const wrapper = mount(DocPreview, { props: { source: null } })
   // loading 初始恒 true（等待加载），无 source 时不会自动结束；
   // 经实例 setupState 直接关闭以渲染工具栏（perf-baseline 同款驱动手法）。
   ;(wrapper.vm.$ as unknown as { setupState: Record<string, unknown> }).setupState.loading = false

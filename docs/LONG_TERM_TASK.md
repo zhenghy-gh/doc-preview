@@ -136,3 +136,4 @@
 - 2026-11-21　Phase 1 收尾：`DocPreview.vue` 的 i18n 从裸 `import { t, currentLocale }` 收敛为 `useI18n()`（与 App/ShortcutsPanel 统一入口）。vue-tsc 0，npm test 1997/1997。**Phase 1 验收达成**（16 面板全部独立、主文件 5160→3902 行；原定 <1500 行目标修正为 <4000 行，因剩余为 script + 非面板 CSS）。
 - 2026-11-21　Phase 2：刷新过时根文档——README/INDEX/CHANGELOG/CONTRIBUTING/AGENT_PROMPT/CLAUDE/AGENTS/progress 均加上维护说明或修正矛盾陈述（测试计数、版本、目录结构、"未实现 CHP/PAP/图片表格"等）。不改变代码行为。
 - 2026-11-21　Phase 4 Round 177 **整轮否决**：候选「`decodeRangeWithoutGuard` 复用 typed-array scratch 缓冲」27 份逐字节一致，但配对端到端 4 组胜率 61.88%/45.5%/48%/54.5%、符号翻转 ⇒ 撤回，未落地代码。详见 `docs/changelog/2026-11-21-round177-optimization.md`。Next: Round 178。
+- 2026-11-21　Phase 3 切片：`tests/fixVuew.test.ts` 挂载补 `source: null`，消除 Vue "Missing required prop" 警告；新增 `tests/components/infoPanels.test.ts`（5 项）覆盖 12 个抽出面板的渲染与 emit。全量 104 文件 / 2002 项通过。
