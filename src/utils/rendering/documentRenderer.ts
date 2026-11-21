@@ -157,15 +157,27 @@ export function renderDocumentToPages(input: RenderInput): string[] {
     // Apply hyperlinks via FIELD-CP-GOV text-anchor placements (see map above).
     // Skip when revision HTML is present to avoid breaking <ins>/<del> tags
     // (revisions and hyperlinks rarely overlap; when they do, revisions win).
+    // SEC-HYPERLINK-TEXT：本分支生成的 HTML 会让 hasHtml=true ⇒ 下游不再 escape。
+    // 因此链接文本之外的普通文本必须在此时逐段转义，否则 .doc 正文里的
+    // `<img src=x onerror=...>` 会随 `<a>` 一起进入 v-html（存储型 XSS）。
+    // placements 已按 from 降序排列：从尾部向前拼接，每个普通文本段只转义一次。
+    // 对不重叠的链接，除「普通文本被正确转义」外与原实现逐字节等价。
     let textWithLinks = workingText
     let hasHyperlinkHtml = false
     if (placements && placements.length > 0 && !hasRevisionHtml) {
+      let out = ''
+      let cursor = textWithLinks.length
       for (const pl of placements) {
-        const before = textWithLinks.substring(0, pl.from)
+        if (pl.from >= pl.to || pl.from >= cursor) continue
+        out = escapeHtml(textWithLinks.substring(pl.to, cursor)) + out
         const linkText = textWithLinks.substring(pl.from, pl.to)
-        const after = textWithLinks.substring(pl.to)
-        textWithLinks = `${before}<a href="${escapeHtml(sanitizeUrl(pl.url))}" target="_blank" rel="noopener noreferrer" style="color:var(--accent);text-decoration:underline;">${escapeHtml(linkText)}</a>${after}`
+        out = `<a href="${escapeHtml(sanitizeUrl(pl.url))}" target="_blank" rel="noopener noreferrer" style="color:var(--accent);text-decoration:underline;">${escapeHtml(linkText)}</a>` + out
+        cursor = pl.from
         hasHyperlinkHtml = true
+      }
+      if (hasHyperlinkHtml) {
+        out = escapeHtml(textWithLinks.substring(0, cursor)) + out
+        textWithLinks = out
       }
     }
 

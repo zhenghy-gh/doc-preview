@@ -89,8 +89,50 @@ export function applyRevisionsToText(
     return { text, hasRevisionHtml: false }
   }
 
+  // SEC-HYPERLINK-TEXT / SEC-REVISION-TEXT：'marks' 模式的输出会连同非修订文本
+  // 一起作为「已可信 HTML」交给下游（hasRevisionHtml ⇒ hasHtml=true ⇒ 下游不再
+  // escapeHtml）。因此**每一段普通文本都必须在此处转义**，否则 .doc 里形如
+  // `<img src=x onerror=...>` 的正文会穿过修订插桩进入 v-html（存储型 XSS）。
+  // accepted/rejected 模式没有 HTML 标签，hasRevisionHtml=false ⇒ 下游照常转义，
+  // 这里保持原样输出，避免双重转义。
+  if (mode === 'marks') {
+    // 降序处理 + 从尾部向前拼接：每个修订之间、修订之前的普通文本各转义一次。
+    // 与原实现「在 workingText 上按下标替换」对**不重叠**修订逐字节等价
+    // （降序保证先处理的靠后修订不影响靠前修订的下标）。
+    const ordered = [...paraRevisions].sort((a, b) => b.cpStart - a.cpStart)
+    let out = ''
+    let cursor = text.length
+    let emitted = false
+    for (const rev of ordered) {
+      const revStartInPara = Math.max(0, rev.cpStart - paraCpStart)
+      const revEndInPara = Math.min(text.length, rev.cpEnd - paraCpStart)
+      if (revStartInPara >= revEndInPara || revStartInPara >= cursor) continue
+
+      // 修订结果之后到 cursor 之间的普通文本
+      out = escapeHtmlSimple(text.substring(revEndInPara, cursor)) + out
+      const revText = text.substring(revStartInPara, revEndInPara)
+
+      const author = rev.author || (rev.authorIndex !== undefined ? `作者#${rev.authorIndex}` : '')
+      const time = formatRevisionTime(rev.timestamp)
+      const tipParts: string[] = []
+      if (author) tipParts.push(author)
+      if (time) tipParts.push(time)
+      const tipAttr = tipParts.length > 0 ? ` title="${escapeHtmlSimple(tipParts.join(' · '))}"` : ''
+      const tag = rev.type === 'insert' ? 'ins' : 'del'
+      const cls = rev.type === 'insert' ? 'rev-insert' : 'rev-delete'
+      out = `<${tag} class="${cls}"${tipAttr}>${escapeHtmlSimple(revText)}</${tag}>` + out
+      cursor = revStartInPara
+      emitted = true
+    }
+    // 没有产生任何标签（例如全部为零长修订）时维持原语义：返回原文、hasRevisionHtml=false，
+    // 由下游按普通文本转义。
+    if (!emitted) return { text, hasRevisionHtml: false }
+    // 首个修订之前的普通文本
+    out = escapeHtmlSimple(text.substring(0, cursor)) + out
+    return { text: out, hasRevisionHtml: true }
+  }
+
   let workingText = text
-  let hasRevisionHtml = false
 
   // 降序处理：先处理靠后的修订，避免前面的替换影响后面修订的偏移量
   paraRevisions.sort((a, b) => b.cpStart - a.cpStart)
@@ -111,26 +153,11 @@ export function applyRevisionsToText(
         : `${before}${after}`
       continue
     }
-    if (mode === 'rejected') {
-      // 拒绝修订：insert 移除文本，delete 保留文本
-      workingText = rev.type === 'insert'
-        ? `${before}${after}`
-        : `${before}${escapeHtmlSimple(revText)}${after}`
-      continue
-    }
-
-    // 'marks' 模式：生成 <ins>/<del> 标签
-    const author = rev.author || (rev.authorIndex !== undefined ? `作者#${rev.authorIndex}` : '')
-    const time = formatRevisionTime(rev.timestamp)
-    const tipParts: string[] = []
-    if (author) tipParts.push(author)
-    if (time) tipParts.push(time)
-    const tipAttr = tipParts.length > 0 ? ` title="${escapeHtmlSimple(tipParts.join(' · '))}"` : ''
-    const tag = rev.type === 'insert' ? 'ins' : 'del'
-    const cls = rev.type === 'insert' ? 'rev-insert' : 'rev-delete'
-    workingText = `${before}<${tag} class="${cls}"${tipAttr}>${escapeHtmlSimple(revText)}</${tag}>${after}`
-    hasRevisionHtml = true
+    // 'rejected'：insert 移除文本，delete 保留文本
+    workingText = rev.type === 'insert'
+      ? `${before}${after}`
+      : `${before}${escapeHtmlSimple(revText)}${after}`
   }
 
-  return { text: workingText, hasRevisionHtml }
+  return { text: workingText, hasRevisionHtml: false }
 }

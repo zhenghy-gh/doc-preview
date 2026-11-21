@@ -6,11 +6,11 @@ import type { RenderParagraph } from '../src/utils/docFormat'
 const t = (key: string) => key
 const fontResolver = () => ''
 
-function baseInput(paragraphs: RenderParagraph[], hyperlinks: RenderInput['hyperlinks'] = []): RenderInput {
+function baseInput(paragraphs: RenderParagraph[], hyperlinks: RenderInput['hyperlinks'] = [], revisions: RenderInput['revisions'] = []): RenderInput {
   return {
     paragraphs,
     hyperlinks,
-    revisions: [],
+    revisions,
     revisionMode: 'marks',
     shapes: [],
     pictures: [],
@@ -80,5 +80,59 @@ describe('renderDocumentToPages hyperlink safety', () => {
     expect(html).toContain('<a href="#"')
     expect(html).not.toMatch(/href="(?:javascript|data|vbscript|file):/i)
     expect(html).toContain('click here')
+  })
+
+  // SEC-REGRESSION：有链接的段落里，链接文字之外的普通正文也必须转义。
+  // 旧实现只 escape 链接文字、把 before/after 原样拼进「已可信 HTML」，
+  // 导致 .doc 正文的 <img onerror> 穿过 hasHtml=true 进入 v-html（存储型 XSS）。
+  it('escapes raw text around a hyperlink (no stored XSS via non-link span)', () => {
+    const text = '<img src=x onerror=alert(1)>CLICK<script>alert(2)</script>'
+    const paragraphs: RenderParagraph[] = [{ text, charFormat: {}, paraFormat: {}, _cpStart: 0, _cpEnd: text.length }]
+    const hyperlinks = [{ cpStart: 29, cpEnd: 34, result: 'CLICK', url: 'https://example.com' }] as RenderInput['hyperlinks']
+    const html = renderDocumentToPages(baseInput(paragraphs, hyperlinks)).join('\n')
+    expect(html).not.toContain('<img src=x onerror=alert(1)>')
+    expect(html).not.toContain('<script>alert(2)</script>')
+    expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;')
+    expect(html).toContain('CLICK</a>')
+  })
+
+  it('escapes every plain-text gap when a paragraph has multiple hyperlinks', () => {
+    const text = '<b>A</b>LINK1<i>X</i>LINK2<b>Z</b>'
+    const paragraphs: RenderParagraph[] = [{ text, charFormat: {}, paraFormat: {}, _cpStart: 0, _cpEnd: text.length }]
+    const hyperlinks = [
+      { cpStart: 10, cpEnd: 15, result: 'LINK1', url: 'https://a.example' },
+      { cpStart: 19, cpEnd: 24, result: 'LINK2', url: 'https://b.example' },
+    ] as RenderInput['hyperlinks']
+    const html = renderDocumentToPages(baseInput(paragraphs, hyperlinks)).join('\n')
+    expect(html).not.toMatch(/<(?:b|i)>/)
+    expect(html).toContain('&lt;b&gt;A&lt;/b&gt;')
+    expect(html).toContain('&lt;i&gt;X&lt;/i&gt;')
+    expect(html).toContain('>LINK1</a>')
+    expect(html).toContain('>LINK2</a>')
+  })
+})
+
+describe('renderDocumentToPages revision safety', () => {
+  // SEC-REGRESSION：'marks' 模式生成 <ins>/<del> 后 hasHtml=true，
+  // 非修订文本同样必须转义（与超链接路径同一类漏洞）。
+  it('escapes raw text outside revision marks (no stored XSS)', () => {
+    const text = '<img src=x onerror=alert(1)>REV'
+    const paragraphs: RenderParagraph[] = [{ text, charFormat: {}, paraFormat: {}, _cpStart: 0, _cpEnd: text.length }]
+    const revisions = [{ cpStart: 28, cpEnd: 31, type: 'insert' as const }] as RenderInput['revisions']
+    const html = renderDocumentToPages(baseInput(paragraphs, [], revisions)).join('\n')
+    expect(html).not.toContain('<img src=x onerror=alert(1)>')
+    expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;')
+    expect(html).toContain('<ins class="rev-insert">REV</ins>')
+  })
+
+  it('escapes text both before and after a revision mark', () => {
+    const text = '<script>A</script>REV<i>B</i>'
+    const paragraphs: RenderParagraph[] = [{ text, charFormat: {}, paraFormat: {}, _cpStart: 0, _cpEnd: text.length }]
+    const revisions = [{ cpStart: 18, cpEnd: 21, type: 'delete' as const }] as RenderInput['revisions']
+    const html = renderDocumentToPages(baseInput(paragraphs, [], revisions)).join('\n')
+    expect(html).not.toMatch(/<(?:script|i)>/)
+    expect(html).toContain('&lt;script&gt;A&lt;/script&gt;')
+    expect(html).toContain('&lt;i&gt;B&lt;/i&gt;')
+    expect(html).toContain('<del class="rev-delete">REV</del>')
   })
 })
