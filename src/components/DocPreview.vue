@@ -17,6 +17,7 @@ import { useI18n } from '../composables/useI18n'
 import { useWebFont as createWebFont } from '../composables/useWebFont'
 import { useDocViewport } from '../composables/useDocViewport'
 import { useExport } from '../composables/useExport'
+import { useKeyboardShortcuts } from '../composables/useKeyboardShortcuts'
 import { useDarkMode } from '../composables/useDarkMode'
 import ShortcutsPanel from './ShortcutsPanel.vue'
 import LoadingOverlay from './LoadingOverlay.vue'
@@ -332,6 +333,25 @@ const {
 void visibleStart
 void visibleEnd
 void pageHeights
+
+const { handleKeydown, toggleShortcuts } = useKeyboardShortcuts({
+  showSearch,
+  showShortcuts,
+  totalPages,
+  previewRef,
+  searchBarRef,
+  onToggleSearch: () => toggleSearch(),
+  onPrint: () => printDocument(),
+  onZoomIn: () => zoomIn(),
+  onZoomOut: () => zoomOut(),
+  onZoomReset: () => zoomReset(),
+  onNextMatch: () => nextMatch(),
+  onPrevMatch: () => prevMatch(),
+  onPrevPage: () => goToPrevPage(),
+  onNextPage: () => goToNextPage(),
+  onGoToPage: (page) => goToPage(page),
+})
+
 
 // --- Page fields (PAGE / NUMPAGES / SECTION / SECTIONPAGES) ---
 const pageFields = ref<PageFieldRange[]>([])
@@ -1113,120 +1133,7 @@ function scrollToOutline(item: OutlineItem) {
 
 // ---- Keyboard shortcuts ----
 
-function toggleShortcuts() {
-  showShortcuts.value = !showShortcuts.value
-}
-
-/**
- * 全局键盘快捷键分发（document 级监听，onUnmounted 时解绑）：
- *  - Ctrl/⌘+F 搜索 · Ctrl/⌘+P 打印 · Esc 先关搜索再关快捷键面板
- *  - Ctrl/⌘+=/-/0 缩放 · F3|Ctrl+G / Shift+F3|Ctrl+Shift+G 匹配导航（搜索开启时生效）
- *  - PageUp/PageDown/Home/End 翻页 · ? 或 Ctrl+/ 开关快捷键面板
- *  - 输入框聚焦时跳过翻页类与 ?/Ctrl+/（守卫位于这些分支之前），避免干扰文本编辑。
- */
-function handleKeydown(e: KeyboardEvent) {
-  const isCtrl = e.ctrlKey || e.metaKey
-
-  if (isCtrl && e.key === 'f') {
-    e.preventDefault()
-    if (!showSearch.value) toggleSearch()
-    else searchBarRef.value?.focus()
-    return
-  }
-
-  if (isCtrl && e.key === 'p') {
-    e.preventDefault()
-    printDocument()
-    return
-  }
-
-  if (e.key === 'Escape') {
-    if (showSearch.value) {
-      toggleSearch()
-      return
-    }
-    if (showShortcuts.value) {
-      showShortcuts.value = false
-      return
-    }
-  }
-
-  if (e.key === '=' || e.key === '+') {
-    if (isCtrl) { e.preventDefault(); zoomIn() }
-    return
-  }
-
-  if (e.key === '-') {
-    if (isCtrl) { e.preventDefault(); zoomOut() }
-    return
-  }
-
-  if (e.key === '0' && isCtrl) {
-    e.preventDefault()
-    zoomReset()
-    return
-  }
-
-  // Shift+F3 or Ctrl+Shift+G for prev match (check before the unmodified form).
-  if ((e.key === 'F3' && e.shiftKey) || (isCtrl && e.shiftKey && e.key === 'g')) {
-    if (showSearch.value) { e.preventDefault(); prevMatch() }
-    return
-  }
-
-  // F3 or Ctrl+G for next match
-  if (e.key === 'F3' || (isCtrl && e.key === 'g')) {
-    if (showSearch.value) { e.preventDefault(); nextMatch() }
-    return
-  }
-
-  // PageUp/PageDown for pagination navigation (skip when focus is in input)
-  const target = e.target as HTMLElement
-  const isInputFocused = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
-  if (isInputFocused) return
-
-  // DOC-POLISH④：翻页类按键仅在焦点位于本组件预览区时接管。
-  // 焦点落在侧栏/上传页等组件外时放行浏览器原生行为（滚动到顶/底、原生翻页），
-  // 不再全局劫持——修复"焦点在任意非输入处按 Home/End 页面不滚"的可达性回退。
-  const inPreview = !!previewRef.value && target instanceof Node && previewRef.value.contains(target)
-
-  if (e.key === 'PageUp') {
-    if (!inPreview) return
-    e.preventDefault()
-    goToPrevPage()
-    return
-  }
-
-  if (e.key === 'PageDown') {
-    if (!inPreview) return
-    e.preventDefault()
-    goToNextPage()
-    return
-  }
-
-  // Home/End for first/last page (Ctrl or standalone)
-  if (e.key === 'Home') {
-    if (!inPreview) return
-    e.preventDefault()
-    goToPage(1)
-    return
-  }
-
-  if (e.key === 'End') {
-    if (!inPreview) return
-    e.preventDefault()
-    goToPage(totalPages.value)
-    return
-  }
-
-  // ? or Ctrl+/ to toggle shortcuts panel. Keep text fields untouched so typing
-  // punctuation or slash commands does not unexpectedly open the panel.
-  if (e.key === '?' || (isCtrl && e.key === '/')) {
-    if (isInputFocused) return
-    e.preventDefault()
-    toggleShortcuts()
-    return
-  }
-}
+// 键盘快捷键分发已抽离为 composables/useKeyboardShortcuts.ts（接线见 searchBarRef 之后）。
 
 // ---- Watchers ----
 
