@@ -5,7 +5,6 @@ import type { ParseProgressStage } from '../utils/docParser'
 import { parseWithWorker } from '../utils/parseWithWorker'
 import { renderDocumentToPages } from '../utils/rendering/documentRenderer'
 import { buildPrintWindowHtml } from '../utils/rendering/printLayout'
-import { PT_TO_PX } from '../utils/rendering/pageBuilder'
 import type { CharacterFormat, ParagraphFormat, RevisionMark, RevisionType, BookmarkRange, SectionInfo, PageFieldRange, CrossReferenceRange, ShapeInfo, EquationInfo, ChartInfo, WordArtInfo, RenderParagraph, ParseErrorCode } from '../utils/docFormat'
 import type { DocumentFields } from '../utils/fieldParser'
 import { formatRevisionTime, type RevisionMode } from '../utils/revisionRender'
@@ -18,6 +17,7 @@ import { computeDocumentStats, buildDocumentOutline, type OutlineItem } from '..
 import { WORD_VERSION_LABELS, type WordVersion } from '../utils/fibParser'
 import { useI18n } from '../composables/useI18n'
 import { useWebFont as createWebFont } from '../composables/useWebFont'
+import { useDocViewport } from '../composables/useDocViewport'
 import { useDarkMode } from '../composables/useDarkMode'
 import ShortcutsPanel from './ShortcutsPanel.vue'
 import LoadingOverlay from './LoadingOverlay.vue'
@@ -223,17 +223,8 @@ function getProgressStepText(stage: ParseProgressStage): string {
 }
 
 // --- Virtual scroll (page-level) ---
-// pages: 每页的 HTML 字符串数组（与 .page-content 一一对应）
-// virtualScrollEnabled: 是否启用虚拟滚动（搜索/打印时临时关闭）
-// visibleStart/visibleEnd: 当前可视页面索引范围（含缓冲区）
-// pageHeights: 已渲染页面的真实高度缓存（px），用于占位高度计算
 const pages = ref<string[]>([])
-const virtualScrollEnabled = ref(true)
-const visibleStart = ref(0)
-const visibleEnd = ref(0)
-const pageHeights = ref<Record<number, number>>({})
-let scrollTicking = false
-const VIRTUAL_BUFFER = 1 // 上下各缓冲的页面数
+// 状态与方法由 useDocViewport 提供（见 sections 声明之后）
 
 // 缓存最近的解析结果，用于切换隐藏文字/修订显示等需要重新渲染的场景
 const lastParseResult = ref<{
@@ -260,93 +251,6 @@ const ZOOM_STEP = 10
 // W1-C: 暗黑模式单一数据源 —— 状态/class 挂载/localStorage 持久化收敛到
 // composables/useDarkMode.ts（与 App.vue 共享同一 ref），本组件只消费。
 const { darkMode, toggleDarkMode } = useDarkMode()
-
-// --- Pagination ---
-const currentPage = ref(1)
-const totalPages = ref(1)
-const pageHeight = ref(842)
-const PAGE_HEIGHT_A4 = 842
-
-/**
- * 同步分页基准高度 pageHeight（pt）：优先取第一节 pageHeightPt，否则回落 A4(842pt)。占位估算与页面定位共用。
- */
-function updatePageHeight() {
-  if (sections.value.length > 0) {
-    const firstSection = sections.value[0]
-    if (firstSection.pageHeightPt) {
-      pageHeight.value = firstSection.pageHeightPt
-      return
-    }
-  }
-  pageHeight.value = PAGE_HEIGHT_A4
-}
-
-/**
- * 跳转到指定页（1-based）：越界为 no-op；更新 currentPage 并平滑滚动到该页。
- */
-function goToPage(page: number) {
-  if (page < 1 || page > totalPages.value) return
-  currentPage.value = page
-  scrollToPage(page)
-}
-
-/**
- * 上一页（已在首页时 no-op）。
- */
-function goToPrevPage() {
-  if (currentPage.value > 1) {
-    goToPage(currentPage.value - 1)
-  }
-}
-
-/**
- * 下一页（已在末页时 no-op）。
- */
-function goToNextPage() {
-  if (currentPage.value < totalPages.value) {
-    goToPage(currentPage.value + 1)
-  }
-}
-
-/**
- * 平滑滚动到指定页：虚拟滚动下目标页可能未渲染，先扩窗确保其进入可视范围再滚动；真实页缺失时回退滚动对应占位 div。
- */
-function scrollToPage(page: number) {
-  // 虚拟滚动下，目标页面可能未渲染。先扩大可视范围确保目标页可见，再滚动。
-  const idx = page - 1
-  if (virtualScrollEnabled.value && pages.value.length > VIRTUAL_BUFFER * 2 + 1) {
-    if (idx < visibleStart.value || idx > visibleEnd.value) {
-      visibleStart.value = Math.max(0, idx - VIRTUAL_BUFFER)
-      visibleEnd.value = Math.min(pages.value.length - 1, idx + VIRTUAL_BUFFER)
-    }
-  }
-  nextTick(() => {
-    const container = previewRef.value?.querySelector('.document-content')
-    if (!container) return
-    // 虚拟滚动下 DOM 只渲染窗口内的 .page-content，NodeList 是稀疏的：
-    // 用绝对页码 idx 当下标会指到错误页面（甚至越界落到别的页占位符上）。
-    // 两种页容器都带 data-page-idx（绝对页码），据此精确定位，避免下标错位。
-    const target =
-      container.querySelector<HTMLElement>(`.page-host[data-page-idx="${idx}"] .page-content`) ??
-      container.querySelector<HTMLElement>(`.page-placeholder[data-page-idx="${idx}"]`)
-    if (target && typeof target.scrollIntoView === 'function') {
-      target.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    }
-  })
-}
-
-/**
- * 以 pages 数组长度刷新 totalPages（不依赖 DOM 中实际渲染的 .page-content 数量），并钳制越界的 currentPage。
- */
-function updateTotalPages() {
-  // 虚拟滚动下用 pages 数组长度，避免依赖 DOM 中实际渲染的 .page-content 数量
-  nextTick(() => {
-    totalPages.value = pages.value.length || 1
-    if (currentPage.value > totalPages.value) {
-      currentPage.value = totalPages.value
-    }
-  })
-}
 
 // --- Search ---
 const showSearch = ref(false)
@@ -404,6 +308,22 @@ const showBookmarks = ref(false)
 // --- Sections (page layout) ---
 const sections = ref<SectionInfo[]>([])
 const showSections = ref(false)
+
+// 分页 / 虚拟滚动状态机（纯 composable，保持与搜索/缩放/重渲染的联动契约）
+const {
+  currentPage, totalPages, pageHeight,
+  virtualScrollEnabled, visibleStart, visibleEnd, pageHeights,
+  updatePageHeight, goToPage, goToPrevPage, goToNextPage,
+  updateTotalPages, resetViewport, getPagePlaceholderHeight, isPageVisible,
+  measureVisiblePageHeights, updateVisibleRange,
+  attachViewportListeners, detachViewportListeners,
+} = useDocViewport({ pages, sections, previewRef, zoomLevel })
+
+// 白盒测试通过 setupState 直接驱动虚拟滚动窗口/高度缓存（见 perfT1VirtualScroll /
+// pageNavigation 测试）；保留这三个顶层绑定以维持既有测试契约。
+void visibleStart
+void visibleEnd
+void pageHeights
 
 // --- Page fields (PAGE / NUMPAGES / SECTION / SECTIONPAGES) ---
 const pageFields = ref<PageFieldRange[]>([])
@@ -919,9 +839,7 @@ const renderResult = (result: ParserOutput) => {
     const inferredHtml = formatTextWithInferredFormat(result.text, getWebFontFamily)
     pages.value = [inferredHtml]
     htmlContent.value = inferredHtml
-    pageHeights.value = {}
-    visibleStart.value = 0
-    visibleEnd.value = 0
+    resetViewport(0)
     stories.value = null
     showStories.value = false
     images.value = []
@@ -965,9 +883,7 @@ function applyFormattedPages(paragraphs: ParaWithList[], hyperlinks?: HyperlinkR
   pages.value = pageArr
   htmlContent.value = pageArr.join('\n')
   // 重置虚拟滚动状态
-  pageHeights.value = {}
-  visibleStart.value = 0
-  visibleEnd.value = Math.min(pageArr.length, VIRTUAL_BUFFER * 2 + 1)
+  resetViewport(pageArr.length)
   // DOM 更新后测量并刷新可视范围
   nextTick(() => {
     measureVisiblePageHeights()
@@ -975,133 +891,6 @@ function applyFormattedPages(paragraphs: ParaWithList[], hyperlinks?: HyperlinkR
   })
 }
 
-/** 估算页面占位高度（px）：优先使用缓存的真实高度，否则用 pageHeight 估算 */
-function getPagePlaceholderHeight(idx: number): number {
-  const cached = pageHeights.value[idx]
-  if (cached && cached > 0) return cached
-  // 默认按 A4 页面高度估算（与 documentRenderer/pageBuilder 的 PT_TO_PX 同源）
-  return Math.max(400, pageHeight.value * PT_TO_PX)
-}
-
-/** 判断页面索引是否在当前可视范围内（应渲染真实内容） */
-function isPageVisible(idx: number): boolean {
-  if (!virtualScrollEnabled.value) return true
-  if (pages.value.length <= VIRTUAL_BUFFER * 2 + 1) return true
-  return idx >= visibleStart.value && idx <= visibleEnd.value
-}
-
-/** 测量已渲染页面的真实高度并缓存。
- *  PERF-T1：以 data-page-idx 绝对页码为缓存键（旧实现用 NodeList 序号当页码，
- *  visibleStart>0 后系统性错位污染 pageHeights）；并对 FIX-VUEW 的 CSS zoom
- *  做归一化——getBoundingClientRect 返回的是缩放后视觉像素，除以 zoom 因子
- *  还原为布局像素后再入库，占位 div 与真实页面共用同一单位系。返回是否有变更。 */
-function measureVisiblePageHeights(): boolean {
-  const container = previewRef.value?.querySelector('.document-content')
-  if (!container) return false
-  const zoomFactor = zoomLevel.value / 100
-  const safeZoom = zoomFactor > 0 ? zoomFactor : 1
-  const hosts = container.querySelectorAll<HTMLElement>('.page-host[data-page-idx]')
-  let changed = false
-  let next: Record<number, number> | null = null
-  hosts.forEach((host) => {
-    const idx = Number(host.dataset.pageIdx)
-    if (!Number.isInteger(idx) || idx < 0) return
-    // .page-host 为 display:contents 无布局盒，实际盒子是其内部的 .page-content
-    const el = (host.querySelector('.page-content') as HTMLElement | null) ?? host
-    const rect = el.getBoundingClientRect()
-    const height = rect.height / safeZoom
-    if (height > 0 && Math.abs((pageHeights.value[idx] ?? -1) - height) > 0.5) {
-      if (!next) next = { ...pageHeights.value }
-      next[idx] = height
-      changed = true
-    }
-  })
-  if (changed && next) pageHeights.value = next
-  return changed
-}
-
-/** 根据滚动位置计算当前可视页面索引范围（含缓冲区） */
-function updateVisibleRange() {
-  if (!virtualScrollEnabled.value) return
-  const container = previewRef.value?.querySelector('.document-content') as HTMLElement | null
-  if (!container) return
-  const total = pages.value.length
-  if (total === 0) return
-  // 小文档不启用虚拟滚动
-  if (total <= VIRTUAL_BUFFER * 2 + 1) {
-    visibleStart.value = 0
-    visibleEnd.value = total - 1
-    return
-  }
-  // 使用容器相对于视口的位置计算可视范围。
-  // PERF-T1：容器处于 .paper-page 的 CSS zoom 内，getBoundingClientRect 返回
-  // 视觉像素；pageHeights 缓存的是布局像素（已除 zoom），故把视口度量也换算回
-  // 布局像素，保证累计高度与视口窗口同一单位系（>100% 缩放下不漂移）。
-  const containerRect = container.getBoundingClientRect()
-  const zoomFactor = zoomLevel.value / 100
-  const safeZoom = zoomFactor > 0 ? zoomFactor : 1
-  const viewportTop = -containerRect.top / safeZoom
-  const viewportHeight = window.innerHeight / safeZoom
-  // 累加各页面高度，定位当前可视的页面索引
-  let accumulated = 0
-  let start = 0
-  let end = total - 1
-  for (let i = 0; i < total; i++) {
-    const h = getPagePlaceholderHeight(i)
-    const pageBottom = accumulated + h
-    // PERF-T1 收口：用 <= 而非 < —— 页底恰好落在视口顶（pageBottom === viewportTop）
-    // 时该页可见面积为零，应判为已滚出视口；严格小于会把这条零高度缝算作"可见"，
-    // 使 start 系统性偏小一页（perfT1 用例三的不变量断言即钉此处）。
-    if (pageBottom <= viewportTop) {
-      start = i + 1
-    }
-    if (accumulated > viewportTop + viewportHeight) {
-      end = i - 1
-      break
-    }
-    accumulated = pageBottom
-  }
-  start = Math.max(0, start - VIRTUAL_BUFFER)
-  end = Math.min(total - 1, end + VIRTUAL_BUFFER)
-  if (start !== visibleStart.value || end !== visibleEnd.value) {
-    visibleStart.value = start
-    visibleEnd.value = end
-  }
-}
-
-/** 滚动事件处理器（throttle 用 requestAnimationFrame）。
- *  PERF-T1：rAF 回调里只做可视范围计算；高度测量改由 visibleStart/visibleEnd
- *  的 watcher 在 DOM 更新后（nextTick）执行——旧实现在同一 rAF 内同步测量，
- *  读到的是窗口变更前的旧 DOM，且 NodeList 序号错位会污染缓存。 */
-function handleVirtualScroll() {
-  if (scrollTicking) return
-  scrollTicking = true
-  requestAnimationFrame(() => {
-    updateVisibleRange()
-    scrollTicking = false
-  })
-}
-
-// 窗口变化 → DOM 重渲染完成后测量新渲染页面的真实高度；测量若引起累计高度
-// 变化则再校准一次可视范围。changed 门闩保证收敛，不会形成死循环。
-watch([visibleStart, visibleEnd], () => {
-  nextTick(() => {
-    if (measureVisiblePageHeights()) updateVisibleRange()
-  })
-})
-
-// FIX-VUEW 的 zoom 是真实回流：>100% 时文字重新折行、页面布局像素高度改变，
-// 缩放变化后需在回流完成的新布局上重新测量并校准可视范围。
-// PERF-T1 收口：缓存存的是布局像素，zoom 改变布局语义——旧 zoom 下测得的
-// 条目全部失效（尤其未渲染页的占位估算），必须整体清空后在回流完成的新
-// 布局上重测当前窗口；残留旧值会让占位高度与新布局混用两套单位系。
-watch(zoomLevel, () => {
-  pageHeights.value = {}
-  nextTick(() => {
-    measureVisiblePageHeights()
-    updateVisibleRange()
-  })
-})
 // ---- Zoom ----
 
 function zoomIn() {
@@ -1702,8 +1491,7 @@ watch(() => props.source, (newSource) => {
 
 onMounted(() => {
   document.addEventListener('keydown', handleKeydown)
-  window.addEventListener('scroll', handleVirtualScroll, { passive: true })
-  window.addEventListener('resize', handleVirtualScroll, { passive: true })
+  attachViewportListeners()
   if (props.source) {
     if (typeof props.source === 'string') loadFromUrl(props.source)
     else loadFromFile(props.source)
@@ -1716,8 +1504,7 @@ onUnmounted(() => {
   // 文件解析也可能尚未结束；无论来源如何都要清理加载秒表，避免卸载后定时器继续运行。
   stopLoadingTimer()
   document.removeEventListener('keydown', handleKeydown)
-  window.removeEventListener('scroll', handleVirtualScroll)
-  window.removeEventListener('resize', handleVirtualScroll)
+  detachViewportListeners()
 })
 
 // ---- Expose for parent components ----
