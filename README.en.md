@@ -147,7 +147,7 @@ Chrome 80+ / Edge 80+ / Firefox 75+ / Safari 14+, all with Web Worker support. O
 ```bash
 npm install
 npm run dev            # dev server at http://localhost:5173
-npm test               # unit tests (59 files / 1332 cases)
+npm test               # unit tests (count grows with releases; see command output)
 npm run lint           # lint
 npm run scan:corpus    # health scan over 27 real .doc corpora
 npm run audit:print    # preview-vs-print layout audit → tests/fixtures/print-layout-audit.json
