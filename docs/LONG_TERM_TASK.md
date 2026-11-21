@@ -148,6 +148,7 @@
 - 2026-11-21　Phase 4 工具：新增 `scripts/perf/localPaired.mjs`（从 git HEAD 导出基线、与工作区分别 esbuild 打包、同进程交错配对）。**噪声地板实测**：基线与自身对比 300 对得 medianRatio 0.9956、胜率 54.67% —— 印证现有 57% 采纳门槛仅略高于本机噪声，R177/R178 的否决决定正确。
 - 2026-11-21　Phase 1 续：Web Font 逻辑抽离为 `composables/useWebFont.ts`（含别名表、按需加载、字体覆盖注入），DocPreview 保留薄接线；顺手修复 `getWebFontFamily` 只替换首个 `+` 导致 CSS 字体名非法的 bug；新增 2 项测试。全量 109 文件 / 2012 项通过。
 - 2026-11-21　Phase 3 渲染审计（主会话接手）：修复 `documentRenderer` 三处内联图片 `<img src>` 未转义的属性注入面（负控验证通过）；新增 `tests/baselineConsistency.test.ts` 钉住两份真实语料基线（文档集合/页数一致，且未编造打印页数）。27 份语料 HTML 指纹零变化。全量 125 文件 / 2092 项通过。详见 `docs/changelog/2026-11-21-render-correctness-audit.md`。
+- 2026-11-21　Phase 1 续（主会话）：把 `computeStats`/`buildOutline` 抽为 `utils/documentStats.ts` 纯函数（组件仅保留 ref 写入接线），新增 4 项测试。全量 126 文件 / 2096 项通过。
 - 2026-11-21　Phase 1 续：整个工具栏抽为 `PreviewToolbar.vue`（15 个 props / 16 个 emit，搜索按钮 focus 经 defineExpose 转发），CSS 同步迁移、移动端选择器改 `:deep()`；`DocPreview.vue` 降至 3518 行（累计 -1642），新增 2 项工具栏测试。全量 110 文件 / 2014 项通过。
 - 2026-11-21　Phase 1 修复：`ShortcutsPanel.vue` 的样式此前全部留在 DocPreview 的 scoped style 中，父组件 scoped 无法命中子组件内部节点 ⇒ 快捷键模态实际无样式。整套面板 CSS（含 640px 断点）迁入组件自身 `<style scoped>`；`DocPreview.vue` 降至 3429 行。全量 110 文件 / 2014 项通过。
 - 2026-11-21　Phase 1 修复：同类问题推广到 `CollapsiblePanel`（折叠按钮/内容骨架样式此前在抽离面板时丢失）、`LoadingOverlay`、`ErrorDisplay`——样式全部迁入各自组件 scoped style。`DocPreview.vue` 降至 **3200 行**（累计 -1960）。全量 110 文件 / 2014 项通过。

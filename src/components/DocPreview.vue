@@ -14,6 +14,7 @@ import { highlightTextMatches, clearSearchHighlights } from '../utils/searchUtil
 import { escapeHtml, formatTextWithInferredFormat } from '../utils/textRender'
 import { formatStoryText } from '../utils/storyRender'
 import { formatPanelTitle, formatSizePt as formatSizePtUtil } from '../utils/formatUtils'
+import { computeDocumentStats, buildDocumentOutline, type OutlineItem } from '../utils/documentStats'
 import { WORD_VERSION_LABELS, type WordVersion } from '../utils/fibParser'
 import { useI18n } from '../composables/useI18n'
 import { useWebFont as createWebFont } from '../composables/useWebFont'
@@ -161,12 +162,6 @@ interface FormattedParagraphOutput {
   paraFormat: ParagraphFormat
   /** 段落在文档字符流中的起始 CP（解析器内部字段，用于超链接/图片/形状定位）。 */
   _cpStart?: number
-}
-
-interface OutlineItem {
-  text: string
-  level: number
-  index: number
 }
 
 interface SearchMatch {
@@ -838,58 +833,19 @@ const retryLoad = () => {
   }
 }
 
-// ---- Stats calculation ----
+// ---- Stats calculation & outline extraction ----
+// 纯函数已抽离到 utils/documentStats.ts（DocPreview 保留 ref 写入接线）。
 
 function computeStats(text: string) {
-  const trimmed = text.trim()
-  charCount.value = trimmed.length
-  chineseCharCount.value = (trimmed.match(/[\u4e00-\u9fff]/g) || []).length
-
-  // Word count: Chinese chars + English words
-  const englishWords = (trimmed.match(/[A-Za-z]{2,}/g) || []).length
-  wordCount.value = chineseCharCount.value + englishWords
-
-  paragraphCount.value = trimmed.split(/\n\n+/).filter(p => p.trim().length > 0).length
+  const stats = computeDocumentStats(text)
+  charCount.value = stats.charCount
+  chineseCharCount.value = stats.chineseCharCount
+  wordCount.value = stats.wordCount
+  paragraphCount.value = stats.paragraphCount
 }
 
-// ---- Outline extraction ----
-
 function buildOutline(paragraphs: FormattedParagraphOutput[]) {
-  const items: OutlineItem[] = []
-  for (let i = 0; i < paragraphs.length; i++) {
-    const para = paragraphs[i]
-    const text = para.text?.trim()
-    if (!text || text.length < 2) continue
-
-    // Skip list items and short fragments
-    if (para.paraFormat?.listType) continue
-    if (text.length > 80) continue
-
-    const charFormat = para.charFormat || {} as CharacterFormat
-    const isBold = charFormat.bold
-    const fontSize = charFormat.fontSize || 16
-    const align = para.paraFormat?.alignment
-
-    // Determine heading level from format heuristics
-    let level = 0
-    const realHeadingLevel = para.paraFormat?.headingLevel
-    if (realHeadingLevel && realHeadingLevel >= 1 && realHeadingLevel <= 9) {
-      level = realHeadingLevel
-    } else {
-      if (fontSize >= 32) level = 1
-      else if (fontSize >= 22) level = 2
-      else if (fontSize >= 18 && isBold) level = 2
-      else if (isBold && text.length <= 40 && fontSize >= 16) level = 3
-      else if (align === 'center' && text.length <= 30) level = 3
-    }
-
-    if (level > 0) {
-      items.push({ text, level, index: i })
-    }
-  }
-
-  // Only show outline if we found 2+ headings
-  outline.value = items.length >= 2 ? items : []
+  outline.value = buildDocumentOutline(paragraphs)
 }
 
 // ---- Render ----
