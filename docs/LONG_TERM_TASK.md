@@ -140,3 +140,4 @@
 - 2026-11-21　Phase 3 切片：新增 `tests/realCorpusPageBaseline.test.ts` + `tests/fixtures/real-corpus-pages.json`，把 27 份真实语料的页数与每页 HTML 指纹钉成可一键刷新的基线（`UPDATE_PAGE_BASELINE=1`）。基线显示 clean HEAD 下 openstd-n961=19 页、unicode-02006-zia=15 页，印证主目录 WIP 的 20/61 页系其自身渲染改动所致。
 - 2026-11-21　Phase 1 裁决：死组件 `DocStatsPanel.vue` 从未挂载、未导出、仅测试直接引用 ⇒ **移除**（含其 2 项测试与孤儿 CSS），减少死代码。全量 105 文件 / 2001 项通过。
 - 2026-11-21　Phase 3 切片：新增 `scripts/corpusHealth.mjs` + npm `scan:corpus`（纯 Node + happy-dom + esbuild 临时打包，无浏览器依赖），对 27 份语料检查解析成功/段落/页数/控制字符/NFC/页容器；当前 27/27 健康。
+- 2026-11-21　Phase 3 **安全修复**：`documentRenderer` 的超链接 `href` 原先只做 HTML 转义、不过滤 scheme，外部 `.doc` 的 `javascript:`/`data:`/`vbscript:` 链接会进入 DOM（存储型 XSS）。新增导出 `sanitizeUrl`（白名单 http/https/mailto/tel + `#anchor`/相对路径，解码空白与 HTML 实体绕过）；新增 `tests/renderSecurity.test.ts` 4 项。全量 106 文件 / 2005 项通过。

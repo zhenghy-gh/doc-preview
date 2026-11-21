@@ -75,6 +75,32 @@ let chartIdx = 0
 let picIdx = 0
 
 /**
+ * 超链接 URL 白名单净化。
+ *
+ * `.doc` 文件里的 HYPERLINK 域 instruction 完全来自外部，可能是 `javascript:`、
+ * `data:`、`vbscript:` 等可执行 scheme。直接写进 `href` 会造成存储型 XSS。
+ * 只放行 http/https/mailto/tel 与内部 `#anchor` / 相对路径；
+ * 其余 scheme 降级为 `#`（链接文字仍可见，但不可执行）。
+ */
+export function sanitizeUrl(url: string): string {
+  const raw = (url || '').trim()
+  if (!raw) return '#'
+  if (raw.startsWith('#')) return raw
+  // 浏览器会忽略 scheme 中的空白/控制字符；先归一化再判定。
+  // 同时处理 HTML 实体形式的冒号（`&colon;` / `&#58;` / `&#x3a;`）——
+  // escapeHtml 会把 `&` 变成 `&amp;`，但浏览器解码后实体仍可能被还原为冒号。
+  const normalized = raw
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex: string) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#([0-9]+);/g, (_, dec: string) => String.fromCodePoint(parseInt(dec, 10)))
+    .replace(/&colon;/gi, ':')
+    .replace(/[\u0000-\u0020]+/g, '')
+  const match = /^([a-z][a-z0-9+.-]*):/i.exec(normalized)
+  if (!match) return raw // 相对路径：无 scheme，安全
+  const scheme = match[1].toLowerCase()
+  return scheme === 'http' || scheme === 'https' || scheme === 'mailto' || scheme === 'tel' ? raw : '#'
+}
+
+/**
  * 将段落序列渲染为分页 HTML 数组（每页一个 .page-content div）。
  * 函数体逐段对应原 DocPreview.vue#formatFormattedTextToHtml。
  */
@@ -138,7 +164,7 @@ export function renderDocumentToPages(input: RenderInput): string[] {
         const before = textWithLinks.substring(0, pl.from)
         const linkText = textWithLinks.substring(pl.from, pl.to)
         const after = textWithLinks.substring(pl.to)
-        textWithLinks = `${before}<a href="${escapeHtml(pl.url)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent);text-decoration:underline;">${escapeHtml(linkText)}</a>${after}`
+        textWithLinks = `${before}<a href="${escapeHtml(sanitizeUrl(pl.url))}" target="_blank" rel="noopener noreferrer" style="color:var(--accent);text-decoration:underline;">${escapeHtml(linkText)}</a>${after}`
         hasHyperlinkHtml = true
       }
     }
