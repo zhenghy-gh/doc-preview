@@ -4,13 +4,11 @@ import { parseDocFileWithFormat, parseDocFileFromBuffer } from '../utils/docPars
 import type { ParseProgressStage } from '../utils/docParser'
 import { parseWithWorker } from '../utils/parseWithWorker'
 import { renderDocumentToPages } from '../utils/rendering/documentRenderer'
-import { buildPrintWindowHtml } from '../utils/rendering/printLayout'
 import type { CharacterFormat, ParagraphFormat, RevisionMark, RevisionType, BookmarkRange, SectionInfo, PageFieldRange, CrossReferenceRange, ShapeInfo, EquationInfo, ChartInfo, WordArtInfo, RenderParagraph, ParseErrorCode } from '../utils/docFormat'
 import type { DocumentFields } from '../utils/fieldParser'
 import { formatRevisionTime, type RevisionMode } from '../utils/revisionRender'
-import { htmlToMarkdown } from '../utils/markdownExport'
 import { highlightTextMatches, clearSearchHighlights } from '../utils/searchUtils'
-import { escapeHtml, formatTextWithInferredFormat } from '../utils/textRender'
+import { formatTextWithInferredFormat } from '../utils/textRender'
 import { formatStoryText } from '../utils/storyRender'
 import { formatPanelTitle, formatSizePt as formatSizePtUtil } from '../utils/formatUtils'
 import { computeDocumentStats, buildDocumentOutline, type OutlineItem } from '../utils/documentStats'
@@ -18,6 +16,7 @@ import { WORD_VERSION_LABELS, type WordVersion } from '../utils/fibParser'
 import { useI18n } from '../composables/useI18n'
 import { useWebFont as createWebFont } from '../composables/useWebFont'
 import { useDocViewport } from '../composables/useDocViewport'
+import { useExport } from '../composables/useExport'
 import { useDarkMode } from '../composables/useDarkMode'
 import ShortcutsPanel from './ShortcutsPanel.vue'
 import LoadingOverlay from './LoadingOverlay.vue'
@@ -259,6 +258,15 @@ const searchResults = ref<SearchMatch[]>([])
 const currentSearchIndex = ref(-1)
 const searchBarRef = ref<InstanceType<typeof DocSearchBar> | null>(null)
 const toolbarRef = ref<InstanceType<typeof PreviewToolbar> | null>(null)
+
+const { printDocument, downloadText, downloadHtml, downloadMarkdown, copyText } = useExport({
+  fileName,
+  plainText,
+  htmlContent,
+  previewRef,
+  toolbarRef,
+  t,
+})
 const searchCaseSensitive = ref(false)
 const searchWholeWord = ref(false)
 
@@ -1076,48 +1084,14 @@ const searchStatusLabel = computed(() => {
   return `${currentSearchIndex.value + 1} / ${searchResults.value.length}`
 })
 
-// ---- Print ----
-
-function printDocument() {
-  if (!htmlContent.value) return
-  
-  const printWindow = window.open('', '_blank')
-  if (!printWindow) {
-    alert(t('print.popupBlocked'))
-    return
-  }
-  
-  // 打印 CSS / 窗口 HTML 已抽为纯函数（utils/rendering/printLayout.ts），便于
-  // scripts/printPageAudit.mjs 在 Node 下复用同一份打印布局做可重复审计。
-  const printContent = buildPrintWindowHtml({
-    title: escapeHtml(fileName.value || 'DOC Preview'),
-    labels: { prefix: t('print.p1'), middle: t('print.p2'), suffix: t('print.p3') },
-    bodyHtml: htmlContent.value,
-  })
-  
-  // 注册监听后再写入文档，避免部分浏览器在 document.close() 后立即触发
-  // load，导致监听器错过而无法自动打开打印对话框。
-  printWindow.addEventListener('load', () => {
-    setTimeout(() => {
-      printWindow.print()
-      printWindow.close()
-    }, 500)
-  }, { once: true })
-  printWindow.document.write(printContent)
-  printWindow.document.close()
-}
-
 // ---- Download ----
 
 // ---- Outline navigation ----
 
 function scrollToOutline(item: OutlineItem) {
   showOutline.value = false
-  // 虚拟滚动下目标段落可能未渲染，临时禁用虚拟滚动确保全部页面可查询
   const wasVirtualEnabled = virtualScrollEnabled.value
-  if (wasVirtualEnabled) {
-    virtualScrollEnabled.value = false
-  }
+  if (wasVirtualEnabled) virtualScrollEnabled.value = false
   nextTick(() => {
     const container = previewRef.value?.querySelector('.document-content')
     if (!container) {
@@ -1131,233 +1105,11 @@ function scrollToOutline(item: OutlineItem) {
       target.classList.add('outline-highlight')
       setTimeout(() => target.classList.remove('outline-highlight'), 2000)
     }
-    // 滚动动画完成后恢复虚拟滚动（统一走 restoreVirtualScroll：搜索开启时保持关闭，
-    // 与 scrollToPage 的 data-page-idx 定位一致——两者都假定「恢复后 DOM 是完整页」）。
-    if (wasVirtualEnabled) {
-      setTimeout(restoreVirtualScroll, 600)
-    }
+    if (wasVirtualEnabled) setTimeout(restoreVirtualScroll, 600)
   })
 }
 
-/**
- * 复制纯文本到剪贴板，三级降级：① Clipboard API 富文本写入 ② 隐藏 textarea + execCommand("copy") ③ 同法纯文本兜底；任一成功后按 data-action="copy-text" 定位工具栏按钮显示 ✓ 反馈 2s（FIX-VUEW 后不再依赖中文 title 选择器）。
- */
-async function copyText() {
-  if (!plainText.value) return
-  
-  const tryRichCopy = async () => {
-    if (!htmlContent.value) return false
-    if (typeof ClipboardItem === 'undefined' || typeof navigator.clipboard?.write !== 'function') {
-      return false
-    }
-
-    try {
-      const blob = new Blob([htmlContent.value], { type: 'text/html' })
-      const item = new ClipboardItem({ 'text/html': blob })
-      await navigator.clipboard.write([item])
-      return true
-    } catch {
-      return false
-    }
-  }
-  
-  const tryExecCommandCopy = () => {
-    const container = previewRef.value?.querySelector('.document-content')
-    if (!container) return false
-    
-    try {
-      const range = document.createRange()
-      range.selectNodeContents(container)
-      const selection = window.getSelection()
-      selection?.removeAllRanges()
-      selection?.addRange(range)
-      
-      const successful = document.execCommand('copy')
-      
-      selection?.removeAllRanges()
-      return successful
-    } catch {
-      return false
-    }
-  }
-  
-  const tryPlainCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(plainText.value)
-      return true
-    } catch {
-      const ta = document.createElement('textarea')
-      ta.value = plainText.value
-      ta.style.position = 'fixed'; ta.style.opacity = '0'
-      document.body.appendChild(ta)
-      ta.select()
-      const successful = document.execCommand('copy')
-      document.body.removeChild(ta)
-      return successful
-    }
-  }
-  
-  const showCopySuccess = () => {
-    // FIX-VUEW：原选择器 .toolbar-btn[title*="复制"] 依赖中文 title 文本，
-    // i18n 化或切 EN（title 变 "Copy text to clipboard"）后即失效。
-    // 改为语言无关的 data-action 属性定位（见模板 📋 按钮）。
-    // 再限定到本实例的 toolbarRef（库场景下同页可有多个 DocPreview；
-    // 全局 document.querySelector 会把 ✓ 反馈打到第一个实例的按钮上）。
-    const btn = toolbarRef.value?.$el?.querySelector(
-      '.toolbar-btn[data-action="copy-text"]'
-    ) as HTMLElement | null
-    if (btn) {
-      const originalText = btn.innerHTML
-      btn.innerHTML = '✓'
-      setTimeout(() => {
-        btn.innerHTML = originalText
-      }, 2000)
-    }
-  }
-  
-  if (await tryRichCopy()) {
-    showCopySuccess()
-    return
-  }
-  
-  if (tryExecCommandCopy()) {
-    showCopySuccess()
-    return
-  }
-  
-  if (await tryPlainCopy()) {
-    showCopySuccess()
-    return
-  }
-}
-
-/**
- * 导出纯文本 .txt：Blob + 临时 <a download> 触发下载；文件名取去 .doc/.dot 扩展的文档名，空内容静默跳过。
- */
-function downloadText() {
-  if (!plainText.value) return
-  const name = fileName.value.replace(/\.(doc|dot)$/i, '') || 'document'
-  const blob = new Blob([plainText.value], { type: 'text/plain;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `${name}.txt`
-  a.click()
-  URL.revokeObjectURL(url)
-}
-
-/**
- * 导出可独立打开的 .html：预览 HTML 内联进完整样式模板（title 取文档名转义）。
- */
-function downloadHtml() {
-  if (!htmlContent.value) return
-  const name = fileName.value.replace(/\.(doc|dot)$/i, '') || 'document'
-  
-  const htmlTemplate = `<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${escapeHtml(fileName.value || 'DOC Preview')}</title>
-  <style>
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-      max-width: 800px;
-      margin: 0 auto;
-      padding: 40px 20px;
-      line-height: 1.8;
-      color: #333;
-      background: #f5f5f5;
-    }
-    .document-content {
-      background: white;
-      padding: 60px;
-      box-shadow: 0 1px 4px rgba(0,0,0,0.12);
-    }
-    h1, h2, h3, h4, h5, h6 {
-      margin-top: 24px;
-      margin-bottom: 12px;
-      font-weight: 600;
-    }
-    p {
-      margin-bottom: 16px;
-    }
-    ul, ol {
-      margin-left: 24px;
-      margin-bottom: 16px;
-    }
-    table {
-      border-collapse: collapse;
-      width: 100%;
-      margin-bottom: 16px;
-    }
-    td, th {
-      border: 1px solid #ddd;
-      padding: 8px 12px;
-    }
-    tr:nth-child(even) {
-      background-color: #f9f9f9;
-    }
-    a {
-      color: #667eea;
-      text-decoration: underline;
-    }
-    .search-highlight {
-      background-color: #ffeb3b;
-    }
-    .search-highlight-current {
-      background-color: #f44336;
-      color: white;
-    }
-    @media print {
-      body {
-        background: white;
-        padding: 0;
-        max-width: none;
-      }
-      .document-content {
-        box-shadow: none;
-        padding: 0;
-      }
-    }
-  </style>
-</head>
-<body>
-  <div class="document-content">
-    ${htmlContent.value}
-  </div>
-</body>
-</html>`
-  
-  const blob = new Blob([htmlTemplate], { type: 'text/html;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `${name}.html`
-  a.click()
-  URL.revokeObjectURL(url)
-}
-
-// ---- Download Markdown ----
-// 转换逻辑提取至 utils/markdownExport.ts
-
-/**
- * 导出 .md：htmlToMarkdown 纯函数将当前预览 HTML 转 Markdown 后下载。
- */
-function downloadMarkdown() {
-  if (!htmlContent.value) return
-
-  const mdContent = htmlToMarkdown(htmlContent.value)
-  const name = fileName.value.replace(/\.(doc|dot)$/i, '') || 'document'
-
-  const blob = new Blob([mdContent], { type: 'text/markdown;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `${name}.md`
-  a.click()
-  URL.revokeObjectURL(url)
-}
+// 打印 / 导出 / 复制由 composables/useExport.ts 提供（见 toolbarRef 之后）。
 
 // ---- Keyboard shortcuts ----
 

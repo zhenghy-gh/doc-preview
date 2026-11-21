@@ -64,9 +64,10 @@ describe('FIX-VUEW', () => {
   })
 
   it('rich clipboard copy guards optional browser APIs before construction', () => {
-    const src = componentSource()
+    // 复制逻辑已抽到 composables/useExport.ts（Phase 1），守卫相应迁移。
+    const src = readFileSync(join(process.cwd(), 'src/composables/useExport.ts'), 'utf8')
     expect(src).toMatch(/typeof ClipboardItem === 'undefined'/)
     expect(src).toMatch(/typeof navigator\.clipboard\?\.write !== 'function'/)
-    expect(src).toMatch(/try \{[\s\S]*const blob = new Blob\(\[htmlContent\.value\]/)
+    expect(src).toMatch(/try \{[\s\S]*new Blob\(\[htmlContent\.value\]/)
   })
 })
