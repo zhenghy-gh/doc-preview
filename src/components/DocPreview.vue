@@ -33,6 +33,8 @@ import ShapesPanel from './ShapesPanel.vue'
 import EquationsPanel from './EquationsPanel.vue'
 import WordArtsPanel from './WordArtsPanel.vue'
 import PreviewToolbar from './PreviewToolbar.vue'
+import DocSearchBar from './DocSearchBar.vue'
+import OutlineSidebar from './OutlineSidebar.vue'
 
 const { t, locale: currentLocale } = useI18n()
 const { loadWebFonts, getWebFontFamily } = createWebFont(() => props.useWebFont)
@@ -354,7 +356,7 @@ const showSearch = ref(false)
 const searchQuery = ref('')
 const searchResults = ref<SearchMatch[]>([])
 const currentSearchIndex = ref(-1)
-const searchInputRef = ref<HTMLInputElement | null>(null)
+const searchBarRef = ref<InstanceType<typeof DocSearchBar> | null>(null)
 const toolbarRef = ref<InstanceType<typeof PreviewToolbar> | null>(null)
 const originalHtml = ref('') // saved before search highlighting
 const searchCaseSensitive = ref(false)
@@ -1173,7 +1175,7 @@ function toggleSearch() {
     originalHtml.value = htmlContent.value
     // 搜索需要遍历所有页面 DOM，临时禁用虚拟滚动确保全部页面已渲染
     virtualScrollEnabled.value = false
-    nextTick(() => searchInputRef.value?.focus())
+    nextTick(() => searchBarRef.value?.focus())
   } else {
     // Restore original HTML when closing search
     clearHighlights()
@@ -1687,7 +1689,7 @@ function handleKeydown(e: KeyboardEvent) {
   if (isCtrl && e.key === 'f') {
     e.preventDefault()
     if (!showSearch.value) toggleSearch()
-    else searchInputRef.value?.focus()
+    else searchBarRef.value?.focus()
     return
   }
 
@@ -1906,40 +1908,20 @@ defineExpose({ reload, getPlainText, focusContent })
         @next-page="goToNextPage"
       />
 
-      <!-- Search bar -->
-      <div
+      <!-- Search bar (search state/highlighting stays in this component) -->
+      <DocSearchBar
         v-if="showSearch"
-        id="doc-search-bar"
-        class="search-bar"
-        role="search"
-        :aria-label="t('toolbar.search')"
-      >
-        <input
-          ref="searchInputRef"
-          v-model="searchQuery"
-          type="search"
-          class="search-input"
-          autocomplete="off"
-          enterkeyhint="search"
-          :placeholder="t('search.placeholder')"
-          :aria-label="t('search.placeholder')"
-          aria-describedby="doc-search-status"
-          @input="performSearch"
-          @keyup.enter="nextMatch"
-        />
-        <label class="search-option" :title="t('search.case')">
-          <input type="checkbox" v-model="searchCaseSensitive" :aria-label="t('search.case')" @change="performSearch" />
-          <span aria-hidden="true">Aa</span>
-        </label>
-        <label class="search-option" :title="t('search.word')">
-          <input type="checkbox" v-model="searchWholeWord" :aria-label="t('search.word')" @change="performSearch" />
-          <span aria-hidden="true">W</span>
-        </label>
-        <span id="doc-search-status" class="search-status" role="status" aria-live="polite">{{ searchStatusLabel }}</span>
-        <button type="button" class="toolbar-btn" @click="prevMatch" :disabled="searchResults.length === 0" :title="t('search.prevMatch')" :aria-label="t('search.prevMatch')">▲</button>
-        <button type="button" class="toolbar-btn" @click="nextMatch" :disabled="searchResults.length === 0" :title="t('search.nextMatch')" :aria-label="t('search.nextMatch')">▼</button>
-        <button type="button" class="toolbar-btn" @click="toggleSearch" :title="t('search.close')" :aria-label="t('search.close')">✕</button>
-      </div>
+        ref="searchBarRef"
+        v-model:query="searchQuery"
+        v-model:case-sensitive="searchCaseSensitive"
+        v-model:whole-word="searchWholeWord"
+        :status-label="searchStatusLabel"
+        :result-count="searchResults.length"
+        @perform-search="performSearch"
+        @next-match="nextMatch"
+        @prev-match="prevMatch"
+        @close="toggleSearch"
+      />
 
       <!-- Document info -->
       <div class="doc-info">
@@ -1947,30 +1929,12 @@ defineExpose({ reload, getPlainText, focusContent })
         <span class="doc-status" role="status" aria-live="polite">{{ t('doc.status.ok') }}</span>
       </div>
 
-      <!-- Document outline sidebar -->
-      <div
+      <!-- Document outline sidebar (navigation logic stays in this component) -->
+      <OutlineSidebar
         v-if="showOutline && outline.length > 0"
-        id="doc-outline-sidebar"
-        class="outline-sidebar"
-        role="navigation"
-        :aria-label="t('outline.header')"
-      >
-        <div class="outline-header">{{ t('outline.header') }}</div>
-        <div class="outline-list">
-          <div
-            v-for="item in outline"
-            :key="item.index"
-            class="outline-item"
-            :class="'outline-level-' + item.level"
-            role="button"
-            tabindex="0"
-            :aria-label="item.text"
-            @click="scrollToOutline(item)"
-            @keydown.enter.prevent="scrollToOutline(item)"
-            @keydown.space.prevent="scrollToOutline(item)"
-          >{{ item.text }}</div>
-        </div>
-      </div>
+        :items="outline"
+        @navigate="scrollToOutline"
+      />
 
       <!-- Document content (paper-like) -->
       <div class="paper-page">
@@ -2271,75 +2235,7 @@ defineExpose({ reload, getPlainText, focusContent })
   }
 }
 
-/* ==================== Search bar ==================== */
-.search-bar {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 16px;
-  background: var(--search-bar-bg);
-  border-bottom: 1px solid var(--border-color);
-}
-
-.search-input {
-  flex: 1;
-  max-width: 300px;
-  padding: 6px 12px;
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  font-size: 0.85rem;
-  outline: none;
-  background: var(--bg-secondary);
-  color: var(--text-primary);
-  transition: border-color 0.15s;
-}
-
-.search-input:focus {
-  border-color: var(--accent);
-}
-
-.search-status {
-  font-size: 0.8rem;
-  color: var(--text-muted);
-  min-width: 50px;
-  text-align: center;
-}
-
-.search-option {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  padding: 2px 6px;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: var(--text-muted);
-  border: 1px solid transparent;
-  transition: all 0.15s ease;
-  user-select: none;
-}
-
-.search-option:hover {
-  background: var(--bg-secondary, #f0f0f0);
-  border-color: var(--border-color, #ddd);
-}
-
-.search-option input {
-  display: none;
-}
-
-.search-option:has(input:checked) {
-  background: #e3f2fd;
-  border-color: #2196f3;
-  color: #1565c0;
-}
-
-:root.dark .search-option:has(input:checked) {
-  background: #1e3a5f;
-  border-color: #64b5f6;
-  color: #90caf9;
-}
+/* 搜索栏样式已迁入 DocSearchBar.vue（含 :has(input:checked) 与移动端断点）。 */
 
 /* ==================== Document info ==================== */
 .doc-info {
@@ -2502,69 +2398,8 @@ defineExpose({ reload, getPlainText, focusContent })
   padding: 0 1px;
 }
 
-/* ==================== Outline sidebar ==================== */
-.outline-sidebar {
-  float: left;
-  width: 220px;
-  margin: 24px 0 24px 16px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  font-size: 0.82rem;
-  max-height: 400px;
-  overflow-y: auto;
-  position: sticky;
-  top: 16px;
-}
-
-.outline-header {
-  padding: 10px 14px;
-  font-weight: 600;
-  color: var(--text-primary);
-  border-bottom: 1px solid var(--border-color);
-  font-size: 0.85rem;
-}
-
-.outline-list {
-  padding: 6px 0;
-}
-
-.outline-item {
-  padding: 5px 14px 5px calc(14px + 12px * (var(--level, 1) - 1));
-  cursor: pointer;
-  color: var(--text-secondary);
-  line-height: 1.4;
-  transition: background 0.1s, color 0.1s;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.outline-item:hover {
-  background: var(--bg-tertiary);
-  color: var(--accent);
-}
-
-.outline-item:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-  background: var(--bg-tertiary);
-  color: var(--accent);
-}
-
-.outline-level-1 {
-  --level: 1;
-  font-weight: 600;
-}
-
-.outline-level-2 {
-  --level: 2;
-}
-
-.outline-level-3 {
-  --level: 3;
-  font-size: 0.8rem;
-}
+/* 大纲侧栏样式已迁入 OutlineSidebar.vue（含移动端断点）。
+   下面的 outline-highlight 作用于正文滚动目标，仍归本组件所有。 */
 
 /* Outline highlight flash on scroll target */
 :deep(.outline-highlight) {
@@ -2905,7 +2740,7 @@ defineExpose({ reload, getPlainText, focusContent })
     display: none !important;
   }
 
-  .search-bar {
+  :deep(.search-bar) {
     display: none !important;
   }
 
@@ -2936,14 +2771,6 @@ defineExpose({ reload, getPlainText, focusContent })
 
 /* ==================== Mobile ==================== */
 @media (max-width: 900px) {
-  .outline-sidebar {
-    float: none;
-    width: auto;
-    margin: 16px;
-    max-height: 280px;
-    position: static;
-  }
-
   .doc-preview {
     border-radius: 0 !important;
   }
@@ -3011,17 +2838,6 @@ defineExpose({ reload, getPlainText, focusContent })
     font-size: 0.8rem;
   }
 
-  .search-bar {
-    padding: 8px 12px;
-    gap: 6px;
-    flex-wrap: nowrap;
-  }
-
-  .search-bar :deep(.toolbar-btn) {
-    min-width: 34px;
-    height: 34px;
-  }
-
   .properties-grid {
     grid-template-columns: 1fr 1fr;
   }
@@ -3079,23 +2895,6 @@ defineExpose({ reload, getPlainText, focusContent })
   .pagination-current {
     font-size: 0.75rem;
     min-width: 50px;
-  }
-
-  .search-bar {
-    padding: 6px 8px;
-    gap: 4px;
-  }
-
-  .search-bar :deep(.toolbar-btn) {
-    min-width: 38px;
-    height: 38px;
-  }
-
-  .outline-sidebar {
-    margin: 10px;
-    max-height: 240px;
-    border-radius: 6px;
-    font-size: 0.78rem;
   }
 
   :deep(.stories-panel),
@@ -3184,16 +2983,6 @@ defineExpose({ reload, getPlainText, focusContent })
 
   :deep(.toolbar-left) :deep(.toolbar-btn).zoom-reset-label {
     display: none;
-  }
-
-  .outline-header {
-    padding: 8px 10px;
-    font-size: 0.8rem;
-  }
-
-  .outline-item {
-    padding: 6px 10px 6px calc(10px + 12px * (var(--level, 1) - 1));
-    font-size: 0.78rem;
   }
 }
 </style>
