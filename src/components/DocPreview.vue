@@ -6,7 +6,7 @@ import { parseWithWorker } from '../utils/parseWithWorker'
 import { renderDocumentToPages } from '../utils/rendering/documentRenderer'
 import { buildPrintWindowHtml } from '../utils/rendering/printLayout'
 import { PT_TO_PX } from '../utils/rendering/pageBuilder'
-import type { CharacterFormat, ParagraphFormat, RevisionMark, RevisionType, BookmarkRange, SectionInfo, PageFieldRange, CrossReferenceRange, ShapeInfo, EquationInfo, ChartInfo, WordArtInfo, RenderParagraph } from '../utils/docFormat'
+import type { CharacterFormat, ParagraphFormat, RevisionMark, RevisionType, BookmarkRange, SectionInfo, PageFieldRange, CrossReferenceRange, ShapeInfo, EquationInfo, ChartInfo, WordArtInfo, RenderParagraph, ParseErrorCode } from '../utils/docFormat'
 import type { DocumentFields } from '../utils/fieldParser'
 import { formatRevisionTime, type RevisionMode } from '../utils/revisionRender'
 import { htmlToMarkdown } from '../utils/markdownExport'
@@ -78,6 +78,8 @@ interface ParserOutput {
   document?: { paragraphs: FormattedParagraphOutput[]; stories?: DocumentStories; images?: string[]; pictures?: PictureInfo[]; hyperlinks?: HyperlinkRange[]; toc?: TocEntry[]; index?: IndexEntry[]; properties?: DocumentProperties; docFlags?: DocumentFlags; wordVersion?: string; revisions?: RevisionMark[]; documentFields?: DocumentFields; bookmarks?: BookmarkRange[]; sections?: SectionInfo[]; pageFields?: PageFieldRange[]; crossReferences?: CrossReferenceRange[]; shapes?: ShapeInfo[]; equations?: EquationInfo[]; charts?: ChartInfo[]; wordArts?: WordArtInfo[]; styleSet?: { name: string; isCustom?: boolean } }
   text?: string
   error?: string
+  /** 结构化错误码（与 ParseResult 同形），透传给 ErrorDisplay 做直映射分类 */
+  errorCode?: ParseErrorCode
 }
 
 interface HyperlinkRange {
@@ -193,6 +195,8 @@ const htmlContent = ref('')
 const plainText = ref('')
 const loading = ref(true)
 const error = ref('')
+/** 结构化错误码：与 error 同步设置/清空，供 ErrorDisplay 直映射分类 */
+const errorCode = ref<ParseErrorCode | undefined>(undefined)
 const loadingTime = ref(0)
 const loadingTimer = ref<ReturnType<typeof setInterval> | null>(null)
 const fileSize = ref('')
@@ -625,6 +629,7 @@ function stopLoadingTimer() {
 onErrorCaptured((err) => {
   const msg = err instanceof Error ? err.message : t('error.parse.unknown')
   error.value = t('error.render', { msg })
+  errorCode.value = undefined
   emit('error', msg)
   return false
 })
@@ -637,6 +642,7 @@ const loadFromFile = async (file: File) => {
   loading.value = true
   emit('loading', true)
   error.value = ''
+  errorCode.value = undefined
   isUsingWorker.value = false
   progressPercent.value = -1
   progressStep.value = ''
@@ -664,6 +670,7 @@ const loadFromFile = async (file: File) => {
 
     if (!result.success) {
       error.value = result.error || t('error.parse.fail')
+      errorCode.value = result.errorCode
       loading.value = false
       emit('loading', false)
       return
@@ -675,6 +682,7 @@ const loadFromFile = async (file: File) => {
   } catch (err) {
     console.error('Error parsing DOC file:', err)
     error.value = err instanceof Error ? err.message : t('error.parse.unknown')
+    errorCode.value = undefined
   } finally {
     loading.value = false
     emit('loading', false)
@@ -732,6 +740,7 @@ const loadFromUrl = async (url: string) => {
   loading.value = true
   emit('loading', true)
   error.value = ''
+  errorCode.value = undefined
   progressPercent.value = -1
   progressStep.value = ''
   lastSource.value = { type: 'url', url }
@@ -781,6 +790,7 @@ const loadFromUrl = async (url: string) => {
 
     if (!result.success) {
       error.value = result.error || t('error.parse.fail')
+      errorCode.value = result.errorCode
       loading.value = false
       emit('loading', false)
       return
@@ -794,6 +804,7 @@ const loadFromUrl = async (url: string) => {
         console.warn(`URL 加载超时: ${url}`)
         // 文案含『加载超时』关键字 → errorClassifier network 类（可重试）
         error.value = '加载超时：服务器长时间无响应，请检查地址是否可访问或稍后重试'
+        errorCode.value = undefined
       }
       // 其余 abort（superseded/source-changed/retry/reset/unmounted）：静默，
       // UI 状态归属新的加载或组件已销毁，不得回写
@@ -802,6 +813,7 @@ const loadFromUrl = async (url: string) => {
     if (!isCurrentUrlLoad(controller)) return // 陈旧错误不得覆盖新加载的状态
     console.error('Error loading from URL:', err)
     error.value = err instanceof Error ? err.message : t('error.parse.unknown')
+    errorCode.value = undefined
   } finally {
     clearTimeout(timeoutId) // 兜底（fetch 抛错路径的内层 finally 已清；此处防漏）
     if (isCurrentUrlLoad(controller)) {
@@ -962,6 +974,7 @@ const renderResult = (result: ParserOutput) => {
     loadWebFonts()
   } else {
     error.value = t('error.emptyDoc')
+    errorCode.value = undefined
   }
 }
 
@@ -1801,7 +1814,7 @@ defineExpose({ reload, getPlainText, focusContent })
     />
 
     <!-- Error -->
-    <ErrorDisplay v-else-if="error" :error="error" @retry="retryLoad" />
+    <ErrorDisplay v-else-if="error" :error="error" :error-code="errorCode" @retry="retryLoad" />
 
     <!-- Preview -->
     <div v-else ref="previewRef" class="preview-wrapper" tabindex="-1">

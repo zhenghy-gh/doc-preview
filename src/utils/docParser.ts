@@ -2264,7 +2264,7 @@ export function parseDocFile(file: File, debug: boolean = false): Promise<{ text
 export function parseDocFileFromBuffer(
   buffer: ArrayBuffer,
   fileName?: string
-): { success: boolean; document?: ParsedDocument; text?: string; error?: string } {
+): { success: boolean; document?: ParsedDocument; text?: string; error?: string; errorCode?: ParseErrorCode } {
   try {
     const parser = new DocParser(buffer)
     return parser.parseWithFormat()

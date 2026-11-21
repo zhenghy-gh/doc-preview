@@ -34,6 +34,9 @@ addEventListener('message', (e: MessageEvent<WorkerParseRequest>) => {
       document: result.document,
       text: result.text,
       error: result.error,
+      // ERR-CODE 随结果消息透传，主线程 classifyError 得以按结构化 code 直映射；
+      // 旧 worker / 旧 result 消息无此字段时为 undefined，回退关键字分类。
+      errorCode: result.errorCode,
     } as WorkerParseResultMessage)
   } catch (error) {
     postMessage({

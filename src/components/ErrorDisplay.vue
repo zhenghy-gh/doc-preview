@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { classifyError, ERROR_CATEGORY_ICON } from '../utils/errorClassifier'
+import type { ParseErrorCode } from '../utils/docFormat'
 import { currentLocale, t } from '../utils/locale'
 
 const props = defineProps<{
   /** 原始错误信息 */
   error: string
+  /** 解析器附带的结构化错误码；优先于关键字分类，缺省时回退关键字路径 */
+  errorCode?: ParseErrorCode
 }>()
 
 const emit = defineEmits<{
@@ -13,7 +16,7 @@ const emit = defineEmits<{
 }>()
 
 const classified = computed(() =>
-  classifyError(props.error, currentLocale.value === 'en' ? 'en' : 'zh-CN'),
+  classifyError(props.error, currentLocale.value === 'en' ? 'en' : 'zh-CN', props.errorCode),
 )
 
 const icon = computed(() => ERROR_CATEGORY_ICON[classified.value.category])
