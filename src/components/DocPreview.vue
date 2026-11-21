@@ -20,6 +20,8 @@ import ErrorDisplay from './ErrorDisplay.vue'
 import CollapsiblePanel from './CollapsiblePanel.vue'
 import BookmarksPanel from './BookmarksPanel.vue'
 import TocIndexPanel from './TocIndexPanel.vue'
+import PropertiesPanel from './PropertiesPanel.vue'
+import DocFlagsPanel from './DocFlagsPanel.vue'
 
 /**
  * DocPreview —— .doc 解析结果的渲染宿主组件。
@@ -423,6 +425,9 @@ const showWordArts = ref(false)
 
 // --- Style Set ---
 const styleSet = ref<{ name: string; isCustom?: boolean } | null>(null)
+const styleSetLabel = computed(() =>
+  styleSet.value ? `${styleSet.value.name}${styleSet.value.isCustom ? t('props.styleSet.custom') : ''}` : '',
+)
 
 // SHAPE_TYPE_LABEL removed, use t('shapes.type.' + type) instead
 
@@ -2251,173 +2256,27 @@ defineExpose({ reload, getPlainText, focusContent })
         </div>
       </CollapsiblePanel>
 
-      <!-- Document properties (title / author / keywords etc.) -->
-      <CollapsiblePanel
-        v-if="docProperties"
+      <!-- Document properties (SummaryInformation + PlcfFld fields) -->
+      <PropertiesPanel
+        v-if="docProperties || docFields"
         v-model="showProperties"
         :title="t('props.title')"
-        :summary="docProperties.title || docProperties.author || t('props.title')"
-        panel-class="properties-panel"
-      >
-        <div v-if="docProperties.title" class="property-item">
-          <span class="property-label">{{ t('props.field.title') }}:</span>
-          <span class="property-value">{{ docProperties.title }}</span>
-        </div>
-        <div v-if="docProperties.subject" class="property-item">
-          <span class="property-label">{{ t('props.field.subject') }}:</span>
-          <span class="property-value">{{ docProperties.subject }}</span>
-        </div>
-        <div v-if="docProperties.author" class="property-item">
-          <span class="property-label">{{ t('props.field.author') }}:</span>
-          <span class="property-value">{{ docProperties.author }}</span>
-        </div>
-        <div v-if="docProperties.lastAuthor" class="property-item">
-          <span class="property-label">{{ t('props.field.lastAuthor') }}:</span>
-          <span class="property-value">{{ docProperties.lastAuthor }}</span>
-        </div>
-        <div v-if="docProperties.keywords" class="property-item">
-          <span class="property-label">{{ t('props.field.keywords') }}:</span>
-          <span class="property-value">{{ docProperties.keywords }}</span>
-        </div>
-        <div v-if="docProperties.comments" class="property-item">
-          <span class="property-label">{{ t('props.field.comments') }}:</span>
-          <span class="property-value">{{ docProperties.comments }}</span>
-        </div>
-        <div v-if="docProperties.pageCount" class="property-item">
-          <span class="property-label">{{ t('props.pages') }}:</span>
-          <span class="property-value">{{ docProperties.pageCount }}</span>
-        </div>
-        <div v-if="docProperties.wordCount" class="property-item">
-          <span class="property-label">{{ t('props.words') }}:</span>
-          <span class="property-value">{{ docProperties.wordCount }}</span>
-        </div>
-        <div v-if="docProperties.charCount" class="property-item">
-          <span class="property-label">{{ t('props.chars') }}:</span>
-          <span class="property-value">{{ docProperties.charCount }}</span>
-        </div>
-        <div v-if="docProperties.category" class="property-item">
-          <span class="property-label">{{ t('props.category') }}:</span>
-          <span class="property-value">{{ docProperties.category }}</span>
-        </div>
-        <div v-if="docProperties.company" class="property-item">
-          <span class="property-label">{{ t('props.company') }}:</span>
-          <span class="property-value">{{ docProperties.company }}</span>
-        </div>
-        <div v-if="docProperties.manager" class="property-item">
-          <span class="property-label">{{ t('props.manager') }}:</span>
-          <span class="property-value">{{ docProperties.manager }}</span>
-        </div>
-        <div v-if="docProperties.template" class="property-item">
-          <span class="property-label">{{ t('props.template') }}:</span>
-          <span class="property-value">{{ docProperties.template }}</span>
-        </div>
-        <div v-if="styleSet" class="property-item">
-          <span class="property-label">{{ t('props.styleSet') }}:</span>
-          <span class="property-value">{{ styleSet.name }}{{ styleSet.isCustom ? t('props.styleSet.custom') : '' }}</span>
-        </div>
-        <div v-if="docProperties.appName" class="property-item">
-          <span class="property-label">{{ t('props.appName') }}:</span>
-          <span class="property-value">{{ docProperties.appName }}</span>
-        </div>
-        <div v-if="wordVersionLabel" class="property-item">
-          <span class="property-label">{{ t('props.wordVersion') }}:</span>
-          <span class="property-value">{{ wordVersionLabel }}</span>
-        </div>
-        <div v-if="docProperties.revisionNumber" class="property-item">
-          <span class="property-label">{{ t('props.revisionNumber') }}:</span>
-          <span class="property-value">{{ docProperties.revisionNumber }}</span>
-        </div>
-        <div v-if="docProperties.lineCount" class="property-item">
-          <span class="property-label">{{ t('props.lines') }}:</span>
-          <span class="property-value">{{ docProperties.lineCount }}</span>
-        </div>
-        <div v-if="docProperties.paragraphCount" class="property-item">
-          <span class="property-label">{{ t('props.paragraphs') }}:</span>
-          <span class="property-value">{{ docProperties.paragraphCount }}</span>
-        </div>
-        <div v-if="docProperties.charCountWithSpaces" class="property-item">
-          <span class="property-label">{{ t('props.charsWithSpaces') }}:</span>
-          <span class="property-value">{{ docProperties.charCountWithSpaces }}</span>
-        </div>
-      </CollapsiblePanel>
-
-      <!-- Document fields (from PlcfFld - AUTHOR/TITLE/DATE etc.) -->
-      <CollapsiblePanel
-        v-if="docFields"
-        v-model="showProperties"
-        :title="t('props.docFields')"
-        :summary="docFields.title || docFields.author || t('props.docFields')"
-        panel-class="properties-panel"
-      >
-        <div v-if="docFields.title" class="property-item">
-          <span class="property-label">{{ t('props.field.title') }}:</span>
-          <span class="property-value">{{ docFields.title }}</span>
-        </div>
-        <div v-if="docFields.author" class="property-item">
-          <span class="property-label">{{ t('props.field.author') }}:</span>
-          <span class="property-value">{{ docFields.author }}</span>
-        </div>
-        <div v-if="docFields.subject" class="property-item">
-          <span class="property-label">{{ t('props.field.subject') }}:</span>
-          <span class="property-value">{{ docFields.subject }}</span>
-        </div>
-        <div v-if="docFields.keywords" class="property-item">
-          <span class="property-label">{{ t('props.field.keywords') }}:</span>
-          <span class="property-value">{{ docFields.keywords }}</span>
-        </div>
-        <div v-if="docFields.comments" class="property-item">
-          <span class="property-label">{{ t('props.field.comments') }}:</span>
-          <span class="property-value">{{ docFields.comments }}</span>
-        </div>
-        <div v-if="docFields.lastSavedBy" class="property-item">
-          <span class="property-label">{{ t('props.field.lastSavedBy') }}:</span>
-          <span class="property-value">{{ docFields.lastSavedBy }}</span>
-        </div>
-        <div v-if="docFields.createDate" class="property-item">
-          <span class="property-label">{{ t('props.field.created') }}:</span>
-          <span class="property-value">{{ docFields.createDate }}</span>
-        </div>
-        <div v-if="docFields.lastSavedDate" class="property-item">
-          <span class="property-label">{{ t('props.field.lastSaved') }}:</span>
-          <span class="property-value">{{ docFields.lastSavedDate }}</span>
-        </div>
-        <div v-if="docFields.printDate" class="property-item">
-          <span class="property-label">{{ t('props.field.printed') }}:</span>
-          <span class="property-value">{{ docFields.printDate }}</span>
-        </div>
-        <div v-if="docFields.date" class="property-item">
-          <span class="property-label">{{ t('props.field.date') }}:</span>
-          <span class="property-value">{{ docFields.date }}</span>
-        </div>
-        <div v-if="docFields.time" class="property-item">
-          <span class="property-label">{{ t('props.field.time') }}:</span>
-          <span class="property-value">{{ docFields.time }}</span>
-        </div>
-        <div v-if="docFields.revisionNumber" class="property-item">
-          <span class="property-label">{{ t('props.field.revision') }}:</span>
-          <span class="property-value">{{ docFields.revisionNumber }}</span>
-        </div>
-      </CollapsiblePanel>
+        :summary="docProperties?.title || docProperties?.author || t('props.title')"
+        :doc-fields-title="t('props.docFields')"
+        :doc-fields-summary="docFields?.title || docFields?.author || t('props.docFields')"
+        :properties="docProperties"
+        :doc-fields="docFields"
+        :style-set-label="styleSetLabel"
+        :word-version-label="wordVersionLabel"
+      />
 
       <!-- Document flags from DOP (facing pages / title page / track changes etc.) -->
-      <CollapsiblePanel
-        v-if="docFlagItems.length > 0"
+      <DocFlagsPanel
         v-model="showDocFlags"
         :title="t('flags.title')"
         :summary="t('flags.items', { n: docFlagItems.length })"
-        panel-class="doc-flags-panel"
-      >
-        <div class="doc-flags-content">
-          <div
-            v-for="(item, index) in docFlagItems"
-            :key="index"
-            class="flag-item"
-          >
-            <span class="flag-badge">{{ item.label }}</span>
-            <span class="flag-description">{{ item.description }}</span>
-          </div>
-        </div>
-      </CollapsiblePanel>
+        :items="docFlagItems"
+      />
 
       <!-- Table of Contents / Index -->
       <TocIndexPanel
@@ -3594,77 +3453,7 @@ defineExpose({ reload, getPlainText, focusContent })
   font-size: 0.78rem;
 }
 
-/* ==================== Properties panel ==================== */
-.properties-panel {
-  max-width: 800px;
-  margin: 0 auto 32px auto;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-.properties-panel .stories-content {
-  padding: 16px;
-  display: grid;
-  gap: 12px;
-}
-
-.property-item {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-}
-
-.property-label {
-  color: var(--text-muted);
-  font-size: 0.85rem;
-  min-width: 80px;
-}
-
-.property-value {
-  color: var(--text-primary);
-  font-size: 0.9rem;
-  word-break: break-word;
-}
-
-.doc-flags-panel {
-  max-width: 800px;
-  margin: 0 auto 32px auto;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-.doc-flags-content {
-  padding: 16px;
-  display: grid;
-  gap: 10px;
-}
-
-.flag-item {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.flag-badge {
-  display: inline-block;
-  padding: 2px 10px;
-  background: var(--accent-bg, rgba(59, 130, 246, 0.12));
-  color: var(--accent-color, #3b82f6);
-  border-radius: 12px;
-  font-size: 0.82rem;
-  font-weight: 500;
-  white-space: nowrap;
-}
-
-.flag-description {
-  color: var(--text-muted);
-  font-size: 0.85rem;
-}
+/* Properties / DocFlags styles moved to PropertiesPanel.vue and DocFlagsPanel.vue */
 
 /* TOC / Index styles moved to TocIndexPanel.vue */
 
@@ -4898,8 +4687,8 @@ defineExpose({ reload, getPlainText, focusContent })
   }
 
   .stories-panel,
-  .properties-panel,
-  .doc-flags-panel,
+  :deep(.properties-panel),
+  :deep(.doc-flags-panel),
   :deep(.toc-panel),
   .revisions-panel,
   :deep(.bookmarks-panel),
@@ -4917,8 +4706,8 @@ defineExpose({ reload, getPlainText, focusContent })
   }
 
   .stories-content,
-  .properties-content,
-  .doc-flags-content,
+  :deep(.properties-content),
+  :deep(.doc-flags-content),
   :deep(.toc-content),
   .revisions-content,
   :deep(.bookmarks-content),

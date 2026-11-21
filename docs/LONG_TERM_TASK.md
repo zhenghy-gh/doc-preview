@@ -130,3 +130,4 @@
 - 2026-11-21　任务创建。基线实测 2196 项 / 4 失败；定位到未完成的渲染升级 WIP。方向 A→B→C→D，先执行 Phase 0。
 - 2026-11-21　Phase 0 完成：为避免触碰主目录未提交 WIP，创建干净 worktree（`long-term-opt`，基于 HEAD `e7d722e`），基线 `npm test` 103 文件 / 1997 项全绿。主目录 WIP 原样保留。
 - 2026-11-21　Phase 1 切片 1：抽出 `BookmarksPanel.vue`、`TocIndexPanel.vue`（含各自 scoped CSS），`DocPreview.vue` 5160→5009 行。vue-tsc 0，npm test 1997/1997 通过。
+- 2026-11-21　Phase 1 切片 2：抽出 `PropertiesPanel.vue`（SummaryInformation + PlcfFld 两面板共用展开态）、`DocFlagsPanel.vue`，`DocPreview.vue` 5009→4798 行。vue-tsc 0，lint 0，npm test 1997/1997 通过。
