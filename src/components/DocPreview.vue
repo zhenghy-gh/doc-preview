@@ -323,17 +323,14 @@ function scrollToPage(page: number) {
   nextTick(() => {
     const container = previewRef.value?.querySelector('.document-content')
     if (!container) return
-    const pageElements = container.querySelectorAll('.page-content')
-    const target = pageElements[idx]
+    // 虚拟滚动下 DOM 只渲染窗口内的 .page-content，NodeList 是稀疏的：
+    // 用绝对页码 idx 当下标会指到错误页面（甚至越界落到别的页占位符上）。
+    // 两种页容器都带 data-page-idx（绝对页码），据此精确定位，避免下标错位。
+    const target =
+      container.querySelector<HTMLElement>(`.page-host[data-page-idx="${idx}"] .page-content`) ??
+      container.querySelector<HTMLElement>(`.page-placeholder[data-page-idx="${idx}"]`)
     if (target && typeof target.scrollIntoView === 'function') {
       target.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    } else {
-      // 回退：滚动到占位 div；无滚动 API 时保持兼容（如 SSR/测试环境）。
-      const placeholders = container.querySelectorAll('.page-placeholder')
-      const ph = placeholders[idx]
-      if (ph && typeof ph.scrollIntoView === 'function') {
-        ph.scrollIntoView({ behavior: 'smooth', block: 'start' })
-      }
     }
   })
 }
