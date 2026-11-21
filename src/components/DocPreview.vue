@@ -18,6 +18,8 @@ import ShortcutsPanel from './ShortcutsPanel.vue'
 import LoadingOverlay from './LoadingOverlay.vue'
 import ErrorDisplay from './ErrorDisplay.vue'
 import CollapsiblePanel from './CollapsiblePanel.vue'
+import BookmarksPanel from './BookmarksPanel.vue'
+import TocIndexPanel from './TocIndexPanel.vue'
 
 /**
  * DocPreview —— .doc 解析结果的渲染宿主组件。
@@ -2417,50 +2419,16 @@ defineExpose({ reload, getPlainText, focusContent })
         </div>
       </CollapsiblePanel>
 
-      <!-- Table of Contents -->
-      <CollapsiblePanel
-        v-if="toc.length > 0"
-        v-model="showToc"
-        :title="panelTitle('toc.title', toc.length)"
-        panel-class="toc-panel"
-      >
-        <div class="toc-content">
-          <ul class="toc-list">
-            <li
-              v-for="(entry, index) in toc"
-              :key="index"
-              class="toc-item"
-              :class="`toc-level-${entry.level}`"
-            >
-              <span class="toc-text">{{ entry.text }}</span>
-              <span v-if="entry.pageNumber" class="toc-page">{{ entry.pageNumber }}</span>
-            </li>
-          </ul>
-        </div>
-      </CollapsiblePanel>
-
-      <!-- Index -->
-      <CollapsiblePanel
-        v-if="index.length > 0"
-        v-model="showIndex"
-        :title="panelTitle('index.title', index.length)"
-        panel-class="toc-panel"
-      >
-        <div class="toc-content">
-          <ul class="toc-list">
-            <li
-              v-for="(entry, i) in index"
-              :key="i"
-              class="toc-item"
-              :class="{ 'toc-level-2': entry.subTerm }"
-            >
-              <span class="toc-text">{{ entry.mainTerm }}</span>
-              <span v-if="entry.subTerm" class="toc-subterm">· {{ entry.subTerm }}</span>
-              <span v-if="entry.pageNumber" class="toc-page">{{ entry.pageNumber }}</span>
-            </li>
-          </ul>
-        </div>
-      </CollapsiblePanel>
+      <!-- Table of Contents / Index -->
+      <TocIndexPanel
+        v-if="toc.length > 0 || index.length > 0"
+        v-model:toc-open="showToc"
+        v-model:index-open="showIndex"
+        :toc-title="panelTitle('toc.title', toc.length)"
+        :index-title="panelTitle('index.title', index.length)"
+        :toc="toc"
+        :index="index"
+      />
 
       <!-- Revision marks (track changes: insert / delete) -->
       <CollapsiblePanel
@@ -2510,24 +2478,13 @@ defineExpose({ reload, getPlainText, focusContent })
       </CollapsiblePanel>
 
       <!-- Bookmarks (named ranges from PlcfBkf/PlcfBkl/SttbfBkmk) -->
-      <CollapsiblePanel
+      <BookmarksPanel
         v-if="bookmarks.length > 0"
         v-model="showBookmarks"
         :title="panelTitle('bookmarks.title', bookmarks.length)"
         :summary="t('bookmarks.summary')"
-        panel-class="bookmarks-panel"
-      >
-        <div class="bookmarks-content">
-          <div
-            v-for="(bm, idx) in bookmarks"
-            :key="idx"
-            class="bookmark-item"
-          >
-            <span class="bookmark-name">{{ bm.name }}</span>
-            <span class="bookmark-range">CP: {{ bm.cpStart }} – {{ bm.cpEnd }}</span>
-          </div>
-        </div>
-      </CollapsiblePanel>
+        :bookmarks="bookmarks"
+      />
 
       <!-- Sections (page layout from PlcfSed/SEPX) -->
       <CollapsiblePanel
@@ -3709,75 +3666,7 @@ defineExpose({ reload, getPlainText, focusContent })
   font-size: 0.85rem;
 }
 
-.toc-panel {
-  max-width: 800px;
-  margin: 0 auto 32px auto;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-.toc-content {
-  padding: 16px;
-}
-
-.toc-list {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-}
-
-.toc-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 6px 0;
-  border-bottom: 1px solid var(--border-color);
-}
-
-.toc-item:last-child {
-  border-bottom: none;
-}
-
-.toc-level-1 {
-  font-weight: bold;
-  font-size: 1rem;
-  padding-left: 0;
-}
-
-.toc-level-2 {
-  font-size: 0.95rem;
-  padding-left: 16px;
-}
-
-.toc-level-3 {
-  font-size: 0.9rem;
-  padding-left: 32px;
-}
-
-.toc-level-4,
-.toc-level-5,
-.toc-level-6,
-.toc-level-7,
-.toc-level-8,
-.toc-level-9 {
-  font-size: 0.85rem;
-  padding-left: calc(16px * var(--level, 4));
-}
-
-.toc-text {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.toc-page {
-  color: var(--text-muted);
-  font-size: 0.85rem;
-  margin-left: 12px;
-}
+/* TOC / Index styles moved to TocIndexPanel.vue */
 
 /* ==================== Revision marks ==================== */
 .revisions-panel {
@@ -3892,47 +3781,7 @@ defineExpose({ reload, getPlainText, focusContent })
   font-size: 0.8rem;
 }
 
-/* ==================== Bookmarks ==================== */
-.bookmarks-panel {
-  max-width: 800px;
-  margin: 0 auto 32px auto;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-.bookmarks-content {
-  padding: 12px 16px;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 8px;
-}
-
-.bookmark-item {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  flex-wrap: wrap;
-  padding: 6px 10px;
-  background: var(--bg-primary);
-  border-left: 3px solid #3498db;
-  border-radius: 4px;
-  font-size: 0.85rem;
-}
-
-.bookmark-name {
-  color: var(--text-primary);
-  font-weight: 500;
-  word-break: break-all;
-}
-
-.bookmark-range {
-  margin-left: auto;
-  color: var(--text-muted);
-  font-size: 0.78rem;
-  font-variant-numeric: tabular-nums;
-}
+/* Bookmarks styles moved to BookmarksPanel.vue */
 
 /* ==================== Sections (page layout) ==================== */
 .sections-panel {
@@ -5051,9 +4900,9 @@ defineExpose({ reload, getPlainText, focusContent })
   .stories-panel,
   .properties-panel,
   .doc-flags-panel,
-  .toc-panel,
+  :deep(.toc-panel),
   .revisions-panel,
-  .bookmarks-panel,
+  :deep(.bookmarks-panel),
   .sections-panel,
   .page-fields-panel,
   .cross-refs-panel,
@@ -5070,9 +4919,9 @@ defineExpose({ reload, getPlainText, focusContent })
   .stories-content,
   .properties-content,
   .doc-flags-content,
-  .toc-content,
+  :deep(.toc-content),
   .revisions-content,
-  .bookmarks-content,
+  :deep(.bookmarks-content),
   .sections-content,
   .page-fields-content,
   .cross-refs-content,
