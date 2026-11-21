@@ -55,7 +55,9 @@ function classifyByErrorCode(
   const category = PARSE_ERROR_CATEGORY[errorCode]
   if (!category) return null
 
-  const shared = { category, retryable: true, raw: rawText }
+  // 与关键字路径对齐：格式不支持 / 内存不足重试同一文件不会改变结果，
+  // 其余（损坏 / 解析 / 读取失败）才允许用户重试。
+  const shared = { category, retryable: category !== 'format' && category !== 'memory', raw: rawText }
   switch (errorCode) {
     case 'OLE_FORMAT':
       return {
@@ -160,7 +162,10 @@ export function classifyError(
   if (
     containsAny(lower, ['.docx', 'docx', 'zip-based', 'ooxml']) ||
     containsAny(lower, ['not a valid ole', 'invalid ole', 'ole signature']) ||
-    containsAny(lower, ['unsupported format', 'unknown format'])
+    // getFormatErrorString() 的中文文案不含拉丁关键字；ErrorDisplay 当前只把
+    // error 字符串传进来（errorCode 未透传），漏掉这些词会把「格式不支持」
+    // 误判为 unknown 且标成 retryable，误导用户反复重试同一个 .docx。
+    containsAny(lower, ['unsupported format', 'unknown format', 'ole 复合文档', 'xml 格式头', '无法识别的文件格式', '不是有效的 ole'])
   ) {
     return {
       category: 'format',
