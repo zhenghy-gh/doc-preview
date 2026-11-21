@@ -141,3 +141,4 @@
 - 2026-11-21　Phase 1 裁决：死组件 `DocStatsPanel.vue` 从未挂载、未导出、仅测试直接引用 ⇒ **移除**（含其 2 项测试与孤儿 CSS），减少死代码。全量 105 文件 / 2001 项通过。
 - 2026-11-21　Phase 3 切片：新增 `scripts/corpusHealth.mjs` + npm `scan:corpus`（纯 Node + happy-dom + esbuild 临时打包，无浏览器依赖），对 27 份语料检查解析成功/段落/页数/控制字符/NFC/页容器；当前 27/27 健康。
 - 2026-11-21　Phase 3 **安全修复**：`documentRenderer` 的超链接 `href` 原先只做 HTML 转义、不过滤 scheme，外部 `.doc` 的 `javascript:`/`data:`/`vbscript:` 链接会进入 DOM（存储型 XSS）。新增导出 `sanitizeUrl`（白名单 http/https/mailto/tel + `#anchor`/相对路径，解码空白与 HTML 实体绕过）；新增 `tests/renderSecurity.test.ts` 4 项。全量 106 文件 / 2005 项通过。
+- 2026-11-21　Phase 4 Round 178 **整轮否决**：候选「`hasRealCharFormat` 用布尔标志替代每段落 `Object.keys(merged).length`」27 份逐字节一致，但配对端到端 5 组胜率 55.5/46.5/52.5/55.3/51.7%、符号翻转且落在噪声地板 ⇒ 撤回。连续两轮噪声主导，后续先做调用计数插桩筛方向。详见 `docs/changelog/2026-11-21-round178-optimization.md`。Next: Round 179。
