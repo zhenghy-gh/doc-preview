@@ -1194,18 +1194,29 @@ function toggleSearch() {
 }
 
 /**
+ * 显示类切换（隐藏文字 / 修订模式）需要全量重渲染 v-html 页面，
+ * 而重建 DOM 会抹掉正在生效的搜索高亮 span，导致状态栏仍显示 "1 / N"
+ * 但正文已无高亮、上一/下一匹配按钮点了没反应。重渲染后在 nextTick
+ * 重跑 performSearch 恢复高亮与计数，保持状态与 DOM 一致。
+ */
+function rerenderForDisplayChange() {
+  if (!lastParseResult.value) return
+  applyFormattedPages(
+    lastParseResult.value.paragraphs,
+    lastParseResult.value.hyperlinks,
+    lastParseResult.value.revisions
+  )
+  if (showSearch.value && searchQuery.value.trim()) {
+    nextTick(() => performSearch())
+  }
+}
+
+/**
  * 切换隐藏文字显示态，并基于 lastParseResult 全量重渲染以使样式变化生效。
  */
 function toggleHiddenText() {
   showHiddenText.value = !showHiddenText.value
-  // 重新渲染 HTML 以应用隐藏文字样式变化
-  if (lastParseResult.value) {
-    applyFormattedPages(
-      lastParseResult.value.paragraphs,
-      lastParseResult.value.hyperlinks,
-      lastParseResult.value.revisions
-    )
-  }
+  rerenderForDisplayChange()
 }
 
 /**
@@ -1219,13 +1230,7 @@ function toggleHiddenText() {
  */
 function setRevisionMode(mode: RevisionMode) {
   revisionMode.value = mode
-  if (lastParseResult.value) {
-    applyFormattedPages(
-      lastParseResult.value.paragraphs,
-      lastParseResult.value.hyperlinks,
-      lastParseResult.value.revisions
-    )
-  }
+  rerenderForDisplayChange()
 }
 
 // 匹配枚举与高亮包装提取至 utils/searchUtils.ts。
