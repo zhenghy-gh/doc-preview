@@ -306,4 +306,9 @@ docs/synthetic/
 
 ---
 
-> **致 Agent**：本项目核心解析器 `docParser.ts` 的所有格式判断都是**启发式**，没有任何 Word CHP/PAP 真实格式表。这意味着你修复的是"模式识别规则"而不是"协议实现"——务必为每条新规则**记录触发样本的 sha256** 放在代码注释里，方便未来追根。**不要硬编码特定文件名或内容。**
+> **致 Agent（2026-11-21 更新）**：本文是历史提示词，所述"没有真实 CHP/PAP 表"已过时——
+> 当前 `formatParser.ts`/`styleParser.ts`/`listParser.ts` 已实现规范级 CHP/PAP/SPRM 解析，
+> 图片、表格、公式、图表、艺术字等均已支持。实际优化协议见
+> `.workbuddy-ai/optimization-loop.md` 与 `docs/LONG_TERM_TASK.md`。
+> 通用原则仍然成立：**不要硬编码特定文件名或内容，为新规则保留可复现的证据**。
+> 文中引用的 `test-samples.mjs`、`docs/synthetic/`、`docs/.samples-manifest.json` 已不存在。

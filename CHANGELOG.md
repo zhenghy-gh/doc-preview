@@ -3,6 +3,10 @@
 All notable changes to `@zhenghy/doc-preview` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+> **维护说明（2026-11-21）**：本文件是摘要日志，停留在 0.7.3+。0.7.4–0.7.88 的
+> **逐轮完整记录**见 `docs/changelog/`（177 份 round 报告）与 `progress.md`；
+> 当前版本以 `package.json` 为准。
+
 ## [0.7.3+] - 2026-08-14
 
 ### Added

@@ -13,7 +13,9 @@
 | `npm run preview` | 预览构建产物 |
 | `npm run test` / `test:watch` / `test:coverage` | Vitest 测试 / 监听 / 覆盖率 |
 
-- 包名：`@zhenghy/doc-preview`，版本 **0.7.3**，MIT 协议，npm 发布库
+> **维护说明（2026-11-21）**：本索引为历史导航文档，部分统计（测试文件数、用例数、脚本位置）已滞后于代码。准确状态请以 `README.md`、`docs/LONG_TERM_TASK.md` 与 `npm test` 输出为准。
+
+- 包名：`@zhenghy/doc-preview`，版本 **0.7.88**，MIT 协议，npm 发布库
 - 在线体验：https://zhenghy-gh.github.io/doc-preview/
 
 ## 目录总览
@@ -21,7 +23,7 @@
 ```
 doc-preview/
 ├── src/                  # 全部源码（入口 + 组件 + 28 个解析工具模块）
-├── tests/                # 29 个 Vitest 测试文件（约 700+ 用例）
+├── tests/                # Vitest 测试（当前 100+ 文件、约 2000 用例，以 npm test 为准）
 ├── docs/                 # 架构文档 + 27 个 .doc 样例文件 + MS-DOC 规范笔记
 ├── docs/specs/           # 规范研读笔记（CFB/CLX/FIB/CHP-PAP）
 ├── scripts/              # 发布脚本
@@ -95,7 +97,7 @@ doc-preview/
 | [errorClassifier.ts](src/utils/errorClassifier.ts) | 215 行 | `classifyError` — 6 类错误分类 + 建议 |
 | [locale.ts](src/utils/locale.ts) | 772 行 | i18n：chn/en 双字典 180+ 条目，`t()`/`tMap()` |
 
-## 测试索引 — tests/（29 个文件，Vitest）
+## 测试索引 — tests/（历史分类，文件数已增长，见上文说明）
 
 | 文件 | 用例数 | 覆盖目标 |
 |---|---|---|

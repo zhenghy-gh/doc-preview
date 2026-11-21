@@ -76,23 +76,19 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for a detailed pipeline diagram
 
 - All new functionality must include tests
 - Run `npm run test:coverage` to see coverage
-- Aim to keep or improve coverage — current overall: 28.57%
-- Some modules (logger, fibParser) are at 90-100% coverage
+- Aim to keep or improve coverage — run `npm run test:coverage` for current numbers
+  (the old 28.57% figure is obsolete; coverage now includes `src/utils/**` and `src/components/**`)
 - The OLE2 binary structure is testable with constructed buffers
 
 ## Areas Where Help is Welcome
 
-- **Real .doc binary test fixtures** — the project has synthetic fixtures in
-  `docs/synthetic/` but those are gitignored. Adding small (≤50KB) sample files
-  to a `tests/fixtures/` directory would significantly improve integration test
-  coverage.
-- **Format inference improvements** — current heuristics handle common Chinese
-  documents well, but English documents with mixed styles could be improved.
-- **CHP/PAP binary table reading** — this would unlock exact font/alignment
-  detection, replacing the heuristic-based approach.
-- **Image and table extraction** — currently we skip these. A separate stream
-  parser (e.g., `Data` stream for images, `Table` stream for tables) would be
-  valuable.
+> **说明（2026-11-21）**：以下"欢迎贡献"列表是历史遗留，CHP/PAP 规范级解析、
+> 图片与表格提取均**已实现**；真实 `.doc` 样本已随时可用（见 `docs/` 与
+> `docs/samples-r1/`）。当前实际待办以 `docs/LONG_TERM_TASK.md` 为准。
+
+- **分页几何精度** — 预览页数与浏览器实际填充率的偏差量化（见 `scripts/paginationDeviation.mjs`）
+- **移动端 / 无障碍** — 375/768/1440 视口与 ARIA 审计（见 `scripts/audit-a11y-mobile.mjs`）
+- **组件化收尾** — 面板已全部拆出，后续可继续拆分工具栏与导出逻辑
 
 ## Reporting Issues
 

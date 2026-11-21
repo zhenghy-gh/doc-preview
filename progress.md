@@ -1,5 +1,9 @@
 # Continuous Optimization Progress
 
+> **维护说明（2026-11-21）**：本文件是优化过程的**历史实录**，条目编号与内容存在重复/错位，
+> 不是可靠的状态源。当前轮次状态请以 `.workbuddy-ai/optimization-loop.json` 为准；
+> 完整的逐轮记录见 `docs/changelog/`，总体方向见 `docs/LONG_TERM_TASK.md`。
+
 ## Round 1/100 — 2026-09-29
 - 目标：降低长文档格式恢复与渲染路径中的重复扫描/分配，同时保持 CP、资源消费和样式覆盖契约。
 - 改动：

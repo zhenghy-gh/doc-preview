@@ -147,7 +147,7 @@ Chrome 80+ / Edge 80+ / Firefox 75+ / Safari 14+，均支持 Web Worker。老浏
 ```bash
 npm install
 npm run dev            # 开发服务器 http://localhost:5173
-npm test               # 单元测试（59 个文件 / 1332 个用例）
+npm test               # 单元测试（用例数随版本增长，以命令输出为准）
 npm run lint           # 代码检查
 npm run build:lib      # 构建库产物 → dist-lib
 npm run build          # 构建演示站点 → dist

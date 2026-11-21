@@ -23,6 +23,11 @@ npm run preview
 
 ## Project Structure
 
+> **说明（2026-11-21）**：以下结构图为简化视图。当前源码还包含
+> `src/composables/`、`src/utils/rendering/`、`src/utils/docparser/` 子目录，
+> 以及 `biffChartParser.ts`、`mtefParser.ts`、`printLayout.ts`、`wordPalette.ts` 等文件；
+> `src/components/` 下 16 个信息面板已全部拆为独立组件。以磁盘实际目录为准。
+
 ```
 src/
   main.ts                 # 应用入口
@@ -33,7 +38,6 @@ src/
   utils/
     docParser.ts          # 核心解析器：OLE2 格式解析、FIB 解析、文本/格式提取
     docFormat.ts          # 格式化类型定义 (CharacterFormat, ParagraphFormat 等)
-    docFormatTypes.ts     # 旧的/备选类型定义
     oleParser.ts          # OLE2/CFB 容器层解析：签名验证、FAT/DIFAT/目录表、流读取
     fibParser.ts          # FIB 解析：文件信息块、关键偏移提取
     formatParser.ts       # 格式表解析：CHPX/PAPX 结构、SPRM 解码、字符/段落格式恢复
