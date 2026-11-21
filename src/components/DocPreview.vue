@@ -1162,6 +1162,23 @@ function panelTitle(key: string, n: number): string {
 
 // ---- Search ----
 
+/**
+ * 恢复虚拟滚动的唯一入口（搜索开启 / 大纲导航共用）。
+ *
+ * 大纲导航会临时关闭虚拟滚动以渲染全部页面，再用 600ms 定时器恢复；若这期间
+ * 用户开启搜索（搜索依赖全页 DOM 做高亮），旧实现会无条件把虚拟滚动重新打开，
+ * 使窗口外页面退回占位符、高亮与计数失效。此处以 showSearch 作为恢复前置条件，
+ * 并把「恢复 + 重新测量窗口」职责收口到单一函数，避免多处状态写入互相打架。
+ */
+function restoreVirtualScroll() {
+  if (showSearch.value) return
+  virtualScrollEnabled.value = true
+  nextTick(() => {
+    measureVisiblePageHeights()
+    updateVisibleRange()
+  })
+}
+
 function toggleSearch() {
   showSearch.value = !showSearch.value
   if (showSearch.value) {
@@ -1177,11 +1194,8 @@ function toggleSearch() {
   } else {
     // 仅清除 DOM 高亮；htmlContent 保持当前渲染结果不变
     clearHighlights()
-    // 关闭搜索后恢复虚拟滚动
-    virtualScrollEnabled.value = true
+    restoreVirtualScroll()
     nextTick(() => {
-      measureVisiblePageHeights()
-      updateVisibleRange()
       toolbarRef.value?.focusSearchToggle()
     })
   }
@@ -1349,7 +1363,7 @@ function scrollToOutline(item: OutlineItem) {
   nextTick(() => {
     const container = previewRef.value?.querySelector('.document-content')
     if (!container) {
-      if (wasVirtualEnabled) virtualScrollEnabled.value = true
+      if (wasVirtualEnabled) restoreVirtualScroll()
       return
     }
     const paragraphs = container.querySelectorAll('p, h1, h2, h3, h4')
@@ -1359,15 +1373,10 @@ function scrollToOutline(item: OutlineItem) {
       target.classList.add('outline-highlight')
       setTimeout(() => target.classList.remove('outline-highlight'), 2000)
     }
-    // 滚动动画完成后恢复虚拟滚动
+    // 滚动动画完成后恢复虚拟滚动（统一走 restoreVirtualScroll：搜索开启时保持关闭，
+    // 与 scrollToPage 的 data-page-idx 定位一致——两者都假定「恢复后 DOM 是完整页」）。
     if (wasVirtualEnabled) {
-      setTimeout(() => {
-        virtualScrollEnabled.value = true
-        nextTick(() => {
-          measureVisiblePageHeights()
-          updateVisibleRange()
-        })
-      }, 600)
+      setTimeout(restoreVirtualScroll, 600)
     }
   })
 }
