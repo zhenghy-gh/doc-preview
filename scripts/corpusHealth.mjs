@@ -55,6 +55,10 @@ try {
         if (CONTROL_RE.test(text)) issues.push('control-char')
         if (text !== text.normalize('NFC')) issues.push('non-nfc')
         if (result.document.paragraphs.length === 0) issues.push('no-paragraphs')
+        // 与两份钉住的基线（tests/realCorpusPageBaseline.test.ts、
+        // scripts/printPageAudit.mjs）完全同口径：首节页高优先，缺省 842。
+        // 此前硬编码 842 会让含自定义页面尺寸的 7 份语料页数与基线漂移。
+        const firstSection = result.document.sections?.[0]
         const html = renderDocumentToPages({
           paragraphs: result.document.paragraphs,
           hyperlinks: result.document.hyperlinks,
@@ -65,7 +69,7 @@ try {
           images: result.document.images || [],
           charts: result.document.charts || [],
           sections: result.document.sections || [],
-          pageHeightPt: 842,
+          pageHeightPt: firstSection?.pageHeightPt || 842,
           showHiddenText: false,
           fontResolver: () => '',
           t: (k) => k,

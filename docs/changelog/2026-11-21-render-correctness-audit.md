@@ -30,7 +30,7 @@
 - 表格固定高度 100px（`documentRenderer.ts` 表格分支）：属"表格跨页切分"功能缺口，
   修复需引入整套切块/表头重复/垂直合并降级逻辑（即主目录 WIP 的方向），
   超出本轮低风险范围，**不改动**，留作独立功能级切片。
-- 页眉页脚 `NUMPAGES`/`SECTIONPAGES` 标记回填：未发现可达缺陷（回填在 `finalizePage` 后统一执行），不修改。
+- 页眉页脚 `NUMPAGES`/`SECTIONPAGES` 标记回填：本 worktree 的 `pageBuilder.finalizePage` 仅注入分栏 CSS，**没有**任何标记回填实现（该特性属于主目录未提交 WIP，红线不碰）。原表述「回填在 finalizePage 后统一执行」与源码不符，已于 2026-11-23 更正。不实现、不猜测。
 
 ## 门禁
 

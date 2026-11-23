@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readFileSync, unlinkSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -33,5 +34,30 @@ describe('real-corpus baselines cross-check', () => {
     expect(print.manualOnly.length).toBeGreaterThan(0)
     // 当前环境无可用 Chromium：所有 printPageCount 必须是 null，而不是编造的整数。
     for (const row of print.rows) expect(row.printPageCount).toBeNull()
+  })
+
+  it('keeps the corpus health scan on the same page-height basis as both pinned baselines', () => {
+    // 第三个页码消费者（scan:corpus）此前硬编码 pageHeightPt=842，而两份基线用
+    // 「首节页高优先」，导致 7 份语料的页数与基线漂移。此处实跑脚本并逐份核对，
+    // 把三者同口径钉成契约（负控：改回硬编码 842 时本项会失败）。
+    const root = resolve(here, '..')
+    const out = resolve(here, `fixtures/.corpus-health-consistency-${process.pid}.tmp.json`)
+    try {
+      execFileSync(process.execPath, [resolve(root, 'scripts/corpusHealth.mjs'), '--json', out], {
+        cwd: root,
+        encoding: 'utf8',
+        stdio: 'pipe',
+      })
+      const health: { rows: Array<{ doc: string; pages: number; issues: string[] }> } =
+        JSON.parse(readFileSync(out, 'utf8'))
+      const pages: Record<string, { pages: number }> = read('real-corpus-pages.json')
+      expect(health.rows).toHaveLength(Object.keys(pages).length)
+      for (const row of health.rows) {
+        expect(row.issues, `${row.doc}: health issues`).toEqual([])
+        expect(row.pages, `${row.doc}: health-scan page count vs pinned baseline`).toBe(pages[row.doc].pages)
+      }
+    } finally {
+      try { unlinkSync(out) } catch { /* 临时文件可能未生成 */ }
+    }
   })
 })
