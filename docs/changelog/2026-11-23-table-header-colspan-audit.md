@@ -50,6 +50,15 @@
 - `tests/fixtures/real-corpus-pages.json`：仅上述 3 份的 `sha1` 变化，`pages`/`firstPageLen` 不变。
 - `tests/fixtures/print-layout-audit.json`：仅上述 3 份的 `printHtmlBytes` 变化（108415→107235 / 151799→150265 / 82302→81948），`previewPages`/`pageContentCount`/`sectionCount` 及总计 1055 不变。
 
-## 4. 门禁
+## 4. 否决：`collectTableBlock` 的 `\u0007\u0007` 行边界歧义（证据不足）
 
-`npm test` 131 文件 / 2114 项全绿；`npx vue-tsc --noEmit` 0；`npm run lint` 0；`npm run build` + `build:lib` 通过；`npm run scan:corpus` 27/27；`node scripts/printPageAudit.mjs --check` OK；`npm run audit:i18n` exit 0。
+`collectTableBlock` 的「2+ 连续 \u0007 = 行边界」分支在真实语料中**高频触发**：21/27 份语料含此类段落。逐段抽样：
+
+- 绝大多数是**行尾** `…\u0007\u0007`（如 `ITEM\u0007NEEDED\u0007\u0007`）：当前实现把尾部空段切掉，结果恰好是正确的一行 ⇒ 行为碰巧正确。
+- 仅 `unicode-02006-zia.doc` 有 **68 处行内** `\u0007\u0007`（如 `49\u000730\u0007\u000706F0\u0007EASTERN ARABIC-INDIC DIGIT ZERO\u0007\u0007`），这是「单行的空中间单元格」，但当前实现切成 2 行 × 2 列，应为 1 行 × 5 列。
+
+**为什么不改**：MS-DOC 规范里 0x07 是单元格结束符、0x0D 才是行结束符，故行内 `\u0007\u0007` 本应是空单元格；但本 worktree 的解析器在部分回退路径只按 `\n` 切段，行尾同样残留 `\u0007\u0007`，导致「行尾边界」与「空单元格」在文本轴上无法区分。移除该分支会让 20+ 份语料的表格列数变化（多数是尾部空列被保留），需重写 3 项钉住多行启发式的既有测试并刷新大量基线 —— 属功能级重构，不是低风险修复。按章程「证据不足即否决并记录」⇒ **不改行为**，留作需「parser 保留 0x0D/CP 行边界 + 每行 TAP 属性」的独立切片。
+
+## 5. 门禁
+
+`npm test` 131 文件 / 2115 项全绿；`npx vue-tsc --noEmit` 0；`npm run lint` 0；`npm run build` + `build:lib` 通过；`npm run scan:corpus` 27/27；`node scripts/printPageAudit.mjs --check` OK；`npm run audit:i18n` exit 0。
