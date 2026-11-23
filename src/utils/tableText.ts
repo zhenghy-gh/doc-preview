@@ -133,6 +133,16 @@ export function renderTableHtml(rows: string[][], rowsTableInfo?: TableInfo[], h
         continue
       }
 
+      // 表头末列通过 `colspan = columnCount - c` 延伸到行尾，其后各列（必为空）
+      // 已被该 colspan 覆盖。若仍逐列渲染空 <th>，表头实际列数会超过 columnCount
+      // （colspan 列数错位），浏览器会把后续正文列整体右移。仅在不带 cellInfo 的
+      // 启发式表头分支生效，真实合并信息路径不受影响。
+      if (!hasCellInfo && isHeader && !singleNonEmptyHeader &&
+          lastNonEmptyHeaderCell >= 0 && nonEmptyCount < columnCount &&
+          c > lastNonEmptyHeaderCell) {
+        continue
+      }
+
       let rowspan = 1
       if (hasCellInfo && vMerge === 'restart') {
         for (let rr = r + 1; rr < rows.length; rr++) {
