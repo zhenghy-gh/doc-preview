@@ -1007,10 +1007,12 @@ onUnmounted(() => {
 // ---- Expose for parent components ----
 
 function reload() {
-  if (props.source) {
-    if (typeof props.source === 'string') loadFromUrl(props.source)
-    else loadFromFile(props.source)
-  }
+  if (!props.source) return
+  // 与 source watcher / retryLoad 一致：重载前取消在途 URL 加载，
+  // 防止旧请求的迟到结果在重载完成后覆盖新状态。
+  abortUrlLoad('reload')
+  if (typeof props.source === 'string') loadFromUrl(props.source)
+  else loadFromFile(props.source)
 }
 
 /**

@@ -157,6 +157,7 @@
 - 2026-11-21　端到端核验：启动 dev server，在真实 Chromium 中上传 `docs/openstd-n961.doc` 完成解析/渲染；计算样式确认工具栏 `display:flex`、按钮 `min-width:32px`、面板 `border-radius:8px`、快捷键模态 `width:480px / border-radius:12px / row padding:8px 20px` 均生效——证明组件/CSS 拆分未破坏实际页面；控制台 0 错误。
 - 2026-11-23　表格渲染修复（延迟返回的子代理，已核验叠加）：`renderTableHtml` 稀疏表头末列 colspan 延伸到行尾后仍渲染尾部空 `<th>`，使表头列数超 `columnCount`；负控 2 项先失败，修复后 3 份真实语料表头 6→4 列、页数不变，据实刷新受影响指纹。`scan:corpus` 页高基准改为首节优先（原硬编码 842 致 7/27 漂移），新增三方一致性测试。`\u0007\u0007` 行边界歧义按红线否决（功能级重构候选）。全量 131 文件 / 2115 项通过。
 - 2026-11-23　交接：生成 `long-term-opt.patch`（539 KB / 111 文件 / +8677-3500，`git apply --check` 通过）与 `LONG_TERM_OPT_HANDOFF.md` 于主目录，供 WIP 处理完后合入。累计 61 次提交，分支 `long-term-opt`。
+- 2026-11-23　正确性修复：`reload()` 重载前显式 `abortUrlLoad('reload')`（与 watcher/retry 口径一致，避免旧请求迟到结果覆盖新加载）。`tests/reloadAbort.test.ts` 通过断言 abort reason 区分修复与 `loadFromUrl` 自取消，负控验证撤回即失败。全量 132 文件 / 2116 项通过。
 - 2026-11-21　Phase 1 续：整个工具栏抽为 `PreviewToolbar.vue`（15 个 props / 16 个 emit，搜索按钮 focus 经 defineExpose 转发），CSS 同步迁移、移动端选择器改 `:deep()`；`DocPreview.vue` 降至 3518 行（累计 -1642），新增 2 项工具栏测试。全量 110 文件 / 2014 项通过。
 - 2026-11-21　Phase 1 修复：`ShortcutsPanel.vue` 的样式此前全部留在 DocPreview 的 scoped style 中，父组件 scoped 无法命中子组件内部节点 ⇒ 快捷键模态实际无样式。整套面板 CSS（含 640px 断点）迁入组件自身 `<style scoped>`；`DocPreview.vue` 降至 3429 行。全量 110 文件 / 2014 项通过。
 - 2026-11-21　Phase 1 修复：同类问题推广到 `CollapsiblePanel`（折叠按钮/内容骨架样式此前在抽离面板时丢失）、`LoadingOverlay`、`ErrorDisplay`——样式全部迁入各自组件 scoped style。`DocPreview.vue` 降至 **3200 行**（累计 -1960）。全量 110 文件 / 2014 项通过。
